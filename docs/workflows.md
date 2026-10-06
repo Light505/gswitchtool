@@ -210,7 +210,9 @@ frontend combines the code with already-present account display data; provider
 errors, credential contents, and filesystem paths remain in Rust.
 
 The UI never marks a target active optimistically. If Codex is running, ask the
-user to quit it and retry; v1 does not kill or restart Codex.
+user to quit it and retry; a manual switch does not kill or restart Codex. Only
+an Invoke Mode failover stops Codex, and only the App Servers its own workers
+registered (see [Invoke Mode failover](#invoke-mode-failover)).
 
 Removing a saved profile is serialized by GSwitch's single-operation lock and
 is refused while switch recovery is pending. GSwitch protects the live identity:
@@ -426,6 +428,43 @@ progress, it retains the operation ID and retries status reads without
 restarting the request. The dialog remains open during the operation, then
 closes with Done; there is no persistent result entry or history dashboard.
 One account's failure does not stop the remaining queue.
+
+## Invoke Mode failover
+
+Invoke Mode lets Claude Code delegate to Codex through the plugin's `invoke`
+command. Each `invoke` run is a worker that keeps one connection to GSwitch open:
+GSwitch validates its model and effort, lets it start only when no failover is
+running, and records its own Codex App Server and thread. A closed connection
+removes the worker and stops an App Server it left behind.
+
+A failover starts only when Codex reports the structured `usageLimitExceeded`
+error on a worker's turn. GSwitch then:
+
+1. refuses if Invoke Mode is off; otherwise lets only one failover run, so other
+   reports about the same account join it and reports about an account already
+   replaced resume without another switch;
+2. stops the App Servers that workers registered, waits for them to exit, and
+   refuses to continue if any remain or if any other Codex process is running;
+3. checks Invoke Mode again, reads the quota of every ChatGPT account the user
+   allowed in Invoke Mode that is signed in and is not the exhausted account,
+   and picks the one with the most usable capacity: the provider must allow
+   ordinary use, no Codex window may be at zero, and the score is the smallest
+   remaining percentage; ties keep account order;
+4. switches through the normal switch transaction once, including its
+   verification and guarded rollback, and never tries a second account after a
+   failed switch or verification.
+
+Each worker then starts a new App Server and resumes its own Codex thread by ID
+with its original model, effort, sandbox, and working directory, sending a fixed
+continuation message. A run stopped before its thread existed starts over with
+the original task. After three failovers in one invocation, the worker reports
+the usage limit instead of continuing.
+
+When no allowed account has usable quota, another Codex process is running, an
+App Server will not stop, Invoke Mode was turned off, or the switch or
+verification fails, nothing resumes. Each worker returns a stable code with its
+thread ID so the work can be resumed later. While Invoke Mode is on, an
+automatic switch updates the window and names both accounts in one notice.
 
 ## Recovery
 

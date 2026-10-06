@@ -15,8 +15,8 @@ smaller than a general account-management platform.
   network listening port, daemon, or remote-control surface. Its only other
   entry point is the Invoke Mode endpoint: a per-launch named pipe (Unix
   socket outside Windows) for the Claude Code integration, which can read
-  Invoke policy and validate a request but cannot change policy, accounts, or
-  credentials.
+  Invoke policy, validate a request, and register and coordinate Codex workers
+  with account failover, but cannot change policy, accounts, or credentials.
 
 The frontend asks for user-level actions such as add, switch, refresh, redeem,
 or Wake. It does not orchestrate their internal steps or receive the stored
@@ -87,9 +87,13 @@ Keep the backend flat and organized by concrete responsibility:
   cancellation, and per-account outcomes;
 - `invoke.rs`: Invoke Mode policy persistence, the credential-free model
   catalog read, whitelist normalization, and request validation;
-- `invoke_ipc.rs`: the token-checked local endpoint that exposes read and
-  validate methods to the Claude Code integration;
-- `runtime.rs`: external Codex process detection;
+- `invoke_ipc.rs`: the token-checked local endpoint for the Claude Code
+  integration's read, validate, and worker methods;
+- `failover.rs`: the Invoke worker registry, the single-failover rule,
+  stopping registered App Servers, replacement-account selection, and the
+  switch through `switching.rs`;
+- `runtime.rs`: external Codex process detection and stopping a registered
+  Invoke worker's App Server process tree;
 - `storage.rs`: versioned JSON persistence and atomic/private writes;
 - `vault.rs`: Rust-only Stronghold snapshot and native root-key boundary for
   credential and recovery secrets;

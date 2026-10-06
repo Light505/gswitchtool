@@ -1562,6 +1562,36 @@ export default function App() {
     })();
   }, []);
 
+  const accountsRef = useRef(accounts);
+  accountsRef.current = accounts;
+
+  useEffect(() => {
+    // An Invoke Mode failover is the one switch the user did not start, so the
+    // window reloads and says which accounts were involved.
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeAccountSwitched(({ from, to }) => {
+          const name = (id: string) => {
+            const account = accountsRef.current.find((saved) => saved.id === id);
+            return account ? accountPrimaryName(account) : t("common.unknown");
+          };
+          setNotice({ kind: "info", text: t("invoke.switched", { from: name(from), to: name(to) }) });
+          void loadSnapshot();
+        });
+        if (disposed) unlisten();
+        else stop = unlisten;
+      } catch {
+        // Without the event the next snapshot still shows the active account.
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [loadSnapshot, t]);
+
   const changeInvokeMode = async (enabled: boolean) => {
     setInvokeChanging(true);
     try {

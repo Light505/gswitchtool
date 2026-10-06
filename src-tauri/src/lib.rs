@@ -4,6 +4,7 @@ mod chatgpt;
 mod cli_update;
 mod codex;
 mod commands;
+mod failover;
 mod identity;
 mod intake;
 mod invoke;
@@ -17,7 +18,9 @@ mod types;
 mod vault;
 mod wake;
 
-use tauri::Manager;
+use std::sync::Arc;
+
+use tauri::{Emitter, Manager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,11 +43,26 @@ pub fn run() {
             let config_dir = app.path().app_config_dir()?;
             let state = accounts::AppState::new(config_dir.join("accounts.json"))
                 .map_err(std::io::Error::other)?;
-            app.manage(state);
+            app.manage(state.clone());
             let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
+            let handle = app.handle().clone();
+            let coordinator = failover::Coordinator::new(
+                Arc::new(failover::AppOps {
+                    state,
+                    invoke: invoke.clone(),
+                    // The window reloads its accounts and names both accounts.
+                    on_switched: Box::new(move |from, to| {
+                        let _ = handle.emit(
+                            "invoke-account-switched",
+                            serde_json::json!({ "from": from, "to": to }),
+                        );
+                    }),
+                }),
+                failover::Timings::default(),
+            );
             // Without the endpoint Claude Code cannot delegate, but Manual
             // Mode and every account action keep working.
-            let _ = invoke_ipc::start(&config_dir, invoke.clone());
+            let _ = invoke_ipc::start(&config_dir, invoke.clone(), coordinator);
             app.manage(invoke);
             Ok(())
         })

@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => ({
   modelCatalog: vi.fn(),
   setInvokeProfiles: vi.fn(),
   setAccountInvokeAllowed: vi.fn(),
+  onInvokeAccountSwitched: vi.fn(),
 }));
 
 const updaterMocks = vi.hoisted(() => ({
@@ -215,6 +216,7 @@ function prepareDefaults() {
   mocks.modelCatalog.mockResolvedValue([]);
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
   mocks.setAccountInvokeAllowed.mockImplementation(async (id: string, allowed: boolean) => ({ ...chatAccount, id, invoke_allowed: allowed }));
+  mocks.onInvokeAccountSwitched.mockResolvedValue(() => undefined);
   updaterMocks.check.mockResolvedValue(null);
   updaterMocks.relaunch.mockResolvedValue(undefined);
   webviewMocks.onDragDropEvent.mockResolvedValue(() => undefined);
@@ -2388,6 +2390,26 @@ describe("Invoke Mode", () => {
     ]));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
+  });
+
+  it("reloads accounts and names both accounts after an automatic switch", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, active: true }, second]);
+    let notify: ((switched: { from: string; to: string }) => void) | undefined;
+    mocks.onInvokeAccountSwitched.mockImplementation(async (handler: typeof notify) => {
+      notify = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    expect(await screen.findByText("second@example.com")).toBeInTheDocument();
+    await waitFor(() => expect(notify).toBeDefined());
+    const snapshots = mocks.appSnapshot.mock.calls.length;
+
+    act(() => notify!({ from: "account-1", to: "account-2" }));
+    expect(await screen.findByText(
+      "person@example.com reached its Codex usage limit. Invoke Mode switched Codex to second@example.com.",
+    )).toBeInTheDocument();
+    await waitFor(() => expect(mocks.appSnapshot.mock.calls.length).toBeGreaterThan(snapshots));
   });
 
   it("keeps the dialog open with a safe message when the model list cannot be read", async () => {

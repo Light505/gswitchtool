@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   AccountView,
   AppSnapshot,
@@ -101,6 +102,9 @@ export const api = {
     invoke<InvokeSettings>("set_invoke_profiles", { profiles }),
   setAccountInvokeAllowed: (id: string, allowed: boolean) =>
     invoke<AccountView>("set_account_invoke_allowed", { id, allowed }),
+  // Rust reports a verified Invoke Mode failover with account IDs only.
+  onInvokeAccountSwitched: (handler: (switched: { from: string; to: string }) => void) =>
+    listen<{ from: string; to: string }>("invoke-account-switched", (event) => handler(event.payload)),
   updateDelivery: () => invoke<UpdateDelivery>("get_update_delivery"),
   openLatestRelease: () => invoke<void>("open_latest_release"),
 };

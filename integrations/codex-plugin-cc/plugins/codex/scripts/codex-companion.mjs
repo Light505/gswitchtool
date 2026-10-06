@@ -24,7 +24,7 @@ import {
   } from "./lib/codex.mjs";
 import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
-import { GSwitchError, readInvokeStatus, validateInvocation } from "./lib/gswitch.mjs";
+import { GSwitchError, GSwitchSession, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -508,6 +508,7 @@ async function executeTaskRun(request) {
     effort: request.effort,
     sandbox: request.write ? "workspace-write" : "read-only",
     onProgress: request.onProgress,
+    onAppServer: request.onAppServer,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -1104,6 +1105,9 @@ function renderInvokeResult(result) {
   if (result.jobId) facts.push(`job ${result.jobId}`);
   facts.push(`${result.model}/${result.reasoningEffort}`);
   if (result.write) facts.push("write");
+  if (result.failovers) {
+    facts.push(`resumed after ${result.failovers} account switch${result.failovers === 1 ? "" : "es"}`);
+  }
   lines.push(`[codex invoke] ${facts.join(" · ")}`);
   const files = result.touchedFiles ?? [];
   if (files.length) {
@@ -1112,6 +1116,13 @@ function renderInvokeResult(result) {
   }
   return `${lines.join("\n")}\n`;
 }
+
+// Fixed by GSwitch Invoke Mode: the continuation after an account switch is
+// owned by this code, never reworded by the invoking model.
+const FAILOVER_RESUME_PROMPT =
+  "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
+// Bounds one invocation if every replacement account is exhausted in turn.
+const MAX_FAILOVERS_PER_INVOKE = 3;
 
 async function handleInvoke(argv) {
   const { options, positionals } = parseCommandInput(argv, {
@@ -1137,74 +1148,154 @@ async function handleInvoke(argv) {
   }
   const write = Boolean(options.write);
   const base = { model, reasoningEffort: effort, write };
+  const finish = (result) => {
+    outputCommandResult(result, renderInvokeResult(result), options.json);
+    process.exitCode = result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
+  };
 
+  // GSwitch validates the request and tracks this worker for as long as the
+  // connection stays open.
+  let session;
+  let leaseId;
   try {
-    await validateInvocation(model, effort);
+    session = await GSwitchSession.open();
+    leaseId = (
+      await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: workspaceRoot })
+    ).lease_id;
   } catch (error) {
+    session?.close();
     if (!(error instanceof GSwitchError)) {
       throw error;
     }
-    const rejected = { ...base, status: "rejected", code: error.code, message: error.message };
-    outputCommandResult(rejected, renderInvokeResult(rejected), options.json);
-    process.exitCode = 2;
+    finish({ ...base, status: "rejected", code: error.code, message: error.message });
     return;
   }
 
-  // Each Invoke worker owns its app server, so it can be stopped and started
-  // again under another account without touching other workers.
-  process.env[DISABLE_BROKER_ENV] = "1";
-  // The invoking model reads stderr too; Node's warning about the Windows
-  // shell launch of Codex would cost it tokens on every run.
-  process.noDeprecation = true;
-  ensureCodexAvailable(cwd);
-  const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), write);
-  const { logFile, progress } = createTrackedProgress(job, { stderr: false });
-
-  let result;
   try {
-    const execution = await runTrackedJob(
-      job,
-      () =>
-        executeTaskRun({
-          cwd,
-          model,
-          effort,
-          prompt,
-          write,
-          resumeLast: false,
-          resumeThreadId,
-          jobId: job.id,
-          onProgress: progress
-        }),
-      { logFile }
-    );
-    const completed = execution.exitStatus === 0;
-    const errorInfo = execution.payload.error?.codexErrorInfo ?? null;
-    result = {
-      ...base,
-      status: completed ? "completed" : "failed",
-      code: completed ? null : errorInfo === "usageLimitExceeded" ? "USAGE_LIMIT_EXCEEDED" : "CODEX_FAILED",
-      message: completed ? null : execution.payload.error?.message ?? null,
-      jobId: job.id,
-      threadId: execution.threadId ?? null,
-      output: execution.payload.rawOutput,
-      touchedFiles: execution.payload.touchedFiles ?? []
-    };
-  } catch (error) {
-    result = {
-      ...base,
-      status: "failed",
-      code: "CODEX_FAILED",
-      message: error instanceof Error ? error.message : String(error),
-      jobId: job.id,
-      threadId: readStoredJob(workspaceRoot, job.id)?.threadId ?? resumeThreadId,
-      output: "",
-      touchedFiles: []
-    };
+    // Each Invoke worker owns its app server, so it can be stopped and started
+    // again under another account without touching other workers.
+    process.env[DISABLE_BROKER_ENV] = "1";
+    // The invoking model reads stderr too; Node's warning about the Windows
+    // shell launch of Codex would cost it tokens on every run.
+    process.noDeprecation = true;
+    ensureCodexAvailable(cwd);
+    finish(await runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId }));
+  } finally {
+    session.close();
   }
+}
 
-  outputCommandResult(result, renderInvokeResult(result), options.json);
-  process.exitCode = result.status === "completed" ? 0 : 1;
+/**
+ * Runs the delegated task. When Codex reports that the account's usage is
+ * exhausted, GSwitch alone switches accounts; this worker then resumes the same
+ * thread with the same model, effort, sandbox, and working directory.
+ */
+async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId }) {
+  const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
+  const { logFile, progress } = createTrackedProgress(job, { stderr: false });
+  let threadId = resumeThreadId;
+  let runPrompt = prompt;
+  let failovers = 0;
+  const touched = new Set();
+  const failed = (code, message) => ({
+    ...base,
+    status: "failed",
+    code,
+    message,
+    jobId: job.id,
+    threadId,
+    failovers,
+    output: "",
+    touchedFiles: [...touched]
+  });
+
+  for (;;) {
+    try {
+      await session.request("run_begin", { lease_id: leaseId });
+    } catch (error) {
+      return failed(error.code ?? "GSWITCH_UNAVAILABLE", error.message);
+    }
+
+    let execution = null;
+    let runError = null;
+    try {
+      execution = await runTrackedJob(
+        job,
+        () =>
+          executeTaskRun({
+            cwd,
+            model: base.model,
+            effort: base.reasoningEffort,
+            prompt: runPrompt,
+            write: base.write,
+            resumeLast: false,
+            resumeThreadId: threadId,
+            jobId: job.id,
+            onAppServer: (pid) => (pid ? session.request("run_app_server", { lease_id: leaseId, pid }) : undefined),
+            onProgress: (event) => {
+              progress?.(event);
+              const reported = typeof event === "object" ? event?.threadId : null;
+              if (reported && reported !== threadId) {
+                threadId = reported;
+                session.request("run_thread", { lease_id: leaseId, thread_id: reported }).catch(() => {});
+              }
+            }
+          }),
+        { logFile }
+      );
+    } catch (error) {
+      runError = error;
+    }
+    for (const file of execution?.payload.touchedFiles ?? []) {
+      touched.add(file);
+    }
+    threadId = execution?.threadId ?? threadId;
+
+    let outcome = "unchanged";
+    try {
+      outcome = (await session.request("run_end", { lease_id: leaseId })).outcome ?? "unchanged";
+    } catch {
+      // Without GSwitch nothing can be switched; report the run as it ended.
+    }
+
+    if (execution?.exitStatus === 0) {
+      return {
+        ...base,
+        status: "completed",
+        code: null,
+        message: null,
+        jobId: job.id,
+        threadId,
+        failovers,
+        output: execution.payload.rawOutput,
+        touchedFiles: [...touched]
+      };
+    }
+
+    const limited = execution?.payload.error?.codexErrorInfo === "usageLimitExceeded";
+    const message = execution?.payload.error?.message ?? runError?.message ?? null;
+    if (!limited && outcome === "unchanged") {
+      // A resume after an account switch that fails outright did not continue the thread.
+      return failed(runError && failovers > 0 ? "SESSION_RESUME_FAILED" : "CODEX_FAILED", message);
+    }
+    if (failovers >= MAX_FAILOVERS_PER_INVOKE) {
+      return failed("USAGE_LIMIT_EXCEEDED", message);
+    }
+    try {
+      if (limited && outcome === "unchanged") {
+        await session.request("limit_reached", { lease_id: leaseId });
+      }
+      if (outcome !== "account_switched") {
+        await session.request("await_failover", { lease_id: leaseId });
+      }
+    } catch (error) {
+      return failed(error.code ?? "GSWITCH_UNAVAILABLE", error.message);
+    }
+
+    failovers += 1;
+    // Resume the exact thread; a run stopped before its thread existed starts over.
+    runPrompt = threadId ? FAILOVER_RESUME_PROMPT : prompt;
+  }
 }
 
 async function main() {

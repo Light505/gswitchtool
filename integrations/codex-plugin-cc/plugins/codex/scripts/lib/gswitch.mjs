@@ -18,6 +18,15 @@ const ERROR_MESSAGES = {
   MODEL_NOT_ALLOWED: "That Codex model is not in the allowed Invoke profiles. Run invoke-status and choose an allowed model.",
   REASONING_NOT_ALLOWED:
     "That reasoning effort is not allowed for the chosen model. Run invoke-status and choose an allowed effort.",
+  EXTERNAL_CODEX_RUNNING:
+    "The Codex account ran out, but another Codex app is running, so GSwitch could not switch accounts safely. Tell the user.",
+  CODEX_SHUTDOWN_FAILED: "The Codex account ran out, but Codex did not stop for the account switch. Tell the user.",
+  NO_ELIGIBLE_ACCOUNT:
+    "The Codex account ran out and no other account allowed in Invoke Mode has usable quota. Tell the user.",
+  ACCOUNT_SWITCH_FAILED: "The Codex account ran out and GSwitch could not switch to another account. Tell the user.",
+  ACCOUNT_VERIFICATION_FAILED:
+    "The Codex account ran out, but the replacement account could not be verified, so work did not resume. Tell the user.",
+  UNKNOWN_LEASE: "GSwitch no longer tracks this Codex run. Ask the user to check GSwitch.",
   UNAUTHORIZED: "GSwitch refused the request. Ask the user to restart GSwitch.",
   BAD_REQUEST: "GSwitch could not read the request.",
   UNKNOWN_METHOD: "This GSwitch version does not support the request.",
@@ -109,10 +118,83 @@ export function callGSwitch(method, params = {}, options = {}) {
   });
 }
 
-export function readInvokeStatus(options = {}) {
-  return callGSwitch("status", {}, options);
+/**
+ * A worker's connection to GSwitch. It stays open for the whole run because
+ * GSwitch stops tracking the worker when the connection closes. Requests are
+ * answered in order, one line each.
+ */
+export class GSwitchSession {
+  static async open(options = {}) {
+    const { endpoint, token } = readEndpoint(options.env ?? process.env);
+    const socket = net.createConnection({ path: endpoint });
+    await new Promise((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("error", () => reject(new GSwitchError("GSWITCH_UNAVAILABLE")));
+    });
+    return new GSwitchSession(socket, token);
+  }
+
+  constructor(socket, token) {
+    this.socket = socket;
+    this.token = token;
+    this.nextId = 1;
+    this.pending = [];
+    this.buffer = "";
+    this.closed = false;
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk) => this.receive(chunk));
+    const fail = () => {
+      this.closed = true;
+      for (const pending of this.pending.splice(0)) {
+        pending.reject(new GSwitchError("GSWITCH_UNAVAILABLE"));
+      }
+    };
+    socket.on("error", fail);
+    socket.on("close", fail);
+  }
+
+  request(method, params = {}) {
+    if (this.closed) {
+      return Promise.reject(new GSwitchError("GSWITCH_UNAVAILABLE"));
+    }
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      this.pending.push({ resolve, reject });
+      this.socket.write(`${JSON.stringify({ id, token: this.token, method, params })}\n`);
+    });
+  }
+
+  receive(chunk) {
+    this.buffer += chunk;
+    let newline;
+    while ((newline = this.buffer.indexOf("\n")) !== -1) {
+      const line = this.buffer.slice(0, newline);
+      this.buffer = this.buffer.slice(newline + 1);
+      const pending = this.pending.shift();
+      if (!pending) {
+        continue;
+      }
+      let message;
+      try {
+        message = JSON.parse(line);
+      } catch {
+        pending.reject(new GSwitchError("UNAVAILABLE"));
+        continue;
+      }
+      if (message.error) {
+        pending.reject(new GSwitchError(message.error.code));
+      } else {
+        pending.resolve(message.result ?? {});
+      }
+    }
+  }
+
+  close() {
+    this.closed = true;
+    this.socket.end();
+  }
 }
 
-export function validateInvocation(model, reasoningEffort, options = {}) {
-  return callGSwitch("validate", { model, reasoning_effort: reasoningEffort }, options);
+export function readInvokeStatus(options = {}) {
+  return callGSwitch("status", {}, options);
 }

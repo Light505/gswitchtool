@@ -54,9 +54,15 @@ Check the result in proportion to the risk (for example run the tests or look at
 instead of redoing the work. To continue the same work, add `--resume-thread <thread>` with
 the same model and effort.
 
+If a Codex account runs out, GSwitch switches to another allowed account and `invoke`
+resumes the same thread by itself; the last line then says it resumed after an account
+switch. You do nothing.
+
 If `invoke` returns `MODEL_NOT_ALLOWED` or `REASONING_NOT_ALLOWED`, run `invoke-status` and
 choose again. If it returns `INVOKE_MODE_DISABLED` or `GSWITCH_UNAVAILABLE`, stop
-delegating. If it returns `USAGE_LIMIT_EXCEEDED`, tell the user; do not retry it yourself.
+delegating. Any other code (for example `NO_ELIGIBLE_ACCOUNT`, `EXTERNAL_CODEX_RUNNING`, or
+`USAGE_LIMIT_EXCEEDED`) means automatic recovery stopped: tell the user what the output
+says and keep the thread for later. Do not retry it yourself.
 
 ## Never
 

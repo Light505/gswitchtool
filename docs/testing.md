@@ -38,6 +38,18 @@ pnpm run bundle:linux
 
 Run focused tests while editing, then the full relevant path before handoff.
 
+Two ignored Rust tests need local tools and run on request: the model catalog
+read against the installed Codex App Server, and the end-to-end check that runs
+the Claude Code plugin's `invoke` command under Node against the real Invoke
+endpoint and coordinator with a fake Codex:
+
+```bash
+cargo test --manifest-path src-tauri/Cargo.toml --locked -- --ignored
+```
+
+The Claude Code plugin in `integrations/codex-plugin-cc` has its own Node test
+suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.
+
 ## CI coverage
 
 The CI workflow always starts and detects changed paths inside the run, so a
@@ -265,6 +277,17 @@ as applicable:
 - system-language selection, unsupported-locale fallback, immediate manual
   language selection, language preference persistence, locale-aware reset-time
   formatting, and the main account flow in Simplified Chinese.
+
+- Invoke Mode: policy validation without substitution, Manual Mode refusing
+  every request and failover, per-account eligibility kept across a new
+  sign-in, one failover for many workers and concurrent reports, stale reports
+  resuming without a switch, selection ignoring disallowed, exhausted,
+  unknown, and signed-out accounts, stopping registered App Servers and failing
+  closed when one survives or another Codex runs, no switch without an eligible
+  account, one switch attempt with no resume after a failed verification, new
+  runs waiting for a failover, closed worker connections, exact-thread resume
+  with the original model, effort, sandbox, and fixed continuation message,
+  and the per-invocation failover cap.
 
 Prefer behavior assertions over broad snapshots. Mock protocol payloads prove
 normalization and local policy; they do not prove the current remote provider.

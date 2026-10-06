@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
 /**
  * @typedef {import("./app-server-protocol").AppServerNotification} AppServerNotification
  * @typedef {import("./app-server-protocol").ReviewTarget} ReviewTarget
@@ -1100,6 +1101,12 @@ export async function runAppServerTurn(cwd, options = {}) {
 
   return withAppServer(cwd, async (client) => {
     let threadId;
+
+    // A caller that must stop this App Server during an account switch learns
+    // its process before any thread starts.
+    if (options.onAppServer) {
+      await options.onAppServer(client.transport === "direct" ? client.proc?.pid ?? null : null);
+    }
 
     if (options.resumeThreadId) {
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");

@@ -388,6 +388,7 @@ const en = {
   "error.invokeModels": "Could not read the Codex model list.",
   "error.invokeSave": "Invoke settings were not saved.",
   "error.invokeAccount": "Could not change Invoke Mode for this account.",
+  "invoke.switched": "{from} reached its Codex usage limit. Invoke Mode switched Codex to {to}.",
 } as const;
 
 const zhCN: Record<keyof typeof en, string> = {
@@ -768,6 +769,7 @@ const zhCN: Record<keyof typeof en, string> = {
   "error.invokeModels": "无法读取 Codex 模型列表。",
   "error.invokeSave": "调用设置未保存。",
   "error.invokeAccount": "无法更改此账户的调用模式。",
+  "invoke.switched": "{from} 已达到 Codex 用量上限。调用模式已将 Codex 切换到 {to}。",
 };
 
 const dictionaries = { en, "zh-CN": zhCN } as const;

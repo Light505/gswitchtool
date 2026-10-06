@@ -589,7 +589,13 @@ rl.on("line", (line) => {
           }
         ];
 
-	        if (BEHAVIOR === "usage-limit") {
+	        state.turns = [...(state.turns || []), state.lastTurnStart];
+	        const limitOnce = BEHAVIOR === "usage-limit-once" && !state.usageLimitHit;
+	        if (limitOnce) {
+	          state.usageLimitHit = true;
+	        }
+	        saveState(state);
+	        if (BEHAVIOR === "usage-limit" || limitOnce) {
 	          const error = {
 	            message: "You've hit your usage limit.",
 	            codexErrorInfo: "usageLimitExceeded",

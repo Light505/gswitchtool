@@ -70,6 +70,12 @@ GSwitch-owned isolated App Server children are scoped to their operation and
 excluded only from that operation's external-process check. They are terminated
 when the operation ends.
 
+An Invoke Mode failover stops only App Servers that Invoke workers registered
+over the endpoint, together with the processes each one started. It never stops
+another Codex process; if one is running, the failover fails before any
+credential change, and the switch transaction still runs its own process
+checks.
+
 GSwitch reads the installed CLI version from the same executable it uses for
 App Server. It updates the CLI only after a user selects **Update CLI**, with
 the GSwitch operation lock held and no external Codex runtime active. The CLI
@@ -99,10 +105,15 @@ a random per-launch token that GSwitch writes, with its endpoint name, to
 `invoke-endpoint.json` in its private configuration directory. Requests are
 newline-delimited JSON, capped in size, and answered with stable codes only.
 
-The endpoint offers read and validate methods. No method changes Invoke
-policy, account eligibility, saved accounts, or credentials, and no response
-contains credentials, tokens, or provider payloads. In Manual Mode it reports
-no allowed models and refuses every request with `INVOKE_MODE_DISABLED`.
+The endpoint offers read and validate methods plus the worker methods that
+register a run, its App Server process, and its Codex thread, report a usage
+limit, and wait for a failover. No method changes Invoke policy, account
+eligibility, saved accounts, or credentials, and no response contains
+credentials, tokens, account identities, or provider payloads. In Manual Mode
+it reports no allowed models, refuses new workers with `INVOKE_MODE_DISABLED`,
+and never starts a failover. A usage-limit report is a request for GSwitch to
+decide; the only credential change it can lead to is GSwitch's own switch
+transaction to an account the user allowed.
 
 These controls keep the policy out of the model-facing interface. They are not
 a boundary against another process running as the same user, which can read

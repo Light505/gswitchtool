@@ -20,35 +20,52 @@ const PROFILES = [
   { model: "model-a", reasoning_efforts: ["high", "xhigh"] },
   { model: "model-b", reasoning_efforts: ["medium"] }
 ];
+const FAILOVER_RESUME_PROMPT =
+  "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
 
-// Answers like GSwitch's Invoke endpoint, from an in-memory policy.
-async function startFakeGSwitch({ invokeMode = true } = {}) {
+// Answers like GSwitch's Invoke endpoint from an in-memory policy. A failover
+// "succeeds" unless failoverError is set; the fake does not switch accounts.
+async function startFakeGSwitch({ invokeMode = true, failoverError = null, manualAfterLease = false } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
-    process.platform === "win32" ? `\\\\.\\pipe\\gswitch-test-${randomUUID()}` : path.join(configDir, "invoke.sock");
+    process.platform === "win32"
+      ? path.join("\\\\.\\pipe", `gswitch-test-${randomUUID()}`)
+      : path.join(configDir, "invoke.sock");
   const requests = [];
+  const policy = { invokeMode };
   const respond = (request) => {
     const fail = (code) => ({ id: request.id, error: { code } });
+    const ok = (result = {}) => ({ id: request.id, result });
     if (request.token !== TOKEN) return fail("UNAUTHORIZED");
-    if (request.method === "status") {
-      return {
-        id: request.id,
-        result: {
-          invoke_mode: invokeMode,
-          allowed_invocation_profiles: invokeMode ? PROFILES : [],
+    switch (request.method) {
+      case "status":
+        return ok({
+          invoke_mode: policy.invokeMode,
+          allowed_invocation_profiles: policy.invokeMode ? PROFILES : [],
           workers_running: 0,
           failover_in_progress: false
-        }
-      };
+        });
+      case "lease_open": {
+        if (!policy.invokeMode) return fail("INVOKE_MODE_DISABLED");
+        const profile = PROFILES.find((entry) => entry.model === request.params.model);
+        if (!profile) return fail("MODEL_NOT_ALLOWED");
+        if (!profile.reasoning_efforts.includes(request.params.reasoning_effort)) return fail("REASONING_NOT_ALLOWED");
+        if (manualAfterLease) policy.invokeMode = false;
+        return ok({ lease_id: "lease-1" });
+      }
+      case "run_begin":
+      case "run_app_server":
+      case "run_thread":
+        return ok();
+      case "run_end":
+        return ok({ outcome: "unchanged" });
+      case "limit_reached":
+        return policy.invokeMode ? ok({ failover: "started" }) : fail("INVOKE_MODE_DISABLED");
+      case "await_failover":
+        return failoverError ? fail(failoverError) : ok();
+      default:
+        return fail("UNKNOWN_METHOD");
     }
-    if (request.method === "validate") {
-      if (!invokeMode) return fail("INVOKE_MODE_DISABLED");
-      const profile = PROFILES.find((entry) => entry.model === request.params.model);
-      if (!profile) return fail("MODEL_NOT_ALLOWED");
-      if (!profile.reasoning_efforts.includes(request.params.reasoning_effort)) return fail("REASONING_NOT_ALLOWED");
-      return { id: request.id, result: { allowed: true } };
-    }
-    return fail("UNKNOWN_METHOD");
   };
   const server = net.createServer((socket) => {
     let buffer = "";
@@ -67,7 +84,12 @@ async function startFakeGSwitch({ invokeMode = true } = {}) {
   });
   await new Promise((resolve) => server.listen(endpoint, resolve));
   fs.writeFileSync(path.join(configDir, "invoke-endpoint.json"), JSON.stringify({ endpoint, token: TOKEN, pid: process.pid }));
-  return { configDir, requests, close: () => new Promise((resolve) => server.close(resolve)) };
+  return {
+    configDir,
+    requests,
+    methods: () => requests.map((request) => request.method),
+    close: () => new Promise((resolve) => server.close(resolve))
+  };
 }
 
 function setupRepo(behavior) {
@@ -97,14 +119,21 @@ function companion(args, { repo, binDir, configDir }) {
   });
 }
 
+async function withGSwitch(options, behavior, body) {
+  const gswitch = await startFakeGSwitch(options);
+  try {
+    await body({ ...setupRepo(behavior), configDir: gswitch.configDir }, gswitch);
+  } finally {
+    await gswitch.close();
+  }
+}
+
 function readFakeState(statePath) {
   return JSON.parse(fs.readFileSync(statePath, "utf8"));
 }
 
-test("invoke-status reports the allowed profiles while Invoke Mode is on", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
     const json = await companion(["invoke-status", "--json"], ctx);
     assert.equal(json.status, 0, json.stderr);
     assert.deepEqual(JSON.parse(json.stdout), {
@@ -119,30 +148,25 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", async
     const text = await companion(["invoke-status"], ctx);
     assert.match(text.stdout, /- model-a: high, xhigh/);
     assert.match(text.stdout, /- model-b: medium/);
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke-status tells Claude not to delegate in Manual Mode", async () => {
-  const gswitch = await startFakeGSwitch({ invokeMode: false });
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke-status tells Claude not to delegate in Manual Mode", () =>
+  withGSwitch({ invokeMode: false }, undefined, async (ctx) => {
     const result = await companion(["invoke-status"], ctx);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Invoke Mode is off in GSwitch/);
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke-status reports GSwitch as unavailable when it is not running", async () => {
+test("invoke-status and invoke report GSwitch as unavailable when it is not running", async () => {
   const ctx = { ...setupRepo(), configDir: makeTempDir("gswitch-config-") };
-  const result = await companion(["invoke-status", "--json"], ctx);
-  assert.equal(result.status, 0, result.stderr);
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.available, false);
-  assert.equal(report.code, "GSWITCH_UNAVAILABLE");
+  const status = await companion(["invoke-status", "--json"], ctx);
+  assert.equal(status.status, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).code, "GSWITCH_UNAVAILABLE");
+
+  const invoke = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "go"], ctx);
+  assert.equal(invoke.status, 2);
+  assert.equal(JSON.parse(invoke.stdout).code, "GSWITCH_UNAVAILABLE");
+  assert.equal(fs.existsSync(ctx.statePath), false, "Codex must not start without GSwitch");
 });
 
 test("invoke refuses a disallowed model, effort, or Manual Mode before starting Codex", async () => {
@@ -151,38 +175,27 @@ test("invoke refuses a disallowed model, effort, or Manual Mode before starting 
     [true, "model-b", "high", "REASONING_NOT_ALLOWED"],
     [false, "model-a", "high", "INVOKE_MODE_DISABLED"]
   ]) {
-    const gswitch = await startFakeGSwitch({ invokeMode });
-    try {
-      const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+    await withGSwitch({ invokeMode }, undefined, async (ctx) => {
       const result = await companion(["invoke", "--json", "--model", model, "--effort", effort, "do the work"], ctx);
       assert.equal(result.status, 2, result.stderr);
       const payload = JSON.parse(result.stdout);
       assert.equal(payload.status, "rejected");
       assert.equal(payload.code, code);
       assert.equal(fs.existsSync(ctx.statePath), false, "Codex must not start for a rejected request");
-    } finally {
-      await gswitch.close();
-    }
+    });
   }
 });
 
-test("invoke requires Claude to choose both a model and an effort", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke requires Claude to choose both a model and an effort", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
     const result = await companion(["invoke", "--model", "model-a", "do the work"], ctx);
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /invoke requires --model and --effort/);
     assert.equal(gswitch.requests.length, 0);
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke runs an allowed request on its own app server with the chosen settings", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke registers its run with GSwitch and runs with the chosen settings", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
     const result = await companion(
       ["invoke", "--json", "--model", "model-a", "--effort", "xhigh", "--write", "implement the feature"],
       ctx
@@ -192,10 +205,16 @@ test("invoke runs an allowed request on its own app server with the chosen setti
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.status, "completed");
     assert.equal(payload.code, null);
-    assert.ok(payload.threadId);
+    assert.equal(payload.failovers, 0);
     assert.match(payload.jobId, /^task-/);
-    assert.deepEqual(gswitch.requests.map((request) => request.method), ["validate"]);
-    assert.deepEqual(gswitch.requests[0].params, { model: "model-a", reasoning_effort: "xhigh" });
+
+    assert.deepEqual(gswitch.methods(), ["lease_open", "run_begin", "run_app_server", "run_thread", "run_end"]);
+    const [lease, , appServer, thread] = gswitch.requests;
+    assert.equal(lease.params.model, "model-a");
+    assert.equal(lease.params.reasoning_effort, "xhigh");
+    assert.equal(lease.params.write, true);
+    assert.ok(Number.isInteger(appServer.params.pid) && appServer.params.pid > 0);
+    assert.equal(thread.params.thread_id, payload.threadId);
 
     const fakeState = readFakeState(ctx.statePath);
     assert.equal(fakeState.lastTurnStart.model, "model-a");
@@ -203,29 +222,19 @@ test("invoke runs an allowed request on its own app server with the chosen setti
     assert.equal(fakeState.lastTurnStart.prompt, "implement the feature");
     assert.equal(fakeState.lastThreadRequest.sandbox, "workspace-write");
     assert.equal(loadBrokerSession(ctx.repo), null, "invoke workers do not use the shared broker");
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke output is Codex's answer plus one resume line", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke output is Codex's answer plus one resume line", () =>
+  withGSwitch({}, undefined, async (ctx) => {
     const result = await companion(["invoke", "--model", "model-b", "--effort", "medium", "review the change"], ctx);
     assert.equal(result.status, 0, result.stderr);
     const lines = result.stdout.trimEnd().split("\n");
     assert.match(lines.at(-1), /^\[codex invoke\] completed · thread \S+ · job task-\S+ · model-b\/medium$/);
     assert.equal(readFakeState(ctx.statePath).lastThreadRequest.sandbox, "read-only");
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke --resume-thread continues the named thread", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo(), configDir: gswitch.configDir };
+test("invoke --resume-thread continues the named thread", () =>
+  withGSwitch({}, undefined, async (ctx) => {
     const first = JSON.parse(
       (await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "first task"], ctx)).stdout
     );
@@ -241,22 +250,75 @@ test("invoke --resume-thread continues the named thread", async () => {
     assert.equal(fakeState.lastThreadRequest.method, "thread/resume");
     assert.equal(fakeState.lastTurnStart.threadId, first.threadId);
     assert.equal(fakeState.threads.length, 2);
-  } finally {
-    await gswitch.close();
-  }
-});
+  }));
 
-test("invoke reports a usage limit with the thread needed to resume it", async () => {
-  const gswitch = await startFakeGSwitch();
-  try {
-    const ctx = { ...setupRepo("usage-limit"), configDir: gswitch.configDir };
+test("after GSwitch switches accounts, invoke resumes the same thread with the same settings", () =>
+  withGSwitch({}, "usage-limit-once", async (ctx, gswitch) => {
+    const result = await companion(
+      ["invoke", "--json", "--model", "model-a", "--effort", "xhigh", "--write", "implement the feature"],
+      ctx
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.failovers, 1);
+
+    assert.deepEqual(gswitch.methods(), [
+      "lease_open",
+      "run_begin",
+      "run_app_server",
+      "run_thread",
+      "run_end",
+      "limit_reached",
+      "await_failover",
+      "run_begin",
+      "run_app_server",
+      "run_end"
+    ]);
+    const fakeState = readFakeState(ctx.statePath);
+    assert.equal(fakeState.threads.length, 1, "the failover must not create a new Codex thread");
+    assert.equal(fakeState.turns.length, 2);
+    const [first, second] = fakeState.turns;
+    assert.equal(first.prompt, "implement the feature");
+    assert.equal(second.prompt, FAILOVER_RESUME_PROMPT);
+    assert.equal(second.threadId, first.threadId);
+    assert.equal(payload.threadId, first.threadId);
+    assert.deepEqual([second.model, second.effort], ["model-a", "xhigh"]);
+    assert.equal(fakeState.lastThreadRequest.method, "thread/resume");
+    assert.equal(fakeState.lastThreadRequest.sandbox, "workspace-write");
+    assert.match(result.stdout, /"failovers": 1/);
+  }));
+
+test("a failover GSwitch cannot complete is reported with the thread kept", () =>
+  withGSwitch({ failoverError: "NO_ELIGIBLE_ACCOUNT" }, "usage-limit-once", async (ctx) => {
     const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
     assert.equal(result.status, 1);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.status, "failed");
-    assert.equal(payload.code, "USAGE_LIMIT_EXCEEDED");
+    assert.equal(payload.code, "NO_ELIGIBLE_ACCOUNT");
     assert.ok(payload.threadId);
-  } finally {
-    await gswitch.close();
-  }
-});
+    assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes without a verified switch");
+  }));
+
+test("switching GSwitch to Manual Mode stops automatic failover", () =>
+  withGSwitch({ manualAfterLease: true }, "usage-limit-once", async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "INVOKE_MODE_DISABLED");
+    assert.ok(payload.threadId);
+    assert.equal(readFakeState(ctx.statePath).turns.length, 1);
+  }));
+
+test("invoke gives up with USAGE_LIMIT_EXCEEDED after repeated failovers", () =>
+  withGSwitch({}, "usage-limit", async (ctx, gswitch) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "USAGE_LIMIT_EXCEEDED");
+    assert.equal(payload.failovers, 3);
+    assert.equal(gswitch.methods().filter((method) => method === "limit_reached").length, 3);
+    const fakeState = readFakeState(ctx.statePath);
+    assert.equal(fakeState.threads.length, 1);
+    assert.equal(fakeState.turns.length, 4);
+  }));
