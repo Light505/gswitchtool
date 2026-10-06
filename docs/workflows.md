@@ -472,6 +472,20 @@ continuation message. A run stopped before its thread existed starts over with
 the original task. After three failovers in one invocation, the worker reports
 the usage limit instead of continuing.
 
+When no allowed account has usable quota, GSwitch pauses Invoke Mode. The pause
+records when the first account can use Codex again: for each allowed account and
+the exhausted one, the latest reset among its spent Codex windows (or, when the
+provider reports a limit with no window at zero, among all its Codex windows),
+then the earliest of those accounts; it is unknown when a spent window has no
+reset time. While paused, `validate`, `lease_open`, `run_begin`, and
+`limit_reached` refuse with `INVOKE_PAUSED`, carrying the reset time in Unix
+seconds when known, `status` reports the pause, and the window shows it. The
+pause ends at the reset time, or when the user chooses Resume now, turns Invoke
+Mode on or off, or allows an account. The Claude Code plugin tells the invoking
+model to pause all work on `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, and
+`USAGE_LIMIT_EXCEEDED`: stop, report the unfinished threads and the reset time,
+and wait for the user.
+
 When no allowed account has usable quota, an App Server will not stop, the user
 keeps Codex open or cancels, Invoke Mode was turned off, or the switch or
 verification fails, nothing resumes. Each worker returns a stable code with its

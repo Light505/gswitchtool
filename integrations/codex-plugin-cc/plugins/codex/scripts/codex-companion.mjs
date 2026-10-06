@@ -24,7 +24,7 @@ import {
   } from "./lib/codex.mjs";
 import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
-import { GSwitchError, GSwitchSession, readInvokeStatus } from "./lib/gswitch.mjs";
+import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, pauseInstruction, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -1062,6 +1062,9 @@ function renderInvokeStatus(report) {
   if (!report.invoke_mode) {
     return "Invoke Mode is off in GSwitch. Do not delegate through invoke; only the user can turn it on.\n";
   }
+  if (report.paused) {
+    return `Invoke Mode is paused: no Codex account GSwitch may use has usage left. ${pauseInstruction(report.paused.resumes_at)}\n`;
+  }
   const profiles = report.allowed_invocation_profiles ?? [];
   const lines = ["Invoke Mode is on. Allowed Codex models and reasoning efforts:"];
   if (profiles.length === 0) {
@@ -1290,7 +1293,11 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
       return failed(runError && failovers > 0 ? "SESSION_RESUME_FAILED" : "CODEX_FAILED", message);
     }
     if (failovers >= MAX_FAILOVERS_PER_INVOKE) {
-      return failed("USAGE_LIMIT_EXCEEDED", message);
+      // Every account it switched to ran out in turn.
+      return failed(
+        "USAGE_LIMIT_EXCEEDED",
+        `Codex ran out of usage on ${failovers + 1} accounts in a row. ${PAUSE_ALL_WORK}`
+      );
     }
     try {
       if (limited && outcome === "unchanged") {

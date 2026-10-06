@@ -136,9 +136,25 @@ When Codex reports that the active account has used up its quota, GSwitch:
 4. switches and verifies the new account, then resumes each piece of work in its
    same Codex conversation with the same model and settings.
 
-The window then names both accounts. If no allowed account has quota left, or a
-switch cannot be verified, nothing is switched, and Claude reports the reason
-with the thread so the work can continue later.
+The window then names both accounts. If a switch cannot be verified, nothing is
+switched, and Claude reports the reason with the thread so the work can continue
+later.
+
+### When every account runs out
+
+If no allowed account has Codex usage left, there is nothing to switch to.
+GSwitch then **pauses Invoke Mode**:
+
+- All Codex work stops, and GSwitch starts no new Codex work, including reviews.
+- Claude is told to **pause all work**. It stops instead of finishing the task
+  itself, tells you which Codex threads are unfinished and when usage resets, and
+  waits for you.
+- GSwitch shows **Invoke Mode paused** with the time usage resets.
+
+The pause ends by itself when the first of those accounts resets. To end it
+sooner, allow another account, switch Invoke Mode off and on, or choose
+**Resume now**. Then tell Claude to continue: it resumes each thread where it
+stopped. To keep working without Codex instead, tell Claude to carry on itself.
 
 ## 7. Check what happened
 
@@ -162,7 +178,8 @@ with the thread so the work can continue later.
 | `GSWITCH_UNAVAILABLE` | Open GSwitch Claude Tool. |
 | `INVOKE_MODE_DISABLED` | Switch GSwitch to **Invoke**, or keep working without Codex. |
 | `MODEL_NOT_ALLOWED` / `REASONING_NOT_ALLOWED` | Claude asked for something you did not tick. It should choose again from your list; tick more in Invoke settings if needed. |
-| `NO_ELIGIBLE_ACCOUNT` | No allowed account has quota left. Allow another account or wait for a reset. |
+| `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or **Invoke Mode paused** | No allowed account has Codex usage left, so Claude paused. Wait for the reset, or allow another account and choose **Resume now**; then tell Claude to continue. |
+| `USAGE_LIMIT_EXCEEDED` | Codex ran out on several accounts in a row during one task, so Claude paused. Tell Claude to continue when usage is available. |
 | **Close Codex to continue** in GSwitch, or `EXTERNAL_CODEX_RUNNING` | Quit your own Codex app, CLI, or IDE extension so the account can be switched. |
 | `CURRENT_ACCOUNT_UNKNOWN` | Save the account Codex is using in GSwitch, or finish **Review recovery** if GSwitch shows it. |
 | The GSwitch window freezes while opening | Close it, end any leftover `msedgewebview2.exe` processes for GSwitch Claude Tool in Task Manager, and open it again. |

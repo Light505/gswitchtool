@@ -30,7 +30,8 @@ async function startFakeGSwitch({
   failoverError = null,
   manualAfterLease = false,
   waitingForCodex = false,
-  failoverDetail = null
+  failoverDetail = null,
+  paused = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -50,10 +51,14 @@ async function startFakeGSwitch({
           allowed_invocation_profiles: policy.invokeMode ? PROFILES : [],
           workers_running: 0,
           failover_in_progress: waitingForCodex,
-          ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {})
+          ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
+          ...(paused ? { paused } : {})
         });
       case "lease_open": {
         if (!policy.invokeMode) return fail("INVOKE_MODE_DISABLED");
+        if (paused) {
+          return { id: request.id, error: { code: "INVOKE_PAUSED", detail: String(paused.resumes_at ?? "") } };
+        }
         const profile = PROFILES.find((entry) => entry.model === request.params.model);
         if (!profile) return fail("MODEL_NOT_ALLOWED");
         if (!profile.reasoning_efforts.includes(request.params.reasoning_effort)) return fail("REASONING_NOT_ALLOWED");
@@ -172,6 +177,27 @@ test("invoke-status tells Claude to ask the user to close Codex while a switch w
     const result = await companion(["invoke-status"], ctx);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /waiting for the user to close Codex/);
+  }));
+
+test("invoke-status tells Claude to pause all work while Invoke Mode is paused", () =>
+  withGSwitch({ paused: { resumes_at: Math.floor(Date.now() / 1000) + 2 * 3600 } }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Invoke Mode is paused/);
+    assert.match(result.stdout, /Codex usage resets around .* \(in about (1 h 59 min|2 h)\)/);
+    assert.match(result.stdout, /PAUSE ALL WORK/);
+    assert.doesNotMatch(result.stdout, /model-a/, "a paused status offers nothing to choose");
+  }));
+
+test("invoke is refused without starting Codex while Invoke Mode is paused", () =>
+  withGSwitch({ paused: { resumes_at: null } }, undefined, async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 2);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "INVOKE_PAUSED");
+    assert.match(payload.message, /No reset time is known/);
+    assert.match(payload.message, /PAUSE ALL WORK/);
+    assert.equal(fs.existsSync(ctx.statePath), false, "Codex never started");
   }));
 
 test("invoke-status and invoke report GSwitch as unavailable when it is not running", async () => {
@@ -313,6 +339,7 @@ test("a failover GSwitch cannot complete is reported with the thread kept", () =
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.status, "failed");
     assert.equal(payload.code, "NO_ELIGIBLE_ACCOUNT");
+    assert.match(payload.message, /PAUSE ALL WORK/);
     assert.ok(payload.threadId);
     assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes without a verified switch");
   }));
@@ -333,6 +360,7 @@ test("invoke gives up with USAGE_LIMIT_EXCEEDED after repeated failovers", () =>
     assert.equal(result.status, 1);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.code, "USAGE_LIMIT_EXCEEDED");
+    assert.match(payload.message, /4 accounts in a row\. PAUSE ALL WORK/);
     assert.equal(payload.failovers, 3);
     assert.equal(gswitch.methods().filter((method) => method === "limit_reached").length, 3);
     const fakeState = readFakeState(ctx.statePath);

@@ -9,6 +9,7 @@ import type {
   ImportResult,
   InvocationProfile,
   InvokeSettings,
+  InvokePause,
   SwitchAccounts,
   LiveAccountView,
   MigrationPreview,
@@ -107,6 +108,10 @@ export const api = {
   cancelInvokeFailover: () => invoke<void>("cancel_invoke_failover"),
   onInvokeFailoverWaiting: (handler: (waiting: SwitchAccounts | null) => void) =>
     listen<SwitchAccounts | null>("invoke-failover-waiting", (event) => handler(event.payload)),
+  invokePause: () => invoke<InvokePause | null>("get_invoke_pause"),
+  resumeInvoke: () => invoke<void>("resume_invoke"),
+  onInvokePaused: (handler: (pause: InvokePause | null) => void) =>
+    listen<InvokePause | null>("invoke-paused", (event) => handler(event.payload)),
   // Rust reports a verified Invoke Mode failover with account IDs only.
   onInvokeAccountSwitched: (handler: (switched: { from: string; to: string }) => void) =>
     listen<{ from: string; to: string }>("invoke-account-switched", (event) => handler(event.payload)),

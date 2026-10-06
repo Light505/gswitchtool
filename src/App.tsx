@@ -63,6 +63,7 @@ import type {
   CodexCliInfo,
   CodexCliUpdateFailure,
   InvocationProfile,
+  InvokePause,
   InvokeSettings,
   LiveAccountView,
   MigrationCandidate,
@@ -1309,6 +1310,8 @@ export default function App() {
   const [invokeChanging, setInvokeChanging] = useState(false);
   const [failoverWaiting, setFailoverWaiting] = useState<SwitchAccounts | null>(null);
   const [failoverCancelling, setFailoverCancelling] = useState(false);
+  const [invokePause, setInvokePause] = useState<InvokePause | null>(null);
+  const [invokeResuming, setInvokeResuming] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
   const [oauthTarget, setOauthTarget] = useState<AccountView | null>(null);
@@ -1618,6 +1621,52 @@ export default function App() {
       stop?.();
     };
   }, []);
+
+  useEffect(() => {
+    // Every account Invoke Mode may use ran out of Codex usage; Claude was told
+    // to pause until the reset or until the user resumes.
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokePaused(setInvokePause);
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+        setInvokePause(await api.invokePause());
+      } catch {
+        setInvokePause(null);
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    // GSwitch ends the pause at the reset time; read it again then.
+    if (invokePause?.resumes_at == null) return;
+    const delay = Math.min(Math.max(invokePause.resumes_at * 1000 - Date.now(), 0) + 1000, 2 ** 31 - 1);
+    const timer = window.setTimeout(() => {
+      void api.invokePause().then(setInvokePause, () => setInvokePause(null));
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [invokePause]);
+
+  const resumeInvoke = async () => {
+    setInvokeResuming(true);
+    try {
+      await api.resumeInvoke();
+      setInvokePause(null);
+    } catch (error) {
+      setNotice({ kind: "error", text: friendlyError(t, error, t("error.invokeResume")) });
+    } finally {
+      setInvokeResuming(false);
+    }
+  };
 
   const cancelFailover = async () => {
     setFailoverCancelling(true);
@@ -2574,6 +2623,23 @@ export default function App() {
             </div>
             <button className="button button-secondary" disabled={failoverCancelling} onClick={() => void cancelFailover()} type="button">
               {t("invoke.cancelSwitch")}
+            </button>
+          </section>
+        ) : null}
+
+        {invokePause && !failoverWaiting ? (
+          <section className="safety-notice" role="status">
+            <div className="safety-icon"><CircleAlert size={20} /></div>
+            <div>
+              <h2>{t("invoke.pausedTitle")}</h2>
+              <p>
+                {invokePause.resumes_at == null
+                  ? t("invoke.pausedBodyUnknown")
+                  : t("invoke.pausedBody", { time: formatDateTimeWithRelative(invokePause.resumes_at, locale.formatLocale) })}
+              </p>
+            </div>
+            <button className="button button-secondary" disabled={invokeResuming} onClick={() => void resumeInvoke()} type="button">
+              {t("invoke.resume")}
             </button>
           </section>
         ) : null}

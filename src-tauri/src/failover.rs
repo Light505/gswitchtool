@@ -7,7 +7,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::Serialize;
@@ -32,6 +32,8 @@ pub enum FailoverCode {
     ExternalCodexRunning,
     CodexShutdownFailed,
     NoEligibleAccount,
+    /// Invoke Mode is paused because no account had Codex usage left.
+    InvokePaused,
     AccountSwitchFailed,
     AccountVerificationFailed,
     UnknownLease,
@@ -60,6 +62,15 @@ pub enum RunEnd {
     FailoverInProgress,
     /// The account changed since the run started; resume.
     AccountSwitched,
+}
+
+/// Invoke Mode starts no Codex work: a failover found no account GSwitch may
+/// use with Codex usage left. The pause ends when the first of those accounts
+/// resets, or when the user resumes Invoke Mode in GSwitch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InvokePause {
+    /// Unix seconds; `None` when no reset time is known.
+    pub resumes_at: Option<i64>,
 }
 
 /// The configuration a worker's Codex thread must keep across a failover.
@@ -111,6 +122,7 @@ struct Inner {
     /// Set while a failover waits for the user to close Codex.
     waiting_for_codex: Option<SwitchAccounts>,
     cancel_requested: bool,
+    paused: Option<InvokePause>,
 }
 
 struct FailoverOutcome {
@@ -154,6 +166,14 @@ pub trait FailoverOps: Send + Sync {
     /// Asks the user to close Codex (`Some`) or withdraws that request.
     fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>);
     fn switched(&self, from: &str, to: &str);
+    /// Reports that Invoke Mode paused (`Some`) or was resumed.
+    fn paused(&self, pause: Option<&InvokePause>);
+    fn now_unix(&self) -> i64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_secs() as i64)
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -250,13 +270,19 @@ impl Coordinator {
     /// Lets a worker start Codex once no failover is running.
     pub async fn begin_run(&self, lease_id: &str) -> Result<(), FailoverCode> {
         self.wait_until(|inner| {
+            if !inner.leases.contains_key(lease_id) {
+                return Err(FailoverCode::UnknownLease);
+            }
+            if inner.replacing.is_some() {
+                return Ok(None);
+            }
+            if self.current_pause(inner).is_some() {
+                return Err(FailoverCode::InvokePaused);
+            }
             let lease = inner
                 .leases
                 .get_mut(lease_id)
                 .ok_or(FailoverCode::UnknownLease)?;
-            if inner.replacing.is_some() {
-                return Ok(None);
-            }
             lease.run = RunState::Starting;
             lease.account = self.ops.active_account();
             Ok(Some(()))
@@ -327,6 +353,9 @@ impl Coordinator {
         if inner.replacing.is_some() {
             return Ok(LimitAck::Joined);
         }
+        if self.current_pause(&mut inner).is_some() {
+            return Err(FailoverCode::InvokePaused);
+        }
         // An unknown live account is never mistaken for a completed switch.
         let live = self
             .ops
@@ -390,6 +419,33 @@ impl Coordinator {
             }
         })
         .await
+    }
+
+    /// The current pause, if Invoke Mode is paused.
+    pub fn pause(&self) -> Option<InvokePause> {
+        let mut inner = self.lock();
+        self.current_pause(&mut inner)
+    }
+
+    /// The user resumed Invoke Mode in GSwitch, or changed what it may use.
+    pub fn resume(&self) {
+        if self.lock().paused.take().is_some() {
+            self.ops.paused(None);
+            self.notify();
+        }
+    }
+
+    /// A pause past its reset time is over.
+    fn current_pause(&self, inner: &mut Inner) -> Option<InvokePause> {
+        if let Some(InvokePause {
+            resumes_at: Some(at),
+        }) = inner.paused
+        {
+            if self.ops.now_unix() >= at {
+                inner.paused = None;
+            }
+        }
+        inner.paused.clone()
     }
 
     /// The switch transaction's reason for the last failed failover, if any.
@@ -472,8 +528,21 @@ impl Coordinator {
                 (account, quota)
             })
             .collect::<Vec<_>>();
-        let target = select_account(&candidates, exhausted)
-            .ok_or(SwitchRefusal::from(FailoverCode::NoEligibleAccount))?;
+        let Some(target) = select_account(&candidates, exhausted) else {
+            // Nothing can take over: pause until the first of these accounts,
+            // or the one that ran out, can use Codex again.
+            let mut quotas = candidates
+                .into_iter()
+                .map(|(_, quota)| quota)
+                .collect::<Vec<_>>();
+            quotas.push(self.ops.read_quota(exhausted));
+            let pause = InvokePause {
+                resumes_at: earliest_reset(&quotas),
+            };
+            self.lock().paused = Some(pause.clone());
+            self.ops.paused(Some(&pause));
+            return Err(FailoverCode::NoEligibleAccount.into());
+        };
 
         // Switch and verify through the normal transaction. A Codex the user
         // opened is never stopped: GSwitch asks the user to close it and waits.
@@ -633,11 +702,46 @@ fn usable_capacity(snapshot: &QuotaSnapshot) -> Option<u8> {
     }
 }
 
+/// When the first of these accounts can use Codex again: each account's
+/// latest reset among its spent Codex windows, then the earliest account.
+fn earliest_reset(quotas: &[Option<QuotaSnapshot>]) -> Option<i64> {
+    quotas.iter().flatten().filter_map(account_reset).min()
+}
+
+/// `None` when a spent window has no reset time or nothing shows as spent.
+fn account_reset(snapshot: &QuotaSnapshot) -> Option<i64> {
+    let mut latest = None;
+    for bucket in snapshot
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.kind == QuotaBucketKind::Codex)
+    {
+        let spent = bucket
+            .windows
+            .iter()
+            .filter(|window| window.remaining_percent == Some(0))
+            .collect::<Vec<_>>();
+        // A reported limit without a spent window blocks until all reset.
+        let blocking = if spent.is_empty() && bucket.rate_limit_reached_type.is_some() {
+            bucket.windows.iter().collect()
+        } else {
+            spent
+        };
+        for window in blocking {
+            latest = latest.max(Some(window.resets_at?));
+        }
+    }
+    latest
+}
+
 /// Called with the replaced and the new account ID after a verified switch.
 pub type SwitchedCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
 
 /// Called when a failover starts or stops waiting for the user to close Codex.
 pub type WaitingCallback = Box<dyn Fn(Option<&SwitchAccounts>) + Send + Sync>;
+
+/// Called when Invoke Mode pauses or resumes.
+pub type PausedCallback = Box<dyn Fn(Option<&InvokePause>) + Send + Sync>;
 
 /// The real failover effects: GSwitch's account store, provider reads, the
 /// switch transaction, and process control limited to registered PIDs.
@@ -646,6 +750,7 @@ pub struct AppOps {
     pub invoke: InvokeState,
     pub on_switched: SwitchedCallback,
     pub on_waiting: WaitingCallback,
+    pub on_paused: PausedCallback,
 }
 
 impl FailoverOps for AppOps {
@@ -716,6 +821,10 @@ impl FailoverOps for AppOps {
     fn switched(&self, from: &str, to: &str) {
         (self.on_switched)(from, to);
     }
+
+    fn paused(&self, pause: Option<&InvokePause>) {
+        (self.on_paused)(pause);
+    }
 }
 
 #[cfg(test)]
@@ -741,6 +850,8 @@ mod tests {
         other_codex: bool,
         quota_reads: Vec<String>,
         waiting_events: Vec<Option<SwitchAccounts>>,
+        pause_events: Vec<Option<InvokePause>>,
+        now: i64,
     }
 
     struct FakeOps(Mutex<World>);
@@ -802,6 +913,12 @@ mod tests {
             self.world().waiting_events.push(accounts.cloned());
         }
         fn switched(&self, _from: &str, _to: &str) {}
+        fn paused(&self, pause: Option<&InvokePause>) {
+            self.world().pause_events.push(pause.cloned());
+        }
+        fn now_unix(&self) -> i64 {
+            self.world().now
+        }
     }
 
     fn account(id: &str, allowed: bool) -> AccountView {
@@ -1298,5 +1415,151 @@ mod tests {
             coordinator.end_run(&worker),
             Err(FailoverCode::UnknownLease)
         );
+    }
+
+    /// One Codex bucket whose windows have these remaining percentages and
+    /// reset times.
+    fn quota_resetting(windows: &[(u8, Option<i64>)]) -> QuotaSnapshot {
+        let mut snapshot = quota(50, 50);
+        snapshot.buckets[0].windows = windows
+            .iter()
+            .map(|(remaining, resets_at)| QuotaWindow {
+                kind: QuotaWindowKind::FiveHour,
+                used_percent: Some(100 - remaining),
+                remaining_percent: Some(*remaining),
+                window_duration_mins: None,
+                resets_at: *resets_at,
+            })
+            .collect();
+        snapshot
+    }
+
+    /// A, B, and C have all run out; A can use Codex again first, at 5000.
+    fn depleted_world() -> World {
+        World {
+            now: 1000,
+            quotas: HashMap::from([
+                (
+                    "a".into(),
+                    quota_resetting(&[(0, Some(5000)), (40, Some(9900))]),
+                ),
+                (
+                    "b".into(),
+                    quota_resetting(&[(30, Some(2000)), (0, Some(9000))]),
+                ),
+                (
+                    "c".into(),
+                    quota_resetting(&[(0, Some(3000)), (0, Some(7000))]),
+                ),
+            ]),
+            ..world()
+        }
+    }
+
+    #[test]
+    fn running_out_everywhere_pauses_invoke_mode_until_the_first_reset() {
+        let (coordinator, ops) = setup(depleted_world());
+        let worker = running_worker(&coordinator, &ops, 1, 301);
+        assert_eq!(coordinator.report_limit(&worker), Ok(LimitAck::Started));
+        assert_eq!(
+            block_on(coordinator.await_failover(&worker)),
+            Err(FailoverCode::NoEligibleAccount)
+        );
+        assert!(ops.world().switches.is_empty());
+        assert_eq!(ops.world().terminated, vec![301]);
+        let pause = InvokePause {
+            resumes_at: Some(5000),
+        };
+        assert_eq!(coordinator.pause(), Some(pause.clone()));
+        assert_eq!(ops.world().pause_events, vec![Some(pause)]);
+
+        // Nothing starts Codex while paused, including a resumed thread.
+        assert_eq!(
+            block_on(coordinator.begin_run(&worker)),
+            Err(FailoverCode::InvokePaused)
+        );
+        let other = coordinator.open_lease(2, request("model-a", "high"));
+        assert_eq!(
+            block_on(coordinator.begin_run(&other)),
+            Err(FailoverCode::InvokePaused)
+        );
+
+        ops.world().now = 5000;
+        assert_eq!(coordinator.pause(), None);
+        assert_eq!(block_on(coordinator.begin_run(&other)), Ok(()));
+    }
+
+    #[test]
+    fn a_pause_without_a_known_reset_lasts_until_the_user_resumes() {
+        let mut world = depleted_world();
+        for quota in world.quotas.values_mut() {
+            for window in &mut quota.buckets[0].windows {
+                window.resets_at = None;
+            }
+        }
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 401);
+        coordinator.report_limit(&worker).expect("limit");
+        wait_for_failover(&coordinator);
+        ops.world().now = i64::MAX;
+        assert_eq!(coordinator.pause(), Some(InvokePause { resumes_at: None }));
+
+        coordinator.resume();
+        assert_eq!(coordinator.pause(), None);
+        assert_eq!(block_on(coordinator.begin_run(&worker)), Ok(()));
+        assert_eq!(
+            ops.world().pause_events,
+            vec![Some(InvokePause { resumes_at: None }), None]
+        );
+        // Resuming when nothing is paused reports nothing.
+        coordinator.resume();
+        assert_eq!(ops.world().pause_events.len(), 2);
+    }
+
+    #[test]
+    fn a_switch_that_fails_for_another_reason_does_not_pause() {
+        let (coordinator, ops) = setup(World {
+            switch_result: Some(FailoverCode::AccountSwitchFailed),
+            ..world()
+        });
+        let worker = running_worker(&coordinator, &ops, 1, 501);
+        coordinator.report_limit(&worker).expect("limit");
+        wait_for_failover(&coordinator);
+        assert_eq!(coordinator.pause(), None);
+        assert!(ops.world().pause_events.is_empty());
+    }
+
+    #[test]
+    fn the_reset_time_is_when_the_first_account_has_no_spent_window() {
+        // An account is usable again once its last spent window resets.
+        assert_eq!(
+            account_reset(&quota_resetting(&[
+                (0, Some(300)),
+                (0, Some(700)),
+                (20, Some(100))
+            ])),
+            Some(700)
+        );
+        // A reported limit with no window at zero waits for every window.
+        let mut reached = quota_resetting(&[(10, Some(400)), (30, Some(800))]);
+        reached.buckets[0].rate_limit_reached_type = Some("rate_limit_reached".into());
+        assert_eq!(account_reset(&reached), Some(800));
+        // Unknown when a spent window has no reset time or none is spent.
+        assert_eq!(
+            account_reset(&quota_resetting(&[(0, None), (0, Some(900))])),
+            None
+        );
+        assert_eq!(account_reset(&quota_resetting(&[(50, Some(900))])), None);
+
+        assert_eq!(
+            earliest_reset(&[
+                Some(quota_resetting(&[(0, Some(900))])),
+                None,
+                Some(quota_resetting(&[(0, None)])),
+                Some(quota_resetting(&[(0, Some(600))])),
+            ]),
+            Some(600)
+        );
+        assert_eq!(earliest_reset(&[None]), None);
     }
 }

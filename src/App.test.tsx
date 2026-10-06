@@ -64,6 +64,9 @@ const mocks = vi.hoisted(() => ({
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
   onInvokeFailoverWaiting: vi.fn(),
+  invokePause: vi.fn(),
+  resumeInvoke: vi.fn(),
+  onInvokePaused: vi.fn(),
 }));
 
 const updaterMocks = vi.hoisted(() => ({
@@ -223,6 +226,9 @@ function prepareDefaults() {
   mocks.invokeFailover.mockResolvedValue(null);
   mocks.cancelInvokeFailover.mockResolvedValue(undefined);
   mocks.onInvokeFailoverWaiting.mockResolvedValue(() => undefined);
+  mocks.invokePause.mockResolvedValue(null);
+  mocks.resumeInvoke.mockResolvedValue(undefined);
+  mocks.onInvokePaused.mockResolvedValue(() => undefined);
   updaterMocks.check.mockResolvedValue(null);
   updaterMocks.relaunch.mockResolvedValue(undefined);
   webviewMocks.onDragDropEvent.mockResolvedValue(() => undefined);
@@ -2453,6 +2459,31 @@ describe("Invoke Mode", () => {
     await waitFor(() => expect(update).toBeDefined());
     act(() => update!({ from: "account-1", to: "missing" }));
     expect(await screen.findByRole("heading", { name: "Close Codex to continue" })).toBeInTheDocument();
+  });
+
+  it("says Invoke Mode is paused until the reset and lets the user resume it", async () => {
+    const resetsAt = Math.floor(Date.now() / 1000) + 3 * 3600;
+    mocks.invokePause.mockResolvedValue({ resumes_at: resetsAt });
+    let update: ((pause: { resumes_at: number | null } | null) => void) | undefined;
+    mocks.onInvokePaused.mockImplementation(async (handler: typeof update) => {
+      update = handler;
+      return () => undefined;
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Invoke Mode paused" })).toBeInTheDocument();
+    expect(screen.getByText(/out of Codex usage, so Claude was told to pause its work\. Invoke Mode resumes at .+\./))
+      .toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Resume now" }));
+    await waitFor(() => expect(mocks.resumeInvoke).toHaveBeenCalledOnce());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
+
+    // A later pause with no known reset time arrives as an event.
+    act(() => update!({ resumes_at: null }));
+    expect(await screen.findByText(/Allow another account, or choose Resume now once usage is available again\./))
+      .toBeInTheDocument();
+    act(() => update!(null));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
   });
 
   it("keeps the dialog open with a safe message when the model list cannot be read", async () => {

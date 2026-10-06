@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use uuid::Uuid;
 
 use crate::{
-    failover::{Coordinator, LeaseRequest},
+    failover::{Coordinator, FailoverCode, LeaseRequest},
     invoke::InvokeState,
     storage,
 };
@@ -156,6 +156,7 @@ async fn dispatch(
                 "workers_running": running,
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
+                "paused": coordinator.pause(),
                 "workers": coordinator.workers(),
             }))
         }
@@ -189,7 +190,10 @@ async fn dispatch(
             coordinator
                 .begin_run(&text("lease_id")?)
                 .await
-                .map_err(code)?;
+                .map_err(|failure| match failure {
+                    FailoverCode::InvokePaused => paused(coordinator, failure),
+                    _ => code(failure),
+                })?;
             Ok(json!({}))
         }
         "run_app_server" => {
@@ -219,6 +223,9 @@ async fn dispatch(
         }
         "await_failover" => {
             if let Err(failure) = coordinator.await_failover(&text("lease_id")?).await {
+                if failure == FailoverCode::NoEligibleAccount {
+                    return Err(paused(coordinator, failure));
+                }
                 // Keep the switch transaction's own reason for diagnosis.
                 return Err(match coordinator.last_failure_detail() {
                     Some(detail) => format!("{}:{detail}", code(failure)),
@@ -235,7 +242,19 @@ fn validate(endpoint: &Endpoint, model: &str, reasoning_effort: &str) -> Result<
     endpoint
         .invoke
         .validate_request(model, reasoning_effort)
-        .map_err(code)
+        .map_err(code)?;
+    if endpoint.coordinator.pause().is_some() {
+        return Err(paused(&endpoint.coordinator, FailoverCode::InvokePaused));
+    }
+    Ok(())
+}
+
+/// A code about the pause carries its reset time, in Unix seconds, when known.
+fn paused(coordinator: &Coordinator, failure: FailoverCode) -> String {
+    match coordinator.pause().and_then(|pause| pause.resumes_at) {
+        Some(at) => format!("{}:{at}", code(failure)),
+        None => code(failure),
+    }
 }
 
 /// Serializes an error enum to its stable SCREAMING_SNAKE_CASE name.
@@ -362,7 +381,7 @@ impl Listener {
 mod tests {
     use super::*;
     use crate::{
-        failover::{FailoverCode, FailoverOps, Timings},
+        failover::{FailoverOps, Timings},
         types::{AccountView, CatalogModel, InvocationProfile, QuotaSnapshot},
     };
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -397,6 +416,7 @@ mod tests {
         }
         fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
         fn switched(&self, _from: &str, _to: &str) {}
+        fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }
 
     fn temp_dir(name: &str) -> PathBuf {
@@ -511,6 +531,7 @@ mod tests {
                 "workers_running": 0,
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
+                "paused": null,
                 "workers": [],
             })
         );
@@ -603,6 +624,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
+    #[test]
+    fn running_out_with_no_account_left_pauses_every_new_request() {
+        let dir = temp_dir("paused");
+        let endpoint = endpoint(&dir, true);
+        let lease = call(
+            &request(
+                "lease_open",
+                json!({"model": "model-a", "reasoning_effort": "high", "write": false, "cwd": "/repo"}),
+            ),
+            &endpoint,
+        )["result"]["lease_id"]
+            .as_str()
+            .expect("lease")
+            .to_string();
+        let ok = |method: &str| call(&request(method, json!({ "lease_id": lease })), &endpoint);
+        assert_eq!(ok("run_begin")["result"], json!({}));
+        assert_eq!(ok("run_end")["result"]["outcome"], "unchanged");
+        assert_eq!(ok("limit_reached")["result"]["failover"], "started");
+        // No saved account can take over, so no reset time is known.
+        assert_eq!(
+            ok("await_failover")["error"],
+            json!({ "code": "NO_ELIGIBLE_ACCOUNT" })
+        );
+
+        let status = call(&request("status", Value::Null), &endpoint)["result"].clone();
+        assert_eq!(status["paused"], json!({ "resumes_at": null }));
+        assert_eq!(ok("run_begin")["error"]["code"], "INVOKE_PAUSED");
+        assert_eq!(
+            call(
+                &request(
+                    "validate",
+                    json!({"model": "model-a", "reasoning_effort": "high"})
+                ),
+                &endpoint
+            )["error"]["code"],
+            "INVOKE_PAUSED"
+        );
+
+        endpoint.coordinator.resume();
+        assert_eq!(
+            call(
+                &request(
+                    "validate",
+                    json!({"model": "model-a", "reasoning_effort": "high"})
+                ),
+                &endpoint
+            )["result"],
+            json!({ "allowed": true })
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// Account "a" is active and runs out; "b" is allowed with quota. Process
     /// control is real so the worker's App Server is really stopped.
     struct EndToEndOps {
@@ -667,6 +740,7 @@ mod tests {
         }
         fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
         fn switched(&self, _from: &str, _to: &str) {}
+        fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }
 
     #[test]

@@ -18,7 +18,8 @@ Helper: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs"`
 ## 1. Check what is allowed
 
 Run `invoke-status` once per session and again after any rejection. If it says GSwitch is
-unavailable or Invoke Mode is off, do not delegate through `invoke`; do the work yourself.
+unavailable or Invoke Mode is off, do not delegate through `invoke`; do the work yourself. If it
+says Invoke Mode is paused, follow [When Codex usage runs out](#when-codex-usage-runs-out).
 
 ## 2. Decide what to delegate
 
@@ -69,9 +70,24 @@ Codex.
 
 If `invoke` returns `MODEL_NOT_ALLOWED` or `REASONING_NOT_ALLOWED`, run `invoke-status` and
 choose again. If it returns `INVOKE_MODE_DISABLED` or `GSWITCH_UNAVAILABLE`, stop
-delegating. Any other code (for example `NO_ELIGIBLE_ACCOUNT`, `EXTERNAL_CODEX_RUNNING`, or
-`USAGE_LIMIT_EXCEEDED`) means automatic recovery stopped: tell the user what the output
-says and keep the thread for later. Do not retry it yourself.
+delegating. If it returns `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or `USAGE_LIMIT_EXCEEDED`,
+or the output says PAUSE ALL WORK, follow [When Codex usage runs out](#when-codex-usage-runs-out).
+Any other code (for example `EXTERNAL_CODEX_RUNNING`) means automatic recovery stopped: tell
+the user what the output says and keep the thread for later. Do not retry it yourself.
+
+## When Codex usage runs out
+
+When every Codex account GSwitch may use is out of usage, GSwitch pauses Invoke Mode and the
+user decides what happens next. Pause all work in this session:
+
+- Stop at once. Do not finish the task, or start any other task, yourself, even if you could.
+- Do not start, resume, or retry any Codex work. Other delegated tasks running in the
+  background stop on their own and report the same pause; do not restart them.
+- Tell the user briefly: that work is paused because Codex usage ran out, each unfinished
+  thread ID and what it was doing, and when usage resets if the output says.
+- Then wait. Continue only when the user says so: run `invoke-status`, and resume each
+  thread with `--resume-thread` and its same model and effort. If the user tells you to
+  carry on without Codex, do the work yourself.
 
 ## Never
 

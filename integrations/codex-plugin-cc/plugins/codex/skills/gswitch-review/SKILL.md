@@ -18,6 +18,11 @@ Helper: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs"`
 Run `invoke-status`. If GSwitch is unavailable or Invoke Mode is off, skip the review and
 carry on; do not mention it again in this session unless the user asks.
 
+If it says Invoke Mode is paused, Codex usage has run out on every account GSwitch may use:
+pause all work. Stop, tell the user that their change is done but unreviewed and that work is
+paused until Codex usage resets (say when, if the output does), and wait for the user's
+instructions. Do not start other work.
+
 ## 2. Decide whether to review
 
 Reviewing is the default once you have finished a non-trivial code change and before you
@@ -44,8 +49,8 @@ short list, without editing files.
 ## 4. Use the findings
 
 Check each finding yourself before acting on it, fix what is real, and tell the user about
-significant findings. If `invoke` returns an error code, tell the user what it says and
-continue without the review.
+significant findings. If the output says PAUSE ALL WORK, pause as in step 1. If `invoke`
+returns any other error code, tell the user what it says and continue without the review.
 
 ## Never
 

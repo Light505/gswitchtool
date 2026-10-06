@@ -393,6 +393,11 @@ const en = {
   "invoke.closeCodexBody": "{from} reached its Codex usage limit. Quit Codex (the app, the CLI, and any IDE extension) so GSwitch can switch to {to}. Claude's delegated work resumes automatically once Codex is closed.",
   "invoke.cancelSwitch": "Cancel switch",
   "error.invokeCancel": "Could not cancel the switch.",
+  "invoke.pausedTitle": "Invoke Mode paused",
+  "invoke.pausedBody": "Every account Invoke Mode may use is out of Codex usage, so Claude was told to pause its work. Invoke Mode resumes at {time}. To continue sooner, allow another account or choose Resume now.",
+  "invoke.pausedBodyUnknown": "Every account Invoke Mode may use is out of Codex usage, so Claude was told to pause its work. Allow another account, or choose Resume now once usage is available again.",
+  "invoke.resume": "Resume now",
+  "error.invokeResume": "Could not resume Invoke Mode.",
 } as const;
 
 const zhCN: Record<keyof typeof en, string> = {
@@ -778,6 +783,11 @@ const zhCN: Record<keyof typeof en, string> = {
   "invoke.closeCodexBody": "{from} 已达到 Codex 用量上限。请退出 Codex（应用、CLI 和所有 IDE 扩展），GSwitch 才能切换到 {to}。关闭 Codex 后，Claude 委派的工作会自动继续。",
   "invoke.cancelSwitch": "取消切换",
   "error.invokeCancel": "无法取消切换。",
+  "invoke.pausedTitle": "Invoke 模式已暂停",
+  "invoke.pausedBody": "Invoke 模式可使用的所有账号都已用完 Codex 用量，已通知 Claude 暂停工作。Invoke 模式将于{time}恢复。如需提前继续，请允许其他账号或选择“立即恢复”。",
+  "invoke.pausedBodyUnknown": "Invoke 模式可使用的所有账号都已用完 Codex 用量，已通知 Claude 暂停工作。请允许其他账号，或在用量恢复后选择“立即恢复”。",
+  "invoke.resume": "立即恢复",
+  "error.invokeResume": "无法恢复 Invoke 模式。",
 };
 
 const dictionaries = { en, "zh-CN": zhCN } as const;

@@ -7,7 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 use crate::{
     accounts::AppState,
     cli_update, codex,
-    failover::{Coordinator, SwitchAccounts},
+    failover::{Coordinator, InvokePause, SwitchAccounts},
     intake,
     invoke::{self, InvokeState},
     migration, quota, switching,
@@ -460,12 +460,28 @@ pub fn cancel_invoke_failover(coordinator: State<'_, Arc<Coordinator>>) {
     coordinator.cancel_waiting_failover();
 }
 
+/// Why Invoke Mode starts no Codex work, if it is paused.
+#[tauri::command]
+pub fn get_invoke_pause(coordinator: State<'_, Arc<Coordinator>>) -> Option<InvokePause> {
+    coordinator.pause()
+}
+
+/// The user lets Invoke Mode start Codex work again before the reset time.
+#[tauri::command]
+pub fn resume_invoke(coordinator: State<'_, Arc<Coordinator>>) {
+    coordinator.resume();
+}
+
+/// Turning Invoke Mode on or off also ends a pause: the user has decided.
 #[tauri::command]
 pub fn set_invoke_mode(
     invoke: State<'_, InvokeState>,
+    coordinator: State<'_, Arc<Coordinator>>,
     enabled: bool,
 ) -> Result<InvokeSettings, String> {
-    invoke.set_invoke_mode(enabled)
+    let settings = invoke.set_invoke_mode(enabled)?;
+    coordinator.resume();
+    Ok(settings)
 }
 
 /// Reads the installed Codex model catalog. Starting App Server takes the
@@ -507,11 +523,17 @@ pub async fn set_invoke_profiles(
 #[tauri::command]
 pub async fn set_account_invoke_allowed(
     state: State<'_, AppState>,
+    coordinator: State<'_, Arc<Coordinator>>,
     id: String,
     allowed: bool,
 ) -> Result<AccountView, String> {
     let state = state.inner().clone();
-    run_blocking(move || state.set_invoke_allowed(&id, allowed)).await
+    let account = run_blocking(move || state.set_invoke_allowed(&id, allowed)).await?;
+    // Allowing another account may give Invoke Mode usage to continue with.
+    if allowed {
+        coordinator.resume();
+    }
+    Ok(account)
 }
 
 fn read_and_remember_catalog(

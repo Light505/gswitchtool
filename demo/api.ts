@@ -56,6 +56,8 @@ const displayOnly = {
   onInvokeAccountSwitched: async () => () => undefined,
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
+  invokePause: async () => null,
+  onInvokePaused: async () => () => undefined,
   modelCatalog: async () => [
     { model: "gpt-6-astra", display_name: "gpt-6-astra", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: true },
     { model: "gpt-6-sol", display_name: "gpt-6-sol", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: false },

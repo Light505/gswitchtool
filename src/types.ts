@@ -29,6 +29,11 @@ export interface SwitchAccounts {
   to: string;
 }
 
+/** Invoke Mode starts no Codex work until `resumes_at` (Unix seconds) or the user resumes it. */
+export interface InvokePause {
+  resumes_at: number | null;
+}
+
 export interface CatalogModel {
   model: string;
   display_name: string;

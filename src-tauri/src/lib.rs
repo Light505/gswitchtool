@@ -81,6 +81,7 @@ pub fn run() {
             let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
             let switched = app.handle().clone();
             let waiting = app.handle().clone();
+            let paused = app.handle().clone();
             let coordinator = failover::Coordinator::new(
                 Arc::new(failover::AppOps {
                     state,
@@ -98,6 +99,17 @@ pub fn run() {
                         let _ = waiting.emit("invoke-failover-waiting", accounts);
                         if accounts.is_some() {
                             if let Some(window) = waiting.get_webview_window("main") {
+                                let _ = window.request_user_attention(Some(
+                                    tauri::UserAttentionType::Critical,
+                                ));
+                            }
+                        }
+                    }),
+                    // Every allowed account ran out of Codex usage.
+                    on_paused: Box::new(move |pause| {
+                        let _ = paused.emit("invoke-paused", pause);
+                        if pause.is_some() {
+                            if let Some(window) = paused.get_webview_window("main") {
                                 let _ = window.request_user_attention(Some(
                                     tauri::UserAttentionType::Critical,
                                 ));
@@ -159,7 +171,9 @@ pub fn run() {
             commands::set_invoke_profiles,
             commands::set_account_invoke_allowed,
             commands::get_invoke_failover,
-            commands::cancel_invoke_failover
+            commands::cancel_invoke_failover,
+            commands::get_invoke_pause,
+            commands::resume_invoke
         ])
         .run(tauri::generate_context!())
         .expect("error while running GSwitch");
