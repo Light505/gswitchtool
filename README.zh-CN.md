@@ -2,6 +2,11 @@
 
 简体中文 · [English](./README.md)
 
+> **gswitchtool** 是 Ginbing 的 [GSwitch](https://github.com/ginbing/GSwitch)
+> 的分支。它增加了可选的调用模式，让 Claude Code 通过 OpenAI
+> [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) 的修改版把工作委派给
+> Codex。本项目与上述两个项目均无隶属关系，详见 [CREDITS.md](./CREDITS.md)。本文其余部分介绍上游 GSwitch。
+
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。
 
 ![使用六个示例账户的 GSwitch 中文主界面](./assets/readme-demo-zh-CN.png)

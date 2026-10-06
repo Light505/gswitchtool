@@ -2,6 +2,13 @@
 
 [简体中文](./README.zh-CN.md) · English
 
+> **gswitchtool** is a fork of [GSwitch](https://github.com/ginbing/GSwitch) by
+> Ginbing. It adds an optional Invoke Mode that lets Claude Code delegate work
+> to Codex through a modified copy of OpenAI's
+> [codex-plugin-cc](https://github.com/openai/codex-plugin-cc). It is not
+> affiliated with either project; see [CREDITS.md](./CREDITS.md). The rest of
+> this README describes upstream GSwitch.
+
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.
 
