@@ -24,7 +24,10 @@ const branch = git("rev-parse", "--abbrev-ref", "HEAD");
 if (branch !== "main") {
   fail(`installers are built only from main, but this checkout is on ${branch ?? "an unknown branch"}. Run: git checkout main && git pull`);
 }
-if (git("status", "--porcelain") !== "") {
+// Compare content, not file status: every Tauri build rewrites Cargo.toml with
+// different line endings but the same content.
+const changed = spawnSync("git", ["diff", "--quiet", "HEAD"], { cwd: root }).status !== 0;
+if (changed || git("ls-files", "--others", "--exclude-standard") !== "") {
   fail("main has uncommitted changes. Commit or stash them first.");
 }
 const counts = git("rev-list", "--left-right", "--count", "HEAD...@{upstream}");
