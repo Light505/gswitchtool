@@ -389,6 +389,10 @@ const en = {
   "error.invokeSave": "Invoke settings were not saved.",
   "error.invokeAccount": "Could not change Invoke Mode for this account.",
   "invoke.switched": "{from} reached its Codex usage limit. Invoke Mode switched Codex to {to}.",
+  "invoke.closeCodexTitle": "Close Codex to continue",
+  "invoke.closeCodexBody": "{from} reached its Codex usage limit. Quit Codex (the app, the CLI, and any IDE extension) so GSwitch can switch to {to}. Claude's delegated work resumes automatically once Codex is closed.",
+  "invoke.cancelSwitch": "Cancel switch",
+  "error.invokeCancel": "Could not cancel the switch.",
 } as const;
 
 const zhCN: Record<keyof typeof en, string> = {
@@ -770,6 +774,10 @@ const zhCN: Record<keyof typeof en, string> = {
   "error.invokeSave": "调用设置未保存。",
   "error.invokeAccount": "无法更改此账户的调用模式。",
   "invoke.switched": "{from} 已达到 Codex 用量上限。调用模式已将 Codex 切换到 {to}。",
+  "invoke.closeCodexTitle": "关闭 Codex 以继续",
+  "invoke.closeCodexBody": "{from} 已达到 Codex 用量上限。请退出 Codex（应用、CLI 和所有 IDE 扩展），GSwitch 才能切换到 {to}。关闭 Codex 后，Claude 委派的工作会自动继续。",
+  "invoke.cancelSwitch": "取消切换",
+  "error.invokeCancel": "无法取消切换。",
 };
 
 const dictionaries = { en, "zh-CN": zhCN } as const;

@@ -104,6 +104,16 @@ struct Inner {
     replacing: Option<String>,
     /// The last failed failover and the account it tried to replace.
     last_failure: Option<(String, FailoverCode)>,
+    /// Set while a failover waits for the user to close Codex.
+    waiting_for_codex: Option<SwitchAccounts>,
+    cancel_requested: bool,
+}
+
+/// The accounts a failover replaces and switches to, by saved-account ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SwitchAccounts {
+    pub from: String,
+    pub to: String,
 }
 
 /// Operating-system, provider, and account effects of a failover. The real
@@ -117,6 +127,8 @@ pub trait FailoverOps: Send + Sync {
     fn terminate(&self, pid: u32);
     fn alive(&self, pid: u32) -> bool;
     fn other_codex_running(&self) -> bool;
+    /// Asks the user to close Codex (`Some`) or withdraws that request.
+    fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>);
     fn switched(&self, from: &str, to: &str);
 }
 
@@ -128,6 +140,8 @@ pub struct Timings {
     pub shutdown: Duration,
     /// How long a worker waits for a running failover.
     pub wait: Duration,
+    /// How long a failover waits for the user to close Codex.
+    pub user_close: Duration,
     pub poll: Duration,
 }
 
@@ -137,6 +151,7 @@ impl Default for Timings {
             start_grace: Duration::from_secs(10),
             shutdown: Duration::from_secs(10),
             wait: Duration::from_secs(15 * 60),
+            user_close: Duration::from_secs(10 * 60),
             poll: Duration::from_millis(100),
         }
     }
@@ -393,12 +408,9 @@ impl Coordinator {
             }
             std::thread::sleep(self.timings.poll);
         }
-        if self.ops.other_codex_running() {
-            return Err(FailoverCode::ExternalCodexRunning);
-        }
-
         // Select: only human-allowed accounts, read fresh, never the one that
-        // just ran out.
+        // just ran out. Choosing first means the user is never asked to close
+        // Codex when no account could take over.
         if !self.ops.invoke_mode() {
             return Err(FailoverCode::InvokeModeDisabled);
         }
@@ -415,10 +427,68 @@ impl Coordinator {
         let target =
             select_account(&candidates, exhausted).ok_or(FailoverCode::NoEligibleAccount)?;
 
-        // Switch and verify through the normal transaction.
-        self.ops.switch_to(&target)?;
-        self.ops.switched(exhausted, &target);
-        Ok(())
+        // Switch and verify through the normal transaction. A Codex the user
+        // opened is never stopped: GSwitch asks the user to close it and waits.
+        let accounts = SwitchAccounts {
+            from: exhausted.to_string(),
+            to: target.clone(),
+        };
+        loop {
+            self.wait_for_codex_to_close(&accounts)?;
+            match self.ops.switch_to(&target) {
+                Err(FailoverCode::ExternalCodexRunning) => continue,
+                result => result?,
+            }
+            self.ops.switched(exhausted, &target);
+            return Ok(());
+        }
+    }
+
+    fn wait_for_codex_to_close(&self, accounts: &SwitchAccounts) -> Result<(), FailoverCode> {
+        if !self.ops.other_codex_running() {
+            return Ok(());
+        }
+        {
+            let mut inner = self.lock();
+            inner.waiting_for_codex = Some(accounts.clone());
+            inner.cancel_requested = false;
+        }
+        self.ops.waiting_for_codex(Some(accounts));
+        self.notify();
+        let deadline = Instant::now() + self.timings.user_close;
+        let result = loop {
+            if self.lock().cancel_requested || Instant::now() >= deadline {
+                break Err(FailoverCode::ExternalCodexRunning);
+            }
+            if !self.ops.invoke_mode() {
+                break Err(FailoverCode::InvokeModeDisabled);
+            }
+            if !self.ops.other_codex_running() {
+                break Ok(());
+            }
+            std::thread::sleep(self.timings.poll);
+        };
+        {
+            let mut inner = self.lock();
+            inner.waiting_for_codex = None;
+            inner.cancel_requested = false;
+        }
+        self.ops.waiting_for_codex(None);
+        self.notify();
+        result
+    }
+
+    /// The switch waiting for the user to close Codex, if any.
+    pub fn waiting_for_codex(&self) -> Option<SwitchAccounts> {
+        self.lock().waiting_for_codex.clone()
+    }
+
+    /// The user declined to close Codex; the failover ends without a switch.
+    pub fn cancel_waiting_failover(&self) {
+        let mut inner = self.lock();
+        if inner.waiting_for_codex.is_some() {
+            inner.cancel_requested = true;
+        }
     }
 
     async fn wait_until<T>(
@@ -513,12 +583,16 @@ fn usable_capacity(snapshot: &QuotaSnapshot) -> Option<u8> {
 /// Called with the replaced and the new account ID after a verified switch.
 pub type SwitchedCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
 
+/// Called when a failover starts or stops waiting for the user to close Codex.
+pub type WaitingCallback = Box<dyn Fn(Option<&SwitchAccounts>) + Send + Sync>;
+
 /// The real failover effects: GSwitch's account store, provider reads, the
 /// switch transaction, and process control limited to registered PIDs.
 pub struct AppOps {
     pub state: AppState,
     pub invoke: InvokeState,
     pub on_switched: SwitchedCallback,
+    pub on_waiting: WaitingCallback,
 }
 
 impl FailoverOps for AppOps {
@@ -577,6 +651,10 @@ impl FailoverOps for AppOps {
         runtime::external_codex_running(&[]).unwrap_or(true)
     }
 
+    fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>) {
+        (self.on_waiting)(accounts);
+    }
+
     fn switched(&self, from: &str, to: &str) {
         (self.on_switched)(from, to);
     }
@@ -601,6 +679,7 @@ mod tests {
         stubborn: HashSet<u32>,
         other_codex: bool,
         quota_reads: Vec<String>,
+        waiting_events: Vec<Option<SwitchAccounts>>,
     }
 
     struct FakeOps(Mutex<World>);
@@ -649,6 +728,9 @@ mod tests {
         }
         fn other_codex_running(&self) -> bool {
             self.world().other_codex
+        }
+        fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>) {
+            self.world().waiting_events.push(accounts.cloned());
         }
         fn switched(&self, _from: &str, _to: &str) {}
     }
@@ -701,6 +783,7 @@ mod tests {
             start_grace: Duration::from_millis(300),
             shutdown: Duration::from_millis(300),
             wait: Duration::from_secs(5),
+            user_close: Duration::from_secs(3),
             poll: Duration::from_millis(10),
         }
     }
@@ -930,19 +1013,109 @@ mod tests {
         assert_eq!(coordinator.end_run(&worker), Ok(RunEnd::Unchanged));
     }
 
+    fn wait_until_waiting(coordinator: &Coordinator) -> SwitchAccounts {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Some(accounts) = coordinator.waiting_for_codex() {
+                return accounts;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "failover did not ask to close Codex"
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
     #[test]
-    fn another_codex_process_blocks_the_switch() {
+    fn a_codex_the_user_opened_pauses_the_failover_until_it_is_closed() {
         let mut world = world();
         world.other_codex = true;
         let (coordinator, ops) = setup(world);
         let worker = running_worker(&coordinator, &ops, 1, 601);
 
         coordinator.report_limit(&worker).expect("start");
+        let waiting = wait_until_waiting(&coordinator);
+        assert_eq!(
+            waiting,
+            SwitchAccounts {
+                from: "a".into(),
+                to: "c".into()
+            }
+        );
+        assert!(
+            ops.world().switches.is_empty(),
+            "nothing switches while Codex is open"
+        );
+        assert!(coordinator.status().1, "workers keep waiting");
+
+        ops.world().other_codex = false;
+        assert_eq!(block_on(coordinator.await_failover(&worker)), Ok(()));
+        let world = ops.world();
+        assert_eq!(world.switches, vec!["c".to_string()]);
+        assert_eq!(
+            world.waiting_events,
+            vec![
+                Some(SwitchAccounts {
+                    from: "a".into(),
+                    to: "c".into()
+                }),
+                None
+            ]
+        );
+        assert_eq!(coordinator.waiting_for_codex(), None);
+    }
+
+    #[test]
+    fn the_user_can_cancel_a_failover_that_waits_for_codex() {
+        let mut world = world();
+        world.other_codex = true;
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 602);
+
+        coordinator.report_limit(&worker).expect("start");
+        wait_until_waiting(&coordinator);
+        coordinator.cancel_waiting_failover();
         assert_eq!(
             block_on(coordinator.await_failover(&worker)),
             Err(FailoverCode::ExternalCodexRunning)
         );
         assert!(ops.world().switches.is_empty());
+        assert_eq!(coordinator.waiting_for_codex(), None);
+    }
+
+    #[test]
+    fn turning_invoke_mode_off_while_waiting_ends_the_failover() {
+        let mut world = world();
+        world.other_codex = true;
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 603);
+
+        coordinator.report_limit(&worker).expect("start");
+        wait_until_waiting(&coordinator);
+        ops.world().invoke_mode = false;
+        assert_eq!(
+            block_on(coordinator.await_failover(&worker)),
+            Err(FailoverCode::InvokeModeDisabled)
+        );
+        assert!(ops.world().switches.is_empty());
+    }
+
+    #[test]
+    fn the_user_is_not_asked_to_close_codex_when_no_account_can_take_over() {
+        let mut world = world();
+        world.other_codex = true;
+        world.accounts[1].invoke_allowed = false;
+        world.accounts[2].invoke_allowed = false;
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 604);
+
+        coordinator.report_limit(&worker).expect("start");
+        assert_eq!(
+            block_on(coordinator.await_failover(&worker)),
+            Err(FailoverCode::NoEligibleAccount)
+        );
+        assert!(ops.world().waiting_events.is_empty());
     }
 
     #[test]

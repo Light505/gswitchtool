@@ -444,15 +444,21 @@ error on a worker's turn. GSwitch then:
    reports about the same account join it and reports about an account already
    replaced resume without another switch;
 2. stops the App Servers that workers registered, waits for them to exit, and
-   refuses to continue if any remain or if any other Codex process is running;
+   refuses to continue if any remain;
 3. checks Invoke Mode again, reads the quota of every ChatGPT account the user
    allowed in Invoke Mode that is signed in and is not the exhausted account,
    and picks the one with the most usable capacity: the provider must allow
    ordinary use, no Codex window may be at zero, and the score is the smallest
    remaining percentage; ties keep account order;
-4. switches through the normal switch transaction once, including its
+4. if a Codex the user opened is running (the app, the CLI, or an IDE
+   extension), never stops it: as with a manual switch, the window asks the
+   user to quit Codex, names both accounts, and requests attention. The
+   failover continues once Codex is closed, and ends without a switch if the
+   user cancels, Invoke Mode is turned off, or ten minutes pass;
+5. switches through the normal switch transaction once, including its
    verification and guarded rollback, and never tries a second account after a
-   failed switch or verification.
+   failed switch or verification. If Codex is opened again during the switch,
+   it asks again.
 
 Each worker then starts a new App Server and resumes its own Codex thread by ID
 with its original model, effort, sandbox, and working directory, sending a fixed
@@ -460,8 +466,8 @@ continuation message. A run stopped before its thread existed starts over with
 the original task. After three failovers in one invocation, the worker reports
 the usage limit instead of continuing.
 
-When no allowed account has usable quota, another Codex process is running, an
-App Server will not stop, Invoke Mode was turned off, or the switch or
+When no allowed account has usable quota, an App Server will not stop, the user
+keeps Codex open or cancels, Invoke Mode was turned off, or the switch or
 verification fails, nothing resumes. Each worker returns a stable code with its
 thread ID so the work can be resumed later. While Invoke Mode is on, an
 automatic switch updates the window and names both accounts in one notice.

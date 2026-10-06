@@ -79,6 +79,7 @@ import type {
   ResetCreditFailureCode,
   ResetCreditOutcome,
   StorageView,
+  SwitchAccounts,
   SwitchFailure,
   SwitchFailureCode,
   WakeOperationView,
@@ -1306,6 +1307,8 @@ export default function App() {
   const [notice, setNotice] = useState<Notice | null>(null);
   const [invokeSettings, setInvokeSettings] = useState<InvokeSettings | null>(null);
   const [invokeChanging, setInvokeChanging] = useState(false);
+  const [failoverWaiting, setFailoverWaiting] = useState<SwitchAccounts | null>(null);
+  const [failoverCancelling, setFailoverCancelling] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
   const [oauthTarget, setOauthTarget] = useState<AccountView | null>(null);
@@ -1591,6 +1594,46 @@ export default function App() {
       stop?.();
     };
   }, [loadSnapshot, t]);
+
+  useEffect(() => {
+    // A Codex the user opened blocks an Invoke Mode switch; GSwitch asks the
+    // user to close it, as a manual switch would, and the switch then continues.
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeFailoverWaiting(setFailoverWaiting);
+        if (disposed) {
+          unlisten();
+          return;
+        }
+        stop = unlisten;
+        setFailoverWaiting(await api.invokeFailover());
+      } catch {
+        setFailoverWaiting(null);
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+
+  const cancelFailover = async () => {
+    setFailoverCancelling(true);
+    try {
+      await api.cancelInvokeFailover();
+    } catch (error) {
+      setNotice({ kind: "error", text: friendlyError(t, error, t("error.invokeCancel")) });
+    } finally {
+      setFailoverCancelling(false);
+    }
+  };
+
+  const accountName = (id: string) => {
+    const account = accounts.find((saved) => saved.id === id);
+    return account ? accountPrimaryName(account) : t("common.unknown");
+  };
 
   const changeInvokeMode = async (enabled: boolean) => {
     setInvokeChanging(true);
@@ -2520,6 +2563,19 @@ export default function App() {
             <span>{notice.text}</span>
             <button aria-label={t("common.dismissMessage")} onClick={() => setNotice(null)} type="button"><X size={15} /></button>
           </div>
+        ) : null}
+
+        {failoverWaiting ? (
+          <section className="safety-notice" role="alert">
+            <div className="safety-icon"><ShieldAlert size={20} /></div>
+            <div>
+              <h2>{t("invoke.closeCodexTitle")}</h2>
+              <p>{t("invoke.closeCodexBody", { from: accountName(failoverWaiting.from), to: accountName(failoverWaiting.to) })}</p>
+            </div>
+            <button className="button button-secondary" disabled={failoverCancelling} onClick={() => void cancelFailover()} type="button">
+              {t("invoke.cancelSwitch")}
+            </button>
+          </section>
         ) : null}
 
         {safetyNotice ? (

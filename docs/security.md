@@ -72,8 +72,8 @@ when the operation ends.
 
 An Invoke Mode failover stops only App Servers that Invoke workers registered
 over the endpoint, together with the processes each one started. It never stops
-another Codex process; if one is running, the failover fails before any
-credential change, and the switch transaction still runs its own process
+another Codex process: while one is running it changes no credential and asks
+the user to quit Codex, and the switch transaction still runs its own process
 checks.
 
 GSwitch reads the installed CLI version from the same executable it uses for

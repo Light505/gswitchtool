@@ -1071,7 +1071,11 @@ function renderInvokeStatus(report) {
     lines.push(`- ${profile.model}: ${profile.reasoning_efforts.join(", ")}`);
   }
   lines.push(`Codex workers running: ${report.workers_running ?? 0}`);
-  if (report.failover_in_progress) {
+  if (report.waiting_for_codex_to_close) {
+    lines.push(
+      "An account switch is waiting for the user to close Codex (the app, the CLI, and any IDE extension). Ask the user to close it; delegated work resumes automatically."
+    );
+  } else if (report.failover_in_progress) {
     lines.push("An account failover is in progress; new invocations wait for it.");
   }
   return `${lines.join("\n")}\n`;

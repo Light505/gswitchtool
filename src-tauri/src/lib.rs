@@ -45,24 +45,38 @@ pub fn run() {
                 .map_err(std::io::Error::other)?;
             app.manage(state.clone());
             let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
-            let handle = app.handle().clone();
+            let switched = app.handle().clone();
+            let waiting = app.handle().clone();
             let coordinator = failover::Coordinator::new(
                 Arc::new(failover::AppOps {
                     state,
                     invoke: invoke.clone(),
                     // The window reloads its accounts and names both accounts.
                     on_switched: Box::new(move |from, to| {
-                        let _ = handle.emit(
+                        let _ = switched.emit(
                             "invoke-account-switched",
                             serde_json::json!({ "from": from, "to": to }),
                         );
+                    }),
+                    // A switch blocked by a Codex the user opened asks the user
+                    // to close it, as a manual switch would.
+                    on_waiting: Box::new(move |accounts| {
+                        let _ = waiting.emit("invoke-failover-waiting", accounts);
+                        if accounts.is_some() {
+                            if let Some(window) = waiting.get_webview_window("main") {
+                                let _ = window.request_user_attention(Some(
+                                    tauri::UserAttentionType::Critical,
+                                ));
+                            }
+                        }
                     }),
                 }),
                 failover::Timings::default(),
             );
             // Without the endpoint Claude Code cannot delegate, but Manual
             // Mode and every account action keep working.
-            let _ = invoke_ipc::start(&config_dir, invoke.clone(), coordinator);
+            let _ = invoke_ipc::start(&config_dir, invoke.clone(), coordinator.clone());
+            app.manage(coordinator);
             app.manage(invoke);
             Ok(())
         })
@@ -109,7 +123,9 @@ pub fn run() {
             commands::set_invoke_mode,
             commands::get_model_catalog,
             commands::set_invoke_profiles,
-            commands::set_account_invoke_allowed
+            commands::set_account_invoke_allowed,
+            commands::get_invoke_failover,
+            commands::cancel_invoke_failover
         ])
         .run(tauri::generate_context!())
         .expect("error while running GSwitch");

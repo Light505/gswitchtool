@@ -61,6 +61,9 @@ const mocks = vi.hoisted(() => ({
   setInvokeProfiles: vi.fn(),
   setAccountInvokeAllowed: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
+  invokeFailover: vi.fn(),
+  cancelInvokeFailover: vi.fn(),
+  onInvokeFailoverWaiting: vi.fn(),
 }));
 
 const updaterMocks = vi.hoisted(() => ({
@@ -217,6 +220,9 @@ function prepareDefaults() {
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
   mocks.setAccountInvokeAllowed.mockImplementation(async (id: string, allowed: boolean) => ({ ...chatAccount, id, invoke_allowed: allowed }));
   mocks.onInvokeAccountSwitched.mockResolvedValue(() => undefined);
+  mocks.invokeFailover.mockResolvedValue(null);
+  mocks.cancelInvokeFailover.mockResolvedValue(undefined);
+  mocks.onInvokeFailoverWaiting.mockResolvedValue(() => undefined);
   updaterMocks.check.mockResolvedValue(null);
   updaterMocks.relaunch.mockResolvedValue(undefined);
   webviewMocks.onDragDropEvent.mockResolvedValue(() => undefined);
@@ -2410,6 +2416,43 @@ describe("Invoke Mode", () => {
       "person@example.com reached its Codex usage limit. Invoke Mode switched Codex to second@example.com.",
     )).toBeInTheDocument();
     await waitFor(() => expect(mocks.appSnapshot.mock.calls.length).toBeGreaterThan(snapshots));
+  });
+
+  it("asks the user to close Codex while a switch waits, and lets them cancel it", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, active: true }, second]);
+    mocks.invokeFailover.mockResolvedValue({ from: "account-1", to: "account-2" });
+    let update: ((waiting: { from: string; to: string } | null) => void) | undefined;
+    mocks.onInvokeFailoverWaiting.mockImplementation(async (handler: typeof update) => {
+      update = handler;
+      return () => undefined;
+    });
+    render(<App />);
+
+    expect(await screen.findByRole("heading", { name: "Close Codex to continue" })).toBeInTheDocument();
+    expect(await screen.findByText(/person@example\.com reached its Codex usage limit\. Quit Codex .* switch to second@example\.com\./))
+      .toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Cancel switch" }));
+    await waitFor(() => expect(mocks.cancelInvokeFailover).toHaveBeenCalledOnce());
+    expect(mocks.switchAccount).not.toHaveBeenCalled();
+
+    act(() => update!(null));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Close Codex to continue" })).not.toBeInTheDocument());
+  });
+
+  it("shows the close-Codex request when it arrives while the window is open", async () => {
+    let update: ((waiting: { from: string; to: string } | null) => void) | undefined;
+    mocks.onInvokeFailoverWaiting.mockImplementation(async (handler: typeof update) => {
+      update = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    await screen.findByText("person@example.com");
+    expect(screen.queryByRole("heading", { name: "Close Codex to continue" })).not.toBeInTheDocument();
+
+    await waitFor(() => expect(update).toBeDefined());
+    act(() => update!({ from: "account-1", to: "missing" }));
+    expect(await screen.findByRole("heading", { name: "Close Codex to continue" })).toBeInTheDocument();
   });
 
   it("keeps the dialog open with a safe message when the model list cannot be read", async () => {

@@ -25,7 +25,12 @@ const FAILOVER_RESUME_PROMPT =
 
 // Answers like GSwitch's Invoke endpoint from an in-memory policy. A failover
 // "succeeds" unless failoverError is set; the fake does not switch accounts.
-async function startFakeGSwitch({ invokeMode = true, failoverError = null, manualAfterLease = false } = {}) {
+async function startFakeGSwitch({
+  invokeMode = true,
+  failoverError = null,
+  manualAfterLease = false,
+  waitingForCodex = false
+} = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
     process.platform === "win32"
@@ -43,7 +48,8 @@ async function startFakeGSwitch({ invokeMode = true, failoverError = null, manua
           invoke_mode: policy.invokeMode,
           allowed_invocation_profiles: policy.invokeMode ? PROFILES : [],
           workers_running: 0,
-          failover_in_progress: false
+          failover_in_progress: waitingForCodex,
+          ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {})
         });
       case "lease_open": {
         if (!policy.invokeMode) return fail("INVOKE_MODE_DISABLED");
@@ -155,6 +161,13 @@ test("invoke-status tells Claude not to delegate in Manual Mode", () =>
     const result = await companion(["invoke-status"], ctx);
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /Invoke Mode is off in GSwitch/);
+  }));
+
+test("invoke-status tells Claude to ask the user to close Codex while a switch waits", () =>
+  withGSwitch({ waitingForCodex: true }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /waiting for the user to close Codex/);
   }));
 
 test("invoke-status and invoke report GSwitch as unavailable when it is not running", async () => {

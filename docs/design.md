@@ -27,7 +27,9 @@ language menu. In Invoke Mode only, an icon button beside the segmented control
 opens one focused dialog listing each Codex model with a checkbox for each
 reasoning effort that model supports, and each ChatGPT card gains one
 **Allow in Invoke Mode** switch row. Manual Mode shows neither, so it looks like
-the plain switcher. The current account is
+the plain switcher. When an Invoke Mode switch is waiting for the user to quit
+Codex, the window shows it in the safety-notice position with both accounts and
+a **Cancel switch** action, and asks the operating system for attention. The current account is
 identified on its card rather than repeated beside the brand. The language
 button uses Remix Icon's `earth-line` at 18px, inheriting the current theme
 color. It is a command bar, not a dashboard header or custom window chrome.

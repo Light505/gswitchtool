@@ -19,7 +19,7 @@ const ERROR_MESSAGES = {
   REASONING_NOT_ALLOWED:
     "That reasoning effort is not allowed for the chosen model. Run invoke-status and choose an allowed effort.",
   EXTERNAL_CODEX_RUNNING:
-    "The Codex account ran out, but another Codex app is running, so GSwitch could not switch accounts safely. Tell the user.",
+    "The Codex account ran out, but the user's own Codex stayed open or the user cancelled the switch in GSwitch, so accounts were not switched. Tell the user.",
   CODEX_SHUTDOWN_FAILED: "The Codex account ran out, but Codex did not stop for the account switch. Tell the user.",
   NO_ELIGIBLE_ACCOUNT:
     "The Codex account ran out and no other account allowed in Invoke Mode has usable quota. Tell the user.",

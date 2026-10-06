@@ -56,7 +56,9 @@ the same model and effort.
 
 If a Codex account runs out, GSwitch switches to another allowed account and `invoke`
 resumes the same thread by itself; the last line then says it resumed after an account
-switch. You do nothing.
+switch. You do nothing. If the user has their own Codex open, GSwitch asks them in its window
+to close it and `invoke` waits; if `invoke-status` reports that, remind the user to close
+Codex.
 
 If `invoke` returns `MODEL_NOT_ALLOWED` or `REASONING_NOT_ALLOWED`, run `invoke-status` and
 choose again. If it returns `INVOKE_MODE_DISABLED` or `GSWITCH_UNAVAILABLE`, stop

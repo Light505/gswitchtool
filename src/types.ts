@@ -24,6 +24,11 @@ export interface InvokeSettings {
   allowed_invocation_profiles: InvocationProfile[];
 }
 
+export interface SwitchAccounts {
+  from: string;
+  to: string;
+}
+
 export interface CatalogModel {
   model: string;
   display_name: string;

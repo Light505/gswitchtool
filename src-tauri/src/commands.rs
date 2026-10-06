@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     accounts::AppState,
-    cli_update, codex, intake,
+    cli_update, codex,
+    failover::{Coordinator, SwitchAccounts},
+    intake,
     invoke::{self, InvokeState},
     migration, quota, switching,
     types::{
@@ -442,6 +446,18 @@ pub fn get_wake_operation(
 #[tauri::command]
 pub fn get_invoke_settings(invoke: State<'_, InvokeState>) -> Result<InvokeSettings, String> {
     invoke.settings()
+}
+
+/// The Invoke Mode switch waiting for the user to close Codex, if any.
+#[tauri::command]
+pub fn get_invoke_failover(coordinator: State<'_, Arc<Coordinator>>) -> Option<SwitchAccounts> {
+    coordinator.waiting_for_codex()
+}
+
+/// Ends a waiting Invoke Mode switch without changing accounts.
+#[tauri::command]
+pub fn cancel_invoke_failover(coordinator: State<'_, Arc<Coordinator>>) {
+    coordinator.cancel_waiting_failover();
 }
 
 #[tauri::command]

@@ -153,6 +153,7 @@ async fn dispatch(
                 "allowed_invocation_profiles": profiles,
                 "workers_running": running,
                 "failover_in_progress": failover,
+                "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
                 "workers": coordinator.workers(),
             }))
         }
@@ -385,6 +386,7 @@ mod tests {
         fn other_codex_running(&self) -> bool {
             false
         }
+        fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
         fn switched(&self, _from: &str, _to: &str) {}
     }
 
@@ -421,6 +423,7 @@ mod tests {
             start_grace: Duration::from_millis(50),
             shutdown: Duration::from_millis(50),
             wait: Duration::from_secs(5),
+            user_close: Duration::from_secs(1),
             poll: Duration::from_millis(5),
         };
         Endpoint {
@@ -498,6 +501,7 @@ mod tests {
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
                 "workers_running": 0,
                 "failover_in_progress": false,
+                "waiting_for_codex_to_close": false,
                 "workers": [],
             })
         );
@@ -652,6 +656,7 @@ mod tests {
         fn other_codex_running(&self) -> bool {
             false
         }
+        fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
         fn switched(&self, _from: &str, _to: &str) {}
     }
 
