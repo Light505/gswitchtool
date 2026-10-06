@@ -12,6 +12,7 @@ smallest owner needed for the task.
 | Credential, process, mutation, and recovery invariants | [`security.md`](./security.md) |
 | Test commands, CI, and proof boundaries | [`testing.md`](./testing.md) |
 | Windows/macOS packaging, signing, and release gates | [`release.md`](./release.md) |
+| Installing and using Invoke Mode with Claude Code | [`invoke-mode-guide.md`](./invoke-mode-guide.md) |
 
 ## Documentation model
 

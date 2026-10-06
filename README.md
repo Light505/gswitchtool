@@ -9,22 +9,12 @@
 > affiliated with either project; see [CREDITS.md](./CREDITS.md). The rest of
 > this README describes upstream GSwitch.
 >
-> **Invoke Mode setup.** In GSwitch, choose **Invoke**, open Invoke settings to
-> allow models and reasoning efforts, and switch on **Allow in Invoke Mode** for
-> each account Codex may use. In Claude Code, add this repository's plugin in
-> place of the stock Codex plugin:
->
-> ```
-> /plugin marketplace add Light505/gswitchtool
-> /plugin install codex@gswitchtool
-> ```
->
-> Delegation is always explicit: while GSwitch is open, type
-> `/codex:gswitch-invoke` with a task (or alone, to delegate suitable work for
-> the rest of the session). The one exception is review: while Invoke Mode is
-> on, Claude may ask Codex for a read-only review of its changes when it judges
-> one useful (`codex:gswitch-review`). With Invoke Mode off, GSwitch refuses every
-> request and Codex never starts.
+> **To install and use Invoke Mode, read the
+> [Invoke Mode guide](./docs/invoke-mode-guide.md).** In short: Claude hands work
+> to Codex only when you type `/codex:gswitch-invoke`, may ask Codex for a
+> read-only review while Invoke Mode is on, and can use only the models you
+> allow. GSwitch switches to another allowed account when one runs out and
+> resumes the same Codex conversation.
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.
