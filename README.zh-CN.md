@@ -15,7 +15,8 @@
 > /plugin install codex@gswitchtool
 > ```
 >
-> GSwitch 打开时，Claude 会通过 `codex:gswitch-invoke` 技能委派任务。
+> 委派始终是显式的：GSwitch 打开时，输入 `/codex:gswitch-invoke` 加上任务（或不带任务，
+> 让 Claude 在本次会话剩余时间委派合适的工作）。Claude 不会自行调用 Codex。
 
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。
 

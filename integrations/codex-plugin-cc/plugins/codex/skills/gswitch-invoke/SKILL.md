@@ -1,6 +1,8 @@
 ---
 name: gswitch-invoke
-description: Delegate self-contained coding work (implementing a specified change, refactors, tests, debugging, investigation, code review) to Codex through GSwitch Invoke Mode to save Claude usage. Use whenever such work does not need this conversation's judgment and GSwitch reports Invoke Mode is on.
+description: Delegate coding work to Codex through GSwitch Invoke Mode to save Claude usage. Runs only when the user invokes it.
+argument-hint: "[task for Codex, or nothing to delegate suitable work for the rest of this session]"
+disable-model-invocation: true
 ---
 
 <!-- Added by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
@@ -20,7 +22,12 @@ unavailable or Invoke Mode is off, do not delegate through `invoke`; do the work
 
 ## 2. Decide what to delegate
 
-Delegate self-contained work you can state in a brief: implementing a specified change,
+Delegation through GSwitch is the user's explicit choice. Task from the user: $ARGUMENTS
+
+If the user named a task, delegate that task. If they named none, delegate suitable work for
+the rest of this session. Never call `invoke` on your own outside a request through this skill.
+
+Suitable work is self-contained work you can state in a brief: implementing a specified change,
 refactors, writing or fixing tests, debugging a failing test or error, investigating how
 code works, reviews, and mechanical multi-file edits.
 

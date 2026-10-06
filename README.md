@@ -19,8 +19,9 @@
 > /plugin install codex@gswitchtool
 > ```
 >
-> Claude then delegates through the `codex:gswitch-invoke` skill while GSwitch
-> is open.
+> Delegation is always explicit: while GSwitch is open, type
+> `/codex:gswitch-invoke` with a task (or alone, to delegate suitable work for
+> the rest of the session). Claude never calls Codex on its own.
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.
