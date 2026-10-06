@@ -85,6 +85,10 @@ pub struct StoredAccount {
     pub needs_apply: bool,
     #[serde(default)]
     pub sign_in_required: bool,
+    /// The human allowed Invoke Mode to switch Codex to this account
+    /// automatically. Absent in older stores, so it defaults to not allowed.
+    #[serde(default)]
+    pub invoke_allowed: bool,
     /// Kept in Rust memory for existing domain operations, but never written
     /// back into accounts.json. Legacy stores deserialize it only long enough
     /// for the one-time protected-vault migration.
@@ -105,6 +109,38 @@ pub struct AccountView {
     pub needs_apply: bool,
     pub sign_in_required: bool,
     pub revision: u64,
+    #[serde(default)]
+    pub invoke_allowed: bool,
+}
+
+/// One Codex model the human allows Claude to invoke, with the reasoning
+/// efforts allowed for that model. Efforts differ per model, so the whitelist
+/// is a list of model/effort combinations rather than two independent lists.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InvocationProfile {
+    pub model: String,
+    pub reasoning_efforts: Vec<String>,
+}
+
+/// Human-owned Invoke Mode policy. Only the WebView commands change it; the
+/// Claude-facing surface can read it but never write it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InvokeSettings {
+    #[serde(default)]
+    pub invoke_mode: bool,
+    #[serde(default)]
+    pub allowed_invocation_profiles: Vec<InvocationProfile>,
+}
+
+/// A model reported by the installed Codex App Server's `model/list`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CatalogModel {
+    pub model: String,
+    pub display_name: String,
+    pub supported_reasoning_efforts: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_reasoning_effort: Option<String>,
+    pub is_default: bool,
 }
 
 /// A display-only outcome for one bounded user-selected account-file batch.

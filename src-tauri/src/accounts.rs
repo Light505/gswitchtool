@@ -980,6 +980,9 @@ impl AppState {
                 credential_generation: existing.credential_generation,
                 needs_apply: !verified_live && (existing.needs_apply || credential_changed),
                 sign_in_required: false,
+                // A new sign-in for the same identity keeps the human's
+                // Invoke Mode choice for that account.
+                invoke_allowed: existing.invoke_allowed,
                 credential: draft.credential,
             }
         } else {
@@ -998,6 +1001,7 @@ impl AppState {
                 credential_generation: 0,
                 needs_apply: pending_new,
                 sign_in_required: false,
+                invoke_allowed: false,
                 credential: draft.credential,
             }
         };
@@ -1078,6 +1082,31 @@ impl AppState {
         self.persist_candidate(&store, &mut candidate)?;
         *store = candidate;
         Ok(())
+    }
+
+    /// Records the human's Invoke Mode eligibility choice. This is metadata
+    /// only: it never touches a credential or the live Codex identity.
+    pub fn set_invoke_allowed(&self, id: &str, allowed: bool) -> Result<AccountView, String> {
+        let _operation = self.acquire_quota_commit_operation()?;
+        let mut store = self
+            .store
+            .lock()
+            .map_err(|_| "Account store lock is unavailable")?;
+        let index = store
+            .accounts
+            .iter()
+            .position(|account| account.id == id)
+            .ok_or_else(|| "Saved account was not found".to_string())?;
+        if store.accounts[index].invoke_allowed != allowed {
+            let mut candidate = store.clone();
+            candidate.accounts[index].invoke_allowed = allowed;
+            self.persist_candidate(&store, &mut candidate)?;
+            *store = candidate;
+        }
+        Ok(Self::view(
+            &store.accounts[index],
+            store.active_account_id.as_deref(),
+        ))
     }
 
     pub fn update_credential_under_operation(
@@ -1842,6 +1871,7 @@ impl AppState {
             needs_apply: account.needs_apply,
             sign_in_required: account.sign_in_required,
             revision: account.credential_generation,
+            invoke_allowed: account.invoke_allowed,
         }
     }
 }
@@ -1928,6 +1958,38 @@ mod tests {
         );
 
         assert_eq!(state.list().expect("list").len(), 2);
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
+    }
+
+    #[test]
+    fn invoke_eligibility_defaults_off_persists_and_survives_reauthentication() {
+        let path = temp_path("invoke-allowed");
+        let state = AppState::new(path.clone()).expect("state");
+        let saved = save(
+            &state,
+            draft("workspace", stable_credential("workspace", "old")),
+        );
+        assert!(
+            !saved.invoke_allowed,
+            "a new account is never eligible by default"
+        );
+
+        let allowed = state.set_invoke_allowed(&saved.id, true).expect("allow");
+        assert!(allowed.invoke_allowed);
+        let resigned = save(
+            &state,
+            draft("workspace", stable_credential("workspace", "rotated")),
+        );
+        assert_eq!(resigned.id, saved.id);
+        assert!(
+            resigned.invoke_allowed,
+            "a new sign-in keeps the human's choice"
+        );
+        drop(state);
+
+        let reopened = AppState::new(path.clone()).expect("restart");
+        assert!(reopened.list().expect("list")[0].invoke_allowed);
+        assert!(reopened.set_invoke_allowed("missing", true).is_err());
         let _ = fs::remove_dir_all(path.parent().expect("parent"));
     }
 

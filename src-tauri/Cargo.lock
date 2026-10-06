@@ -1991,6 +1991,7 @@ dependencies = [
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tokio",
  "toml_edit 0.25.15+spec-1.1.0",
  "uuid",
  "zeroize",

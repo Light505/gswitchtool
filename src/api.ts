@@ -2,9 +2,12 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AccountView,
   AppSnapshot,
+  CatalogModel,
   CodexCliInfo,
   ExportResult,
   ImportResult,
+  InvocationProfile,
+  InvokeSettings,
   LiveAccountView,
   MigrationPreview,
   OAuthLoginStart,
@@ -89,6 +92,15 @@ export const api = {
     invoke<WakeOperationView>("get_wake_operation", { operationId }),
   cancelWake: (operationId: string) =>
     invoke<void>("cancel_wake", { operationId }),
+  invokeSettings: () => invoke<InvokeSettings>("get_invoke_settings"),
+  setInvokeMode: (enabled: boolean) =>
+    invoke<InvokeSettings>("set_invoke_mode", { enabled }),
+  modelCatalog: (refresh = false) =>
+    invoke<CatalogModel[]>("get_model_catalog", { refresh }),
+  setInvokeProfiles: (profiles: InvocationProfile[]) =>
+    invoke<InvokeSettings>("set_invoke_profiles", { profiles }),
+  setAccountInvokeAllowed: (id: string, allowed: boolean) =>
+    invoke<AccountView>("set_account_invoke_allowed", { id, allowed }),
   updateDelivery: () => invoke<UpdateDelivery>("get_update_delivery"),
   openLatestRelease: () => invoke<void>("open_latest_release"),
 };

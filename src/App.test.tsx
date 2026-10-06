@@ -55,6 +55,11 @@ const mocks = vi.hoisted(() => ({
   cancelWake: vi.fn(),
   updateDelivery: vi.fn(),
   openLatestRelease: vi.fn(),
+  invokeSettings: vi.fn(),
+  setInvokeMode: vi.fn(),
+  modelCatalog: vi.fn(),
+  setInvokeProfiles: vi.fn(),
+  setAccountInvokeAllowed: vi.fn(),
 }));
 
 const updaterMocks = vi.hoisted(() => ({
@@ -205,6 +210,11 @@ function prepareDefaults() {
   mocks.cancelWake.mockResolvedValue(undefined);
   mocks.updateDelivery.mockResolvedValue("installer_exits");
   mocks.openLatestRelease.mockResolvedValue(undefined);
+  mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, allowed_invocation_profiles: [] });
+  mocks.setInvokeMode.mockImplementation(async (enabled: boolean) => ({ invoke_mode: enabled, allowed_invocation_profiles: [] }));
+  mocks.modelCatalog.mockResolvedValue([]);
+  mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
+  mocks.setAccountInvokeAllowed.mockImplementation(async (id: string, allowed: boolean) => ({ ...chatAccount, id, invoke_allowed: allowed }));
   updaterMocks.check.mockResolvedValue(null);
   updaterMocks.relaunch.mockResolvedValue(undefined);
   webviewMocks.onDragDropEvent.mockResolvedValue(() => undefined);
@@ -2300,5 +2310,95 @@ describe("GSwitch account workspace", () => {
     expect(await screen.findByText("Restart GSwitch to finish updating")).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Restart now" }));
     expect(updaterMocks.relaunch).toHaveBeenCalledOnce();
+  });
+});
+
+describe("Invoke Mode", () => {
+  const apiKeyAccount: AccountView = { id: "api-1", label: "Key", kind: "api_key", active: false };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-US" });
+    prepareDefaults();
+    mocks.listAccounts.mockResolvedValue([chatAccount, apiKeyAccount]);
+  });
+
+  it("keeps Manual Mode identical to the plain switcher", async () => {
+    render(<App />);
+    const mode = await screen.findByRole("group", { name: "Account mode" });
+    expect(within(mode).getByRole("button", { name: "Manual" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByText("person@example.com")).toBeInTheDocument();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Invoke settings" })).not.toBeInTheDocument();
+  });
+
+  it("turns Invoke Mode on only from the human control and offers per-account eligibility", async () => {
+    render(<App />);
+    const mode = await screen.findByRole("group", { name: "Account mode" });
+    await userEvent.click(within(mode).getByRole("button", { name: "Invoke" }));
+
+    await waitFor(() => expect(mocks.setInvokeMode).toHaveBeenCalledWith(true));
+    expect(within(mode).getByRole("button", { name: "Invoke" })).toHaveAttribute("aria-pressed", "true");
+    // Only ChatGPT accounts can be failover targets; API-key cards get no switch.
+    const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
+    expect(screen.getAllByRole("switch")).toHaveLength(1);
+    expect(allow).not.toBeChecked();
+
+    await userEvent.click(allow);
+    await waitFor(() => expect(mocks.setAccountInvokeAllowed).toHaveBeenCalledWith("account-1", true));
+    expect(allow).toBeChecked();
+    expect(mocks.switchAccount).not.toHaveBeenCalled();
+  });
+
+  it("keeps the account unchanged and explains when eligibility cannot be saved", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.setAccountInvokeAllowed.mockRejectedValue("Account store lock is unavailable");
+    render(<App />);
+
+    const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
+    await userEvent.click(allow);
+    expect(await screen.findByText("Could not change Invoke Mode for this account.")).toBeInTheDocument();
+    expect(allow).not.toBeChecked();
+  });
+
+  it("whitelists only the efforts each Codex model supports", async () => {
+    mocks.invokeSettings.mockResolvedValue({
+      invoke_mode: true,
+      allowed_invocation_profiles: [{ model: "model-b", reasoning_efforts: ["medium"] }],
+    });
+    mocks.modelCatalog.mockResolvedValue([
+      { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low", "high", "max"], is_default: true },
+      { model: "model-b", display_name: "Model B", supported_reasoning_efforts: ["low", "medium"], is_default: false },
+    ]);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    expect(await within(dialog).findByRole("checkbox", { name: "medium reasoning for Model B" })).toBeChecked();
+    expect(within(dialog).queryByRole("checkbox", { name: "medium reasoning for Model A" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "max reasoning for Model A" }));
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "low reasoning for Model A" }));
+    await userEvent.click(within(dialog).getByRole("checkbox", { name: "medium reasoning for Model B" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(mocks.setInvokeProfiles).toHaveBeenCalledWith([
+      { model: "model-a", reasoning_efforts: ["low", "max"] },
+    ]));
+    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the dialog open with a safe message when the model list cannot be read", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.modelCatalog.mockRejectedValue("Unable to start Codex App Server. Check that Codex is installed.");
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    expect(await within(dialog).findByText("Could not read the Codex model list.")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(mocks.setInvokeProfiles).not.toHaveBeenCalled();
   });
 });

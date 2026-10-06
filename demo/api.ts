@@ -52,6 +52,12 @@ const displayOnly = {
   appSnapshot: async () => snapshot,
   accountQuota: async (id: string) => quotas[id] || { account_id: id, status: "unknown" },
   codexCliInfo: async () => ({ version: "0.158.0", latest_version: "0.158.0", supports_update: true, update_status: "current" as const }),
+  invokeSettings: async () => ({ invoke_mode: false, allowed_invocation_profiles: [] }),
+  modelCatalog: async () => [
+    { model: "gpt-6-astra", display_name: "gpt-6-astra", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: true },
+    { model: "gpt-6-sol", display_name: "gpt-6-sol", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: false },
+    { model: "gpt-5.5", display_name: "gpt-5.5", supported_reasoning_efforts: ["low", "medium", "high", "xhigh"], is_default: false },
+  ],
 };
 
 export const api = new Proxy(displayOnly, {

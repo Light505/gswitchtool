@@ -19,6 +19,7 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
+  SlidersHorizontal,
   Terminal,
   Trash2,
   Upload,
@@ -58,8 +59,11 @@ import { RefreshLanes } from "./refreshLanes";
 import { quotaRefreshDue } from "./refreshPolicy";
 import type {
   AccountView,
+  CatalogModel,
   CodexCliInfo,
   CodexCliUpdateFailure,
+  InvocationProfile,
+  InvokeSettings,
   LiveAccountView,
   MigrationCandidate,
   MigrationPreview,
@@ -92,6 +96,7 @@ type Dialog =
   | "export"
   | "wake"
   | "codex-cli"
+  | "invoke-settings"
   | null;
 
 type AddMethod = "start" | "oauth" | "json" | "api-key" | "migration";
@@ -847,6 +852,8 @@ function AccountCard({
   selectionMode,
   selected,
   onSelectionChange,
+  invokeMode,
+  onInvokeAllowedChange,
   t,
   formatLocale,
   now,
@@ -870,6 +877,8 @@ function AccountCard({
   selectionMode: boolean;
   selected: boolean;
   onSelectionChange: () => void;
+  invokeMode: boolean;
+  onInvokeAllowedChange: (allowed: boolean) => void;
   t: Translator;
   formatLocale: string;
   now: number;
@@ -971,6 +980,20 @@ function AccountCard({
             ) : null}
             {credits?.nearest_expiry ? <small className="credit-expiry" tabIndex={0} data-full-time={formatDateTime(credits.nearest_expiry, formatLocale)} aria-label={t("credit.earliest", { time: formatDateTime(credits.nearest_expiry, formatLocale) })}>{formatCompactExpiry(credits.nearest_expiry, formatLocale)}</small> : null}
           </div>
+          {invokeMode && !selectionMode ? (
+            <label className="invoke-allow-row">
+              <span>{t("invoke.allowAccount")}</span>
+              <input
+                aria-label={t("invoke.allowAccountFor", { name: primaryName })}
+                checked={account.invoke_allowed === true}
+                className="switch-input"
+                disabled={controlsBusy}
+                onChange={(event) => onInvokeAllowedChange(event.currentTarget.checked)}
+                role="switch"
+                type="checkbox"
+              />
+            </label>
+          ) : null}
         </>
       )}
 
@@ -1147,6 +1170,116 @@ function UpdateNotice({
   );
 }
 
+// The whitelist is a set of model/effort pairs: efforts differ per model, so
+// each model lists only the efforts the installed Codex reports for it.
+function InvokeSettingsDialog({ settings, onClose, onSaved, t }: {
+  settings: InvokeSettings;
+  onClose: () => void;
+  onSaved: (settings: InvokeSettings) => void;
+  t: Translator;
+}) {
+  const [catalog, setCatalog] = useState<CatalogModel[] | null>(null);
+  const [loadingModels, setLoadingModels] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Record<string, string[]>>(() =>
+    Object.fromEntries(settings.allowed_invocation_profiles.map((profile) => [profile.model, profile.reasoning_efforts])),
+  );
+
+  const loadModels = useCallback(async (refresh: boolean) => {
+    setLoadingModels(true);
+    setLoadError(null);
+    try {
+      setCatalog(await api.modelCatalog(refresh));
+    } catch {
+      setLoadError(t("error.invokeModels"));
+    } finally {
+      setLoadingModels(false);
+    }
+  }, [t]);
+
+  useEffect(() => {
+    void loadModels(false);
+  }, [loadModels]);
+
+  const toggleEffort = (model: string, effort: string) => {
+    setDraft((current) => {
+      const efforts = current[model] ?? [];
+      return {
+        ...current,
+        [model]: efforts.includes(effort) ? efforts.filter((value) => value !== effort) : [...efforts, effort],
+      };
+    });
+  };
+
+  const save = async () => {
+    const profiles: InvocationProfile[] = (catalog ?? []).flatMap((model) => {
+      const efforts = model.supported_reasoning_efforts.filter((effort) => draft[model.model]?.includes(effort));
+      return efforts.length ? [{ model: model.model, reasoning_efforts: efforts }] : [];
+    });
+    setSaving(true);
+    setSaveError(null);
+    try {
+      onSaved(await api.setInvokeProfiles(profiles));
+    } catch {
+      setSaveError(t("error.invokeSave"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal dismissible={!saving} onClose={onClose} t={t} title={t("invoke.settings")} wide>
+      <div className="invoke-panel">
+        <p>{t("invoke.modelsIntro")}</p>
+        {loadingModels && !catalog ? (
+          <p className="invoke-loading" role="status"><LoaderCircle className="spin" size={15} />{t("invoke.loadingModels")}</p>
+        ) : null}
+        {loadError ? <p className="remove-error" role="alert">{loadError}</p> : null}
+        {catalog && catalog.length === 0 ? <p>{t("invoke.noModels")}</p> : null}
+        {catalog?.length ? (
+          <ul className="invoke-models">
+            {catalog.map((model) => (
+              <li key={model.model}>
+                <div className="invoke-model-name">
+                  <strong title={model.model}>{model.display_name}</strong>
+                  {model.is_default ? <span className="badge">{t("invoke.defaultModel")}</span> : null}
+                </div>
+                <div className="invoke-efforts">
+                  {model.supported_reasoning_efforts.map((effort) => (
+                    <label className="invoke-effort" key={effort}>
+                      <input
+                        aria-label={t("invoke.effortFor", { effort, model: model.display_name })}
+                        checked={draft[model.model]?.includes(effort) ?? false}
+                        disabled={saving}
+                        onChange={() => toggleEffort(model.model, effort)}
+                        type="checkbox"
+                      />
+                      <span>{effort}</span>
+                    </label>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {saveError ? <p className="remove-error" role="alert">{saveError}</p> : null}
+        <div className="modal-actions">
+          <button className="button button-quiet" disabled={loadingModels || saving} onClick={() => void loadModels(true)} type="button">
+            <RefreshCw className={loadingModels ? "spin" : ""} size={15} />
+            {t("invoke.refreshModels")}
+          </button>
+          <button className="button button-primary" disabled={!catalog || loadingModels || saving} onClick={() => void save()} type="button">
+            {saving ? <LoaderCircle className="spin" size={15} /> : null}
+            {t("common.save")}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 export default function App() {
   const [languagePreference, setLanguagePreference] = useState<LanguagePreference>(() => readLanguagePreference());
   const [accounts, setAccounts] = useState<AccountView[]>([]);
@@ -1171,6 +1304,8 @@ export default function App() {
   const [migrationSelection, setMigrationSelection] = useState<string[]>([]);
   const [migrationScanned, setMigrationScanned] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [invokeSettings, setInvokeSettings] = useState<InvokeSettings | null>(null);
+  const [invokeChanging, setInvokeChanging] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
   const [oauthTarget, setOauthTarget] = useState<AccountView | null>(null);
@@ -1414,6 +1549,40 @@ export default function App() {
   useEffect(() => {
     void loadSnapshot();
   }, [loadSnapshot]);
+
+  useEffect(() => {
+    // Without readable settings the mode control stays hidden and GSwitch
+    // behaves as the manual switcher.
+    void (async () => {
+      try {
+        setInvokeSettings(await api.invokeSettings());
+      } catch {
+        setInvokeSettings(null);
+      }
+    })();
+  }, []);
+
+  const changeInvokeMode = async (enabled: boolean) => {
+    setInvokeChanging(true);
+    try {
+      setInvokeSettings(await api.setInvokeMode(enabled));
+    } catch (error) {
+      setNotice({ kind: "error", text: friendlyError(t, error, t("error.invokeMode")) });
+    } finally {
+      setInvokeChanging(false);
+    }
+  };
+
+  const changeAccountInvokeAllowed = async (account: AccountView, allowed: boolean) => {
+    try {
+      const updated = await api.setAccountInvokeAllowed(account.id, allowed);
+      setAccounts((current) => current.map((saved) =>
+        saved.id === updated.id ? { ...saved, invoke_allowed: updated.invoke_allowed } : saved,
+      ));
+    } catch (error) {
+      setNotice({ kind: "error", text: friendlyError(t, error, t("error.invokeAccount")) });
+    }
+  };
 
   // While the window is visible, read each account when its quota can have
   // changed: every check every 30 seconds, and at once when the window
@@ -2218,6 +2387,35 @@ export default function App() {
           <h1>GSwitch</h1>
         </div>
         <div className="toolbar-actions">
+          {invokeSettings ? (
+            <div aria-label={t("invoke.mode")} className="mode-toggle" role="group">
+              {([false, true] as const).map((enabled) => (
+                <button
+                  aria-pressed={invokeSettings.invoke_mode === enabled}
+                  disabled={invokeChanging || storageRecovery}
+                  key={String(enabled)}
+                  onClick={() => {
+                    if (invokeSettings.invoke_mode !== enabled) void changeInvokeMode(enabled);
+                  }}
+                  type="button"
+                >
+                  {t(enabled ? "invoke.invoke" : "invoke.manual")}
+                </button>
+              ))}
+            </div>
+          ) : null}
+          {invokeSettings?.invoke_mode ? (
+            <button
+              aria-label={t("invoke.settings")}
+              className="icon-button"
+              disabled={storageRecovery}
+              onClick={() => setDialog("invoke-settings")}
+              title={t("invoke.settings")}
+              type="button"
+            >
+              <SlidersHorizontal size={17} />
+            </button>
+          ) : null}
           <button className="button button-quiet" disabled={loading || busy !== null || refreshProgress !== null || storageRecovery} onClick={() => void refreshAll()} type="button">
             <RefreshCw className={refreshProgress ? "spin" : ""} size={16} />
             {refreshProgress
@@ -2448,6 +2646,8 @@ export default function App() {
                         : [...current, account.id],
                     );
                   }}
+                  invokeMode={invokeSettings?.invoke_mode === true}
+                  onInvokeAllowedChange={(allowed) => void changeAccountInvokeAllowed(account, allowed)}
                   quota={quotas[account.id]}
                   quotaFailure={quotaFailures[account.id]}
                   reauthenticationAvailable={account.kind === "chat_gpt" && (account.sign_in_required === true || quotaFailures[account.id] === "authentication" || accountSignInNeeded[account.id] === true)}
@@ -2920,6 +3120,19 @@ export default function App() {
             ) : null}
           </div>
         </Modal>
+      ) : null}
+
+      {dialog === "invoke-settings" && invokeSettings ? (
+        <InvokeSettingsDialog
+          onClose={() => setDialog(null)}
+          onSaved={(saved) => {
+            setInvokeSettings(saved);
+            setDialog(null);
+            setNotice({ kind: "success", text: t("invoke.saved") });
+          }}
+          settings={invokeSettings}
+          t={t}
+        />
       ) : null}
 
       {dialog === "remove" && removeAccount ? (

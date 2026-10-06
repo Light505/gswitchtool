@@ -62,5 +62,30 @@ If a proposal needs a platform layer, routing system, background service,
 database, or separate management surface, it requires a new product decision.
 Do not introduce its infrastructure incidentally.
 
+## Fork scope: Invoke Mode
+
+This fork intentionally crosses part of that boundary for one purpose: letting
+Claude Code delegate work to Codex through OpenAI's `codex-plugin-cc`, while a
+deterministic tool, not the AI, owns account failover.
+
+The human chooses **Manual** or **Invoke** in GSwitch. Manual Mode is the
+switcher described above, unchanged. In Invoke Mode the human also chooses
+which saved accounts may be used automatically and which Codex model and
+reasoning-effort combinations Claude may request. Only the human changes that
+policy; Claude can read it and have a request checked against it.
+
+The crossing is limited to:
+
+- a local, per-launch endpoint that the Claude Code integration uses to read
+  Invoke policy and validate a request, with no method that changes policy,
+  accounts, or credentials;
+- automatic switching to a human-allowed account when Codex reports that the
+  active account's usage is exhausted, followed by resuming the exact Codex
+  threads that were interrupted.
+
+Invoke Mode is still not a general orchestrator, model router, agent
+framework, proxy, cloud service, or background daemon beyond the open GSwitch
+window.
+
 Exact executable behavior belongs to current code and tests. This document owns
 the durable product purpose and boundary, not a roadmap or release status.

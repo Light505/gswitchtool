@@ -200,6 +200,7 @@ mod tests {
             credential_generation: 1,
             needs_apply: false,
             sign_in_required: false,
+            invoke_allowed: false,
             credential,
         }
     }

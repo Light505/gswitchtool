@@ -4,14 +4,16 @@ use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     accounts::AppState,
-    cli_update, codex, intake, migration, quota, switching,
+    cli_update, codex, intake,
+    invoke::{self, InvokeState},
+    migration, quota, switching,
     types::{
-        AccountView, AppSnapshot, CodexCliInfo, CodexCliUpdateFailure, CodexCliUpdateStatus,
-        ExportResult, ImportResult, LiveAccountView, MigrationPreview, OAuthLoginStart,
-        OAuthLoginStatus, QuotaRefreshFailure, QuotaRefreshFailureCode, QuotaView,
-        ResetCreditFailure, ResetCreditFailureCode, ResetCreditOutcome, RuntimeInfo, StorageStatus,
-        SwitchFailure, SwitchFailureCode, SwitchOutcome, UpdateDelivery, WakeOperationView,
-        WakeStart,
+        AccountView, AppSnapshot, CatalogModel, CodexCliInfo, CodexCliUpdateFailure,
+        CodexCliUpdateStatus, ExportResult, ImportResult, InvocationProfile, InvokeSettings,
+        LiveAccountView, MigrationPreview, OAuthLoginStart, OAuthLoginStatus, QuotaRefreshFailure,
+        QuotaRefreshFailureCode, QuotaView, ResetCreditFailure, ResetCreditFailureCode,
+        ResetCreditOutcome, RuntimeInfo, StorageStatus, SwitchFailure, SwitchFailureCode,
+        SwitchOutcome, UpdateDelivery, WakeOperationView, WakeStart,
     },
     wake,
 };
@@ -435,6 +437,75 @@ pub fn get_wake_operation(
     operation_id: String,
 ) -> Result<WakeOperationView, String> {
     wake::operation(state.inner(), &operation_id)
+}
+
+#[tauri::command]
+pub fn get_invoke_settings(invoke: State<'_, InvokeState>) -> Result<InvokeSettings, String> {
+    invoke.settings()
+}
+
+#[tauri::command]
+pub fn set_invoke_mode(
+    invoke: State<'_, InvokeState>,
+    enabled: bool,
+) -> Result<InvokeSettings, String> {
+    invoke.set_invoke_mode(enabled)
+}
+
+/// Reads the installed Codex model catalog. Starting App Server takes the
+/// operation lock so it cannot overlap a Codex CLI update.
+#[tauri::command]
+pub async fn get_model_catalog(
+    state: State<'_, AppState>,
+    invoke: State<'_, InvokeState>,
+    refresh: bool,
+) -> Result<Vec<CatalogModel>, String> {
+    if !refresh {
+        if let Some(catalog) = invoke.cached_catalog() {
+            return Ok(catalog);
+        }
+    }
+    let state = state.inner().clone();
+    let invoke = invoke.inner().clone();
+    run_blocking(move || read_and_remember_catalog(&state, &invoke)).await
+}
+
+#[tauri::command]
+pub async fn set_invoke_profiles(
+    state: State<'_, AppState>,
+    invoke: State<'_, InvokeState>,
+    profiles: Vec<InvocationProfile>,
+) -> Result<InvokeSettings, String> {
+    let state = state.inner().clone();
+    let invoke = invoke.inner().clone();
+    run_blocking(move || {
+        let catalog = match invoke.cached_catalog() {
+            Some(catalog) => catalog,
+            None => read_and_remember_catalog(&state, &invoke)?,
+        };
+        invoke.set_profiles(&profiles, &catalog)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn set_account_invoke_allowed(
+    state: State<'_, AppState>,
+    id: String,
+    allowed: bool,
+) -> Result<AccountView, String> {
+    let state = state.inner().clone();
+    run_blocking(move || state.set_invoke_allowed(&id, allowed)).await
+}
+
+fn read_and_remember_catalog(
+    state: &AppState,
+    invoke: &InvokeState,
+) -> Result<Vec<CatalogModel>, String> {
+    let _operation = state.acquire_operation()?;
+    let catalog = invoke::read_model_catalog(&state.isolated_profile_root()?)?;
+    invoke.remember_catalog(catalog.clone());
+    Ok(catalog)
 }
 
 #[tauri::command]

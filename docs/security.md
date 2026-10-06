@@ -90,6 +90,27 @@ requested a managed refresh. API-key intake retains its existing isolated
 non-refreshing check; switching and other live credential mutations retain the
 external-process guard.
 
+## Invoke Mode endpoint
+
+The Claude Code integration reaches GSwitch only through a local endpoint
+created at each launch: a named pipe that rejects remote clients on Windows,
+or a Unix socket with owner-only permissions elsewhere. Each request must carry
+a random per-launch token that GSwitch writes, with its endpoint name, to
+`invoke-endpoint.json` in its private configuration directory. Requests are
+newline-delimited JSON, capped in size, and answered with stable codes only.
+
+The endpoint offers read and validate methods. No method changes Invoke
+policy, account eligibility, saved accounts, or credentials, and no response
+contains credentials, tokens, or provider payloads. In Manual Mode it reports
+no allowed models and refuses every request with `INVOKE_MODE_DISABLED`.
+
+These controls keep the policy out of the model-facing interface. They are not
+a boundary against another process running as the same user, which can read
+GSwitch's files directly.
+
+The model catalog is read from the installed Codex App Server in an empty,
+GSwitch-owned profile. No credential is copied into that profile.
+
 ## Storage and concurrency
 
 Credential-affecting operations are serialized by an in-process mutex and a

@@ -11,8 +11,12 @@ smaller than a general account-management platform.
 - React and TypeScript own presentation, transient form state, and direct user
   interaction.
 - Vite builds the frontend; local CSS defines the small desktop design system.
-- The WebView calls explicit Tauri commands. GSwitch has no local HTTP API,
-  listening port, daemon, or remote-control surface.
+- The WebView calls explicit Tauri commands. GSwitch has no HTTP API,
+  network listening port, daemon, or remote-control surface. Its only other
+  entry point is the Invoke Mode endpoint: a per-launch named pipe (Unix
+  socket outside Windows) for the Claude Code integration, which can read
+  Invoke policy and validate a request but cannot change policy, accounts, or
+  credentials.
 
 The frontend asks for user-level actions such as add, switch, refresh, redeem,
 or Wake. It does not orchestrate their internal steps or receive the stored
@@ -34,6 +38,8 @@ serialized error code, not a Rust display string or raw provider error.
 | Quota and reset-credit facts | Codex/OpenAI response | Normalize and cache them without inventing missing values |
 | External Codex process state | Operating system | Detect known or uninspectable runtimes before sensitive operations |
 | Pending switch/reset recovery | GSwitch account store | Persist enough intent to resume safely and idempotently |
+| Invoke Mode policy (mode, allowed model/effort pairs) | Rust-owned `invoke.json` | Change it only from WebView commands; keep only pairs the installed Codex `model/list` reports |
+| Per-account Invoke eligibility | `accounts.json` (`invoke_allowed`) | Default to not allowed; keep the choice across a new sign-in for the same identity |
 | Screen and dialog state | React component tree | Keep it transient, derived, and free of stored secrets; selected saved-account IDs are permitted, credentials and export paths are not |
 
 Unknown, stale, timed-out, or conflicting state remains unknown. A cache is a
@@ -79,6 +85,10 @@ Keep the backend flat and organized by concrete responsibility:
   quota, and Wake, reset-credit selection, redemption, and redemption recovery;
 - `wake.rs`: Wake policy, narrow Responses transport, sequential Wake All,
   cancellation, and per-account outcomes;
+- `invoke.rs`: Invoke Mode policy persistence, the credential-free model
+  catalog read, whitelist normalization, and request validation;
+- `invoke_ipc.rs`: the token-checked local endpoint that exposes read and
+  validate methods to the Claude Code integration;
 - `runtime.rs`: external Codex process detection;
 - `storage.rs`: versioned JSON persistence and atomic/private writes;
 - `vault.rs`: Rust-only Stronghold snapshot and native root-key boundary for

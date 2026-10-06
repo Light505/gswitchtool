@@ -21,8 +21,13 @@ wide desktop with enough card width, then collapse to two and one card without i
 Focused dialogs may handle add-account, explicit confirmation, progress/results,
 or recovery; they do not create a second navigation system.
 
-The toolbar contains the vertically centered GSwitch mark and name, Refresh,
-Wake all, Add account, and a compact language menu. The current account is
+The toolbar contains the vertically centered GSwitch mark and name, a compact
+Manual/Invoke segmented control, Refresh, Wake all, Add account, and a compact
+language menu. In Invoke Mode only, an icon button beside the segmented control
+opens one focused dialog listing each Codex model with a checkbox for each
+reasoning effort that model supports, and each ChatGPT card gains one
+**Allow in Invoke Mode** switch row. Manual Mode shows neither, so it looks like
+the plain switcher. The current account is
 identified on its card rather than repeated beside the brand. The language
 button uses Remix Icon's `earth-line` at 18px, inheriting the current theme
 color. It is a command bar, not a dashboard header or custom window chrome.

@@ -11,6 +11,25 @@ export interface AccountView {
   needs_apply?: boolean;
   sign_in_required?: boolean;
   revision?: number;
+  invoke_allowed?: boolean;
+}
+
+export interface InvocationProfile {
+  model: string;
+  reasoning_efforts: string[];
+}
+
+export interface InvokeSettings {
+  invoke_mode: boolean;
+  allowed_invocation_profiles: InvocationProfile[];
+}
+
+export interface CatalogModel {
+  model: string;
+  display_name: string;
+  supported_reasoning_efforts: string[];
+  default_reasoning_effort?: string;
+  is_default: boolean;
 }
 
 export type CredentialStoreMode =

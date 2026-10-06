@@ -6,6 +6,8 @@ mod codex;
 mod commands;
 mod identity;
 mod intake;
+mod invoke;
+mod invoke_ipc;
 mod migration;
 mod quota;
 mod runtime;
@@ -35,9 +37,15 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let store_path = app.path().app_config_dir()?.join("accounts.json");
-            let state = accounts::AppState::new(store_path).map_err(std::io::Error::other)?;
+            let config_dir = app.path().app_config_dir()?;
+            let state = accounts::AppState::new(config_dir.join("accounts.json"))
+                .map_err(std::io::Error::other)?;
             app.manage(state);
+            let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
+            // Without the endpoint Claude Code cannot delegate, but Manual
+            // Mode and every account action keep working.
+            let _ = invoke_ipc::start(&config_dir, invoke.clone());
+            app.manage(invoke);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -78,7 +86,12 @@ pub fn run() {
             commands::start_wake_all,
             commands::start_wake_selected,
             commands::get_wake_operation,
-            commands::cancel_wake
+            commands::cancel_wake,
+            commands::get_invoke_settings,
+            commands::set_invoke_mode,
+            commands::get_model_catalog,
+            commands::set_invoke_profiles,
+            commands::set_account_invoke_allowed
         ])
         .run(tauri::generate_context!())
         .expect("error while running GSwitch");
