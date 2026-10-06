@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
@@ -68,7 +69,7 @@ const ROOT_DIR = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const REVIEW_SCHEMA = path.join(ROOT_DIR, "schemas", "review-output.schema.json");
 const DEFAULT_STATUS_WAIT_TIMEOUT_MS = 240000;
 const DEFAULT_STATUS_POLL_INTERVAL_MS = 2000;
-const VALID_REASONING_EFFORTS = new Set(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const REASONING_EFFORT_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
 const MODEL_ALIASES = new Map([["spark", "gpt-5.3-codex-spark"]]);
 const STOP_REVIEW_TASK_MARKER = "Run a stop-gate review of the previous Claude turn.";
 
@@ -79,7 +80,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs setup [--enable-review-gate|--disable-review-gate] [--json]",
       "  node scripts/codex-companion.mjs review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>]",
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
-      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh] [--model <model|spark>] [--effort <none|minimal|low|medium|high|xhigh>] [prompt]",
+      "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
@@ -119,10 +120,23 @@ function normalizeReasoningEffort(effort) {
   if (!normalized) {
     return null;
   }
-  if (!VALID_REASONING_EFFORTS.has(normalized)) {
+  // Supported efforts differ per model and Codex version (`model/list`), so the
+  // app server decides; only reject values that cannot be an effort name.
+  if (!REASONING_EFFORT_PATTERN.test(normalized)) {
     throw new Error(
-      `Unsupported reasoning effort "${effort}". Use one of: none, minimal, low, medium, high, xhigh.`
+      `Unsupported reasoning effort "${effort}". Use an effort the selected model supports, such as low, medium, high, or xhigh.`
     );
+  }
+  return normalized;
+}
+
+function normalizeResumeThreadId(threadId) {
+  if (threadId == null) {
+    return null;
+  }
+  const normalized = String(threadId).trim();
+  if (!normalized) {
+    throw new Error("--resume-thread requires a Codex thread ID.");
   }
   return normalized;
 }
@@ -464,11 +478,11 @@ async function executeTaskRun(request) {
 
   const taskMetadata = buildTaskRunMetadata({
     prompt: request.prompt,
-    resumeLast: request.resumeLast
+    resumeLast: request.resumeLast || Boolean(request.resumeThreadId)
   });
 
-  let resumeThreadId = null;
-  if (request.resumeLast) {
+  let resumeThreadId = request.resumeThreadId ?? null;
+  if (!resumeThreadId && request.resumeLast) {
     const latestThread = await resolveLatestTrackedTaskThread(workspaceRoot, {
       excludeJobId: request.jobId
     });
@@ -513,7 +527,15 @@ async function executeTaskRun(request) {
     threadId: result.threadId,
     rawOutput,
     touchedFiles: result.touchedFiles,
-    reasoningSummary: result.reasoningSummary
+    reasoningSummary: result.reasoningSummary,
+    // Keep the app-server's structured error code so callers never have to
+    // classify failures from message text.
+    error: result.error
+      ? {
+          message: result.error.message ?? null,
+          codexErrorInfo: result.error.codexErrorInfo ?? null
+        }
+      : null
   };
 
   return {
@@ -601,7 +623,7 @@ function buildTaskJob(workspaceRoot, taskMetadata, write) {
   });
 }
 
-function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId }) {
+function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, resumeThreadId = null, jobId }) {
   return {
     cwd,
     model,
@@ -609,6 +631,7 @@ function buildTaskRequest({ cwd, model, effort, prompt, write, resumeLast, jobId
     prompt,
     write,
     resumeLast,
+    resumeThreadId,
     jobId
   };
 }
@@ -761,7 +784,7 @@ async function handleReview(argv) {
 
 async function handleTask(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread"],
     booleanOptions: ["json", "write", "resume-last", "resume", "fresh", "background"],
     aliasMap: {
       m: "model"
@@ -779,15 +802,19 @@ async function handleTask(argv) {
   if (resumeLast && fresh) {
     throw new Error("Choose either --resume/--resume-last or --fresh.");
   }
+  const resumeThreadId = normalizeResumeThreadId(options["resume-thread"]);
+  if (resumeThreadId && (resumeLast || fresh)) {
+    throw new Error("Choose either --resume-thread or --resume/--resume-last/--fresh.");
+  }
   const write = Boolean(options.write);
   const taskMetadata = buildTaskRunMetadata({
     prompt,
-    resumeLast
+    resumeLast: resumeLast || Boolean(resumeThreadId)
   });
 
   if (options.background) {
     ensureCodexAvailable(cwd);
-    requireTaskRequest(prompt, resumeLast);
+    requireTaskRequest(prompt, resumeLast || Boolean(resumeThreadId));
 
     const job = buildTaskJob(workspaceRoot, taskMetadata, write);
     const request = buildTaskRequest({
@@ -797,6 +824,7 @@ async function handleTask(argv) {
       prompt,
       write,
       resumeLast,
+      resumeThreadId,
       jobId: job.id
     });
     const { payload } = enqueueBackgroundTask(cwd, job, request);
@@ -815,6 +843,7 @@ async function handleTask(argv) {
         prompt,
         write,
         resumeLast,
+        resumeThreadId,
         jobId: job.id,
         onProgress: progress
       }),

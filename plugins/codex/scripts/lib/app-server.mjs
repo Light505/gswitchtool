@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
 /**
  * @typedef {Error & { data?: unknown, rpcCode?: number }} ProtocolError
  * @typedef {import("./app-server-protocol").AppServerMethod} AppServerMethod
@@ -21,6 +22,7 @@ const PLUGIN_MANIFEST = JSON.parse(fs.readFileSync(PLUGIN_MANIFEST_URL, "utf8"))
 
 export const BROKER_ENDPOINT_ENV = "CODEX_COMPANION_APP_SERVER_ENDPOINT";
 export const BROKER_BUSY_RPC_CODE = -32001;
+export const DISABLE_BROKER_ENV = "CODEX_COMPANION_DISABLE_BROKER";
 
 /** @type {ClientInfo} */
 const DEFAULT_CLIENT_INFO = {
@@ -335,7 +337,10 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
 export class CodexAppServerClient {
   static async connect(cwd, options = {}) {
     let brokerEndpoint = null;
-    if (!options.disableBroker) {
+    // A caller that must own and restart its app-server (for example, after
+    // an account switch) opts out of the shared broker for the whole process.
+    const disableBroker = options.disableBroker || (options.env ?? process.env)[DISABLE_BROKER_ENV] === "1";
+    if (!disableBroker) {
       brokerEndpoint = options.brokerEndpoint ?? options.env?.[BROKER_ENDPOINT_ENV] ?? process.env[BROKER_ENDPOINT_ENV] ?? null;
       if (!brokerEndpoint && options.reuseExistingBroker) {
         brokerEndpoint = loadBrokerSession(cwd)?.endpoint ?? null;

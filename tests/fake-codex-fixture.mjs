@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -585,7 +586,17 @@ rl.on("line", (line) => {
           }
         ];
 
-	        if (BEHAVIOR === "interruptible-slow-task") {
+	        if (BEHAVIOR === "usage-limit") {
+	          const error = {
+	            message: "You've hit your usage limit.",
+	            codexErrorInfo: "usageLimitExceeded",
+	            additionalDetails: null,
+	            misalignment: null
+	          };
+	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          send({ method: "error", params: { error, willRetry: false, threadId: thread.id, turnId } });
+	          send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", error) } });
+	        } else if (BEHAVIOR === "interruptible-slow-task") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
 	          const timer = setTimeout(() => {
 	            if (!interruptibleTurns.has(turnId)) {
