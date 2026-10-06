@@ -4,6 +4,14 @@ This document owns the release policy and distribution procedure. A maintainer
 request to publish a change supplies release authorization under `AGENTS.md`;
 this document supplies the checks and sequence, not another approval step.
 
+## Fork distribution
+
+GSwitch Claude Tool is private and has no release channel. Builds come from
+`pnpm tauri build` on a user's machine, and the bundled updater has no
+endpoint, so a build never downloads an update, including upstream GSwitch
+releases. The upstream release workflow and scripts below name upstream's
+artifacts and need upstream's signing setup; they are not used for this fork.
+
 ## Current release policy
 
 GSwitch's first public release was version `1.0.0`. The maintainer waived
