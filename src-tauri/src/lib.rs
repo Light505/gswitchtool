@@ -29,6 +29,29 @@ use tauri::{Emitter, Manager};
 /// running at the same time.
 const SHARED_DATA_IDENTIFIER: &str = "com.light505.gswitchtool";
 
+/// Records each startup step with its time in `startup.log`, replaced on
+/// every start. It holds no account data; it shows where a start stopped.
+struct StartupTrace(Option<std::fs::File>);
+
+impl StartupTrace {
+    fn create(dir: &std::path::Path) -> Self {
+        let _ = std::fs::create_dir_all(dir);
+        Self(std::fs::File::create(dir.join("startup.log")).ok())
+    }
+
+    fn step(&mut self, step: &str) {
+        use std::io::Write;
+        if let Some(file) = &mut self.0 {
+            let millis = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_millis())
+                .unwrap_or_default();
+            let _ = writeln!(file, "{millis} pid {} {step}", std::process::id());
+            let _ = file.sync_data();
+        }
+    }
+}
+
 fn shared_data_dir(own_config_dir: PathBuf) -> PathBuf {
     match own_config_dir.parent() {
         Some(parent) => parent.join(SHARED_DATA_IDENTIFIER),
@@ -76,9 +99,18 @@ pub fn run() {
                     std::process::exit(0);
                 }
             }
+            // Only the build holding the instance lock may replace the trace.
+            let mut trace = StartupTrace::create(&config_dir);
+            trace.step(&format!("{name} {} started", app.package_info().version));
             app.manage(app_update::AppUpdateState::default());
+            trace.step("loading accounts");
             let state = accounts::AppState::new(config_dir.join("accounts.json"))
                 .map_err(std::io::Error::other)?;
+            trace.step(if state.recovery_required() {
+                "accounts unavailable: protected storage could not be opened"
+            } else {
+                "accounts loaded"
+            });
             app.manage(state.clone());
             let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
             let switched = app.handle().clone();
@@ -123,7 +155,11 @@ pub fn run() {
             );
             // Without the endpoint Claude Code cannot delegate, but Manual
             // Mode and every account action keep working.
-            let _ = invoke_ipc::start(&config_dir, invoke.clone(), coordinator.clone());
+            let endpoint = invoke_ipc::start(&config_dir, invoke.clone(), coordinator.clone());
+            trace.step(match endpoint {
+                Ok(_) => "Invoke endpoint ready; startup finished",
+                Err(_) => "Invoke endpoint failed; startup finished",
+            });
             app.manage(coordinator);
             app.manage(invoke);
             Ok(())

@@ -55,8 +55,9 @@ GSwitch installed on the same computer.
 ### Updates
 
 From version 1.1.0, the app checks the repository's GitHub releases when it
-opens and every six hours. When there is a newer version it shows **GSwitch
-<version> is available**:
+opens and every six hours. From 1.1.1 you can also check at any time with the
+**Check for updates** button (the arrow in a circle, next to the language menu).
+When there is a newer version it shows **GSwitch <version> is available**:
 
 - **Update GSwitch** downloads it, checks its signature, and installs it over the
   current version. The app closes, updates, and keeps your accounts and settings.
@@ -204,6 +205,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | `CURRENT_ACCOUNT_UNKNOWN` | Save the account Codex is using in GSwitch, or finish **Review recovery** if GSwitch shows it. |
 | The GSwitch window freezes while opening | Close it, end any leftover `msedgewebview2.exe` processes for GSwitch Claude Tool in Task Manager, and open it again. |
 | Claude does not see a plugin change | Start a new Claude Code session. |
+| Accounts are missing right after installing or updating | They are still saved. Close GSwitch Claude Tool and open it again. If it happens again, keep `%APPDATA%\com.light505.gswitchtool\startup.log` (it lists each startup step and holds no account data) to find where the start stopped. |
 | GSwitch never offers an update | Run `git pull` in the repository once so Git saves your GitHub sign-in, then reopen the app. Versions before 1.1.0 cannot update themselves. |
 | *Quit Codex* although no Codex window is open | GSwitch stops Codex's background service by itself; an IDE extension or a `codex` command running in a terminal still counts as open. |
 | *… is already open. Close it before opening …* | The installed app and the dev app share accounts, so only one runs at a time. Close the one that is open. |

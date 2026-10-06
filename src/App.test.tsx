@@ -2312,6 +2312,23 @@ describe("GSwitch account workspace", () => {
     expect(mocks.switchAccount).not.toHaveBeenCalled();
   });
 
+  it("checks for updates when asked and always answers", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    updaterMocks.check.mockResolvedValue(null);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText("GSwitch Claude Tool is up to date.")).toBeInTheDocument();
+
+    updaterMocks.check.mockRejectedValue("GITHUB_SIGN_IN_MISSING");
+    await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText(/Git has no saved GitHub sign-in/)).toBeInTheDocument();
+
+    updaterMocks.check.mockResolvedValue({ version: "1.1.1" });
+    await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
+    expect(await screen.findByText("GSwitch 1.1.1 is available")).toBeInTheDocument();
+  });
+
   it("waits to update while Claude's delegated Codex work is running", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     const downloadAndInstall = vi.fn().mockRejectedValue("INVOKE_BUSY");

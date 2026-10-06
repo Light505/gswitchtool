@@ -31,6 +31,8 @@ const CREDENTIAL_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum AppUpdateFailure {
+    /// The dev build never updates itself.
+    UpdatesDisabled,
     /// Git has no saved GitHub sign-in, or Git is missing.
     GithubSignInMissing,
     /// GitHub refused the sign-in, or it cannot read the repository.
@@ -82,7 +84,7 @@ pub async fn check<R: Runtime>(
     app: &AppHandle<R>,
 ) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
     if !updates_enabled(app) {
-        return Ok(None);
+        return Err(AppUpdateFailure::UpdatesDisabled);
     }
     let (token, manifest) = tauri::async_runtime::spawn_blocking(|| {
         let token = github_token()?;

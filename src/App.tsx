@@ -8,6 +8,7 @@ import {
   CircleAlert,
   CircleCheck,
   Copy,
+  CircleArrowUp,
   Download,
   FileJson,
   FolderOpen,
@@ -1743,6 +1744,34 @@ export default function App() {
     };
   }, [loading, requestQuotaRefresh]);
 
+  const [updateChecking, setUpdateChecking] = useState(false);
+
+  const checkForUpdateNow = async () => {
+    setUpdateChecking(true);
+    try {
+      const update = await updater.check();
+      if (!update) {
+        setNotice({ kind: "success", text: t("update.upToDate") });
+        return;
+      }
+      // Asking again brings back a version dismissed with Later.
+      dismissedUpdateVersions.current.delete(update.version);
+      setPendingUpdate({ update, delivery: await api.updateDelivery() });
+      setUpdatePhase("available");
+      setUpdateProgress(null);
+    } catch (error) {
+      const key = ({
+        UPDATES_DISABLED: "update.error.disabled",
+        GITHUB_SIGN_IN_MISSING: "update.error.signIn",
+        GITHUB_ACCESS_DENIED: "update.error.access",
+        UNTRUSTED_RELEASE: "update.error.untrusted",
+      } as const)[String(error) as "UPDATES_DISABLED"] ?? "update.error.check";
+      setNotice({ kind: "error", text: t(key) });
+    } finally {
+      setUpdateChecking(false);
+    }
+  };
+
   const checkForUpdate = useCallback(async () => {
     if (!("__TAURI_INTERNALS__" in window) || updateCheckInFlight.current) {
       return;
@@ -2578,6 +2607,16 @@ export default function App() {
               {t("cli.available", { version: cliInfo.latest_version || "" })}
             </button>
           ) : null}
+          <button
+            aria-label={t("update.check")}
+            className="icon-button"
+            disabled={updateChecking}
+            onClick={() => void checkForUpdateNow()}
+            title={t("update.check")}
+            type="button"
+          >
+            {updateChecking ? <LoaderCircle className="spin" size={17} /> : <CircleArrowUp size={17} />}
+          </button>
           <PopoverMenu
             className="language-menu"
             icon={<span aria-hidden="true" className="language-menu-icon" />}
