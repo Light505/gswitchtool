@@ -50,6 +50,15 @@ cargo test --manifest-path src-tauri/Cargo.toml --locked -- --ignored
 The Claude Code plugin in `integrations/codex-plugin-cc` has its own Node test
 suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.
 
+Invoke Mode acceptance with real accounts needs at least two saved ChatGPT
+accounts allowed in Invoke Mode, with the current Codex account saved. Exhausting
+a real account on demand is impractical, so an acceptance run may set
+`GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT=1` for one `invoke` command: its first
+finished turn is reported as a usage limit, and everything after that is real
+(stopping registered App Servers, reading quota, switching and verifying the
+live account, and resuming the same thread). Only the maintainer runs it, and
+it changes the live Codex account.
+
 ## CI coverage
 
 The CI workflow always starts and detects changed paths inside the run, so a

@@ -110,11 +110,11 @@ function setupRepo(behavior) {
 }
 
 // Asynchronous so the in-process fake GSwitch can answer while it runs.
-function companion(args, { repo, binDir, configDir }) {
+function companion(args, { repo, binDir, configDir, env = {} }) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT, ...args], {
       cwd: repo,
-      env: { ...buildEnv(binDir), GSWITCH_CONFIG_DIR: configDir },
+      env: { ...buildEnv(binDir), GSWITCH_CONFIG_DIR: configDir, ...env },
       windowsHide: true
     });
     let stdout = "";
@@ -334,4 +334,20 @@ test("invoke gives up with USAGE_LIMIT_EXCEEDED after repeated failovers", () =>
     const fakeState = readFakeState(ctx.statePath);
     assert.equal(fakeState.threads.length, 1);
     assert.equal(fakeState.turns.length, 4);
+  }));
+
+test("the acceptance switch reports one usage limit after a finished turn", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    const result = await companion(
+      ["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "do the work"],
+      { ...ctx, env: { GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT: "1" } }
+    );
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.failovers, 1);
+    assert.equal(gswitch.methods().filter((method) => method === "limit_reached").length, 1);
+    const fakeState = readFakeState(ctx.statePath);
+    assert.equal(fakeState.threads.length, 1);
+    assert.deepEqual(fakeState.turns.map((turn) => turn.prompt), ["do the work", FAILOVER_RESUME_PROMPT]);
   }));

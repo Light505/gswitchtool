@@ -1127,6 +1127,8 @@ const FAILOVER_RESUME_PROMPT =
   "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
 // Bounds one invocation if every replacement account is exhausted in turn.
 const MAX_FAILOVERS_PER_INVOKE = 3;
+// Set only by acceptance tests; see docs/testing.md in gswitchtool.
+const SIMULATE_USAGE_LIMIT_ENV = "GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT";
 
 async function handleInvoke(argv) {
   const { options, positionals } = parseCommandInput(argv, {
@@ -1262,7 +1264,11 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
       // Without GSwitch nothing can be switched; report the run as it ended.
     }
 
-    if (execution?.exitStatus === 0) {
+    // Acceptance testing only: treat the first finished turn as a usage limit so
+    // a real failover can be exercised without exhausting an account.
+    const simulatedLimit =
+      process.env[SIMULATE_USAGE_LIMIT_ENV] === "1" && failovers === 0 && execution?.exitStatus === 0;
+    if (execution?.exitStatus === 0 && !simulatedLimit) {
       return {
         ...base,
         status: "completed",
@@ -1276,7 +1282,7 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
       };
     }
 
-    const limited = execution?.payload.error?.codexErrorInfo === "usageLimitExceeded";
+    const limited = simulatedLimit || execution?.payload.error?.codexErrorInfo === "usageLimitExceeded";
     const message = execution?.payload.error?.message ?? runError?.message ?? null;
     if (!limited && outcome === "unchanged") {
       // A resume after an account switch that fails outright did not continue the thread.
