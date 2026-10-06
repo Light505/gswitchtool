@@ -56,7 +56,9 @@ pub fn start(
 ) -> Result<(), String> {
     let token = random_token()?;
     let path = endpoint_path(config_dir);
-    let listener = Listener::bind(&path)?;
+    // Tauri calls this from its setup hook on the main thread; the listener
+    // must be created inside the async runtime that will serve it.
+    let listener = tauri::async_runtime::block_on(async { Listener::bind(&path) })?;
     storage::write_json_atomic(
         &config_dir.join(ENDPOINT_FILE),
         &json!({
@@ -793,6 +795,46 @@ mod tests {
         } else {
             format!("file:///{text}")
         }
+    }
+
+    #[test]
+    fn starts_from_the_setup_thread_and_publishes_a_working_endpoint() {
+        // Called without a Tokio runtime, exactly as Tauri's setup hook does.
+        let dir = temp_dir("start");
+        let base = endpoint(&dir, true);
+        start(&dir, base.invoke.clone(), Arc::clone(&base.coordinator)).expect("start");
+
+        let published: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join(ENDPOINT_FILE)).expect("endpoint file"),
+        )
+        .expect("endpoint json");
+        let path = PathBuf::from(published["endpoint"].as_str().expect("endpoint"));
+        let token = published["token"].as_str().expect("token").to_string();
+        let line = block_on(async move {
+            #[cfg(windows)]
+            let client = tokio::net::windows::named_pipe::ClientOptions::new()
+                .open(&path)
+                .expect("open pipe");
+            #[cfg(unix)]
+            let client = tokio::net::UnixStream::connect(&path)
+                .await
+                .expect("connect socket");
+            let (reader, mut writer) = tokio::io::split(client);
+            let request = json!({ "id": 1, "token": token, "method": "status" });
+            writer
+                .write_all(format!("{request}\n").as_bytes())
+                .await
+                .expect("write");
+            BufReader::new(reader)
+                .lines()
+                .next_line()
+                .await
+                .expect("read")
+                .expect("line")
+        });
+        let response: Value = serde_json::from_str(&line).expect("json");
+        assert_eq!(response["result"]["invoke_mode"], true);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
