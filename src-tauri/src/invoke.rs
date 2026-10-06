@@ -15,6 +15,7 @@ use serde_json::{json, Value};
 
 use crate::{
     app_server::{AppServer, TempCodexHome},
+    model_access::ModelAccess,
     storage,
     types::{CatalogModel, InvocationProfile, InvokeSettings, MAX_CONCURRENT_TASKS_LIMIT},
 };
@@ -38,6 +39,7 @@ pub struct InvokeState {
     path: Arc<PathBuf>,
     settings: Arc<Mutex<InvokeSettings>>,
     catalog: Arc<Mutex<Option<Vec<CatalogModel>>>>,
+    model_access: Arc<Mutex<ModelAccess>>,
 }
 
 impl InvokeState {
@@ -53,6 +55,7 @@ impl InvokeState {
             path: Arc::new(path),
             settings: Arc::new(Mutex::new(settings)),
             catalog: Arc::new(Mutex::new(None)),
+            model_access: Arc::new(Mutex::new(ModelAccess::default())),
         }
     }
 
@@ -118,6 +121,20 @@ impl InvokeState {
 
     pub fn cached_catalog(&self) -> Option<Vec<CatalogModel>> {
         self.catalog.lock().ok().and_then(|catalog| catalog.clone())
+    }
+
+    /// Which models each saved account can use, from the last read.
+    pub fn model_access(&self) -> ModelAccess {
+        self.model_access
+            .lock()
+            .map(|access| access.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn remember_model_access(&self, access: ModelAccess) {
+        if let Ok(mut current) = self.model_access.lock() {
+            *current = access;
+        }
     }
 
     pub fn remember_catalog(&self, models: Vec<CatalogModel>) {
@@ -289,6 +306,7 @@ fn parse_model_list(result: &Value) -> Result<(Vec<CatalogModel>, Option<String>
                     .get("isDefault")
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
+                only_on: None,
             })
         })
         .collect();
@@ -381,6 +399,7 @@ mod tests {
                 ],
                 default_reasoning_effort: Some("medium".into()),
                 is_default: true,
+                only_on: None,
             },
             CatalogModel {
                 model: "model-b".into(),
@@ -388,6 +407,7 @@ mod tests {
                 supported_reasoning_efforts: vec!["low".into(), "medium".into()],
                 default_reasoning_effort: None,
                 is_default: false,
+                only_on: None,
             },
         ]
     }
@@ -566,6 +586,7 @@ mod tests {
                 supported_reasoning_efforts: vec!["low".into(), "max".into()],
                 default_reasoning_effort: Some("medium".into()),
                 is_default: true,
+                only_on: None,
             }]
         );
         assert!(parse_model_list(&json!({"nextCursor": null})).is_err());

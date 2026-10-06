@@ -107,6 +107,14 @@ Credentials stay encrypted on your computer. Claude never sees them.
 5. **Codex tasks at once** (default 2) caps how many delegated tasks Claude can
    run in parallel; more wait their turn.
 
+A model that only some of your accounts can use, such as a model for a higher
+plan, shows **Only on Pro** (or the plans that have it) in Invoke settings. If
+you allow it and Claude uses it, GSwitch waits for other Codex tasks to finish,
+then switches to the first account in your order that has the model. Today no
+Codex model is limited to a plan, so nothing shows this label yet.
+
+The app's version is shown next to its name in the toolbar.
+
 Keep GSwitch Claude Tool open while you use Invoke Mode. Switching back to
 **Manual** turns everything off: Claude cannot use Codex through GSwitch and no
 account changes automatically.

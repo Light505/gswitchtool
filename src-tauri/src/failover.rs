@@ -5,7 +5,7 @@
 //! own Codex threads.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -34,6 +34,8 @@ pub enum FailoverCode {
     NoEligibleAccount,
     /// Invoke Mode is paused because no account had Codex usage left.
     InvokePaused,
+    /// No account GSwitch may use can run the requested model with usage left.
+    ModelUnavailable,
     AccountSwitchFailed,
     AccountVerificationFailed,
     UnknownLease,
@@ -81,6 +83,8 @@ pub enum SwitchReason {
     UsageLimit,
     /// A higher-priority account has the preferred usage left.
     Priority,
+    /// The task's model is available only on another account.
+    Model,
 }
 
 /// The user's account order and limits from Invoke settings.
@@ -200,6 +204,8 @@ pub trait FailoverOps: Send + Sync {
     fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>);
     fn switched(&self, from: &str, to: &str, reason: SwitchReason);
     fn preferences(&self) -> Preferences;
+    /// False only when the account is known not to offer the model.
+    fn model_available(&self, account_id: &str, model: &str) -> bool;
     /// Reports that Invoke Mode paused (`Some`) or was resumed.
     fn paused(&self, pause: Option<&InvokePause>);
     fn now_unix(&self) -> i64 {
@@ -305,18 +311,31 @@ impl Coordinator {
     }
 
     /// Lets a worker start Codex once no failover is running and a task slot
-    /// is free. The first task to start while nothing runs may first move
-    /// Codex to the preferred account. Waiting for a slot has no time limit:
-    /// the worker can always give up by closing its connection.
+    /// is free. When the current account cannot use the task's model, the
+    /// task waits until nothing else runs and Codex moves to an account that
+    /// can. Otherwise the first task to start while nothing runs may first
+    /// move Codex to the preferred account. Waiting for a slot has no time
+    /// limit: the worker can always give up by closing its connection.
     pub async fn begin_run(self: &Arc<Self>, lease_id: &str) -> Result<(), FailoverCode> {
         enum Next {
             Started,
             Prefer,
+            Route,
             Full,
         }
         let deadline = tokio::time::Instant::now() + self.timings.wait;
-        // One start checks for a preferred account at most once.
+        // One start checks for a preferred account, or routes for its model,
+        // at most once.
         let mut preferred = false;
+        let mut routed = false;
+        let model = self
+            .lock()
+            .leases
+            .get(lease_id)
+            .ok_or(FailoverCode::UnknownLease)?
+            .request
+            .model
+            .clone();
         loop {
             // Subscribe before checking, so a change in between is not missed.
             let mut changes = self.changed.subscribe();
@@ -339,8 +358,22 @@ impl Coordinator {
                         })
                         .count();
                     let preferences = self.ops.preferences();
+                    let account = self.ops.active_account();
+                    let wrong_account = account
+                        .as_deref()
+                        .is_some_and(|account| !self.ops.model_available(account, &model));
                     if active >= usize::from(preferences.max_concurrent_tasks.max(1)) {
                         Some(Next::Full)
+                    } else if wrong_account && routed {
+                        return Err(FailoverCode::ModelUnavailable);
+                    } else if wrong_account {
+                        // Never switch away from running tasks.
+                        if active > 0 {
+                            Some(Next::Full)
+                        } else {
+                            inner.preferring = true;
+                            Some(Next::Route)
+                        }
                     } else if active == 0
                         && !preferred
                         && !preferences.account_priority.is_empty()
@@ -351,7 +384,6 @@ impl Coordinator {
                         inner.preferring = true;
                         Some(Next::Prefer)
                     } else {
-                        let account = self.ops.active_account();
                         let lease = inner
                             .leases
                             .get_mut(lease_id)
@@ -367,15 +399,31 @@ impl Coordinator {
                     self.notify();
                     return Ok(());
                 }
-                Some(Next::Prefer) => {
-                    preferred = true;
+                Some(Next::Prefer) | Some(Next::Route) => {
+                    let route = matches!(next, Some(Next::Route));
                     let coordinator = Arc::clone(self);
-                    let _ = tokio::task::spawn_blocking(move || coordinator.prefer_account()).await;
+                    let task_model = model.clone();
+                    let outcome = tokio::task::spawn_blocking(move || {
+                        if route {
+                            coordinator.route_to_model(&task_model)
+                        } else {
+                            coordinator.prefer_account(&task_model);
+                            Ok(())
+                        }
+                    })
+                    .await
+                    .unwrap_or(Err(FailoverCode::Unavailable));
                     let mut inner = self.lock();
                     inner.preferring = false;
-                    inner.last_preference = Some(Instant::now());
+                    if route {
+                        routed = true;
+                    } else {
+                        preferred = true;
+                        inner.last_preference = Some(Instant::now());
+                    }
                     drop(inner);
                     self.notify();
+                    outcome?;
                 }
                 Some(Next::Full) => {
                     let _ = changes.changed().await;
@@ -392,11 +440,11 @@ impl Coordinator {
         }
     }
 
-    /// Moves Codex to the highest-priority account that has the preferred
-    /// usage left, if that is not the current one. It never waits for the
-    /// user: with their Codex open, or a refused switch, the task simply runs
-    /// on the current account.
-    fn prefer_account(&self) {
+    /// Moves Codex to the highest-priority account that can use the task's
+    /// model and has the preferred usage left, if that is not the current
+    /// one. It never waits for the user: with their Codex open, or a refused
+    /// switch, the task simply runs on the current account.
+    fn prefer_account(&self, model: &str) {
         if !self.ops.invoke_mode() {
             return;
         }
@@ -406,9 +454,10 @@ impl Coordinator {
         let preferences = self.ops.preferences();
         let accounts = self.ops.accounts();
         let candidates = by_priority(
-            accounts
-                .iter()
-                .filter(|account| account.id == live || preferable(account)),
+            accounts.iter().filter(|account| {
+                (account.id == live || preferable(account))
+                    && self.ops.model_available(&account.id, model)
+            }),
             &preferences.account_priority,
         );
         for account in candidates {
@@ -430,6 +479,49 @@ impl Coordinator {
             }
             return;
         }
+    }
+
+    /// Moves Codex to the first account in the user's order that can use
+    /// `model` and has usage left. Unlike a preference, the task cannot run
+    /// otherwise, so a Codex the user opened is reported instead of ignored.
+    fn route_to_model(&self, model: &str) -> Result<(), FailoverCode> {
+        if !self.ops.invoke_mode() {
+            return Err(FailoverCode::InvokeModeDisabled);
+        }
+        let live = self
+            .ops
+            .active_account()
+            .ok_or(FailoverCode::CurrentAccountUnknown)?;
+        let preferences = self.ops.preferences();
+        let accounts = self.ops.accounts();
+        let candidates = by_priority(
+            accounts.iter().filter(|account| {
+                account.id != live
+                    && preferable(account)
+                    && self.ops.model_available(&account.id, model)
+            }),
+            &preferences.account_priority,
+        );
+        for account in candidates {
+            if self
+                .ops
+                .read_quota(&account.id)
+                .as_ref()
+                .and_then(usable_capacity)
+                .is_none()
+            {
+                continue;
+            }
+            if self.ops.other_codex_running() {
+                return Err(FailoverCode::ExternalCodexRunning);
+            }
+            self.ops
+                .switch_to(&account.id)
+                .map_err(|refusal| refusal.code)?;
+            self.ops.switched(&live, &account.id, SwitchReason::Model);
+            return Ok(());
+        }
+        Err(FailoverCode::ModelUnavailable)
     }
 
     /// Records the worker's App Server. One that starts during a failover is
@@ -660,11 +752,22 @@ impl Coordinator {
         if !self.ops.invoke_mode() {
             return Err(FailoverCode::InvokeModeDisabled.into());
         }
+        let models = self
+            .lock()
+            .leases
+            .values()
+            .map(|lease| lease.request.model.clone())
+            .collect::<HashSet<_>>();
         let candidates = self
             .ops
             .accounts()
             .into_iter()
             .filter(|account| eligible(account, exhausted))
+            .filter(|account| {
+                models
+                    .iter()
+                    .all(|model| self.ops.model_available(&account.id, model))
+            })
             .map(|account| {
                 let quota = self.ops.read_quota(&account.id);
                 (account, quota)
@@ -1004,6 +1107,10 @@ impl FailoverOps for AppOps {
         (self.on_switched)(from, to, reason);
     }
 
+    fn model_available(&self, account_id: &str, model: &str) -> bool {
+        self.invoke.model_access().available(account_id, model)
+    }
+
     fn preferences(&self) -> Preferences {
         self.invoke
             .settings()
@@ -1047,6 +1154,8 @@ mod tests {
         now: i64,
         preferences: Preferences,
         switch_reasons: Vec<SwitchReason>,
+        /// (account, model) pairs known to be unavailable.
+        missing_models: HashSet<(String, String)>,
     }
 
     struct FakeOps(Mutex<World>);
@@ -1112,6 +1221,12 @@ mod tests {
         }
         fn preferences(&self) -> Preferences {
             self.world().preferences.clone()
+        }
+        fn model_available(&self, account_id: &str, model: &str) -> bool {
+            !self
+                .world()
+                .missing_models
+                .contains(&(account_id.to_string(), model.to_string()))
         }
         fn paused(&self, pause: Option<&InvokePause>) {
             self.world().pause_events.push(pause.cloned());
@@ -1903,5 +2018,113 @@ mod tests {
         assert_eq!(coordinator.end_run(&first), Ok(RunEnd::Unchanged));
         assert_eq!(started.join().expect("thread"), Ok(()));
         assert_eq!(coordinator.status().0, 1);
+    }
+
+    fn missing(pairs: &[(&str, &str)]) -> HashSet<(String, String)> {
+        pairs
+            .iter()
+            .map(|(account, model)| (account.to_string(), model.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn a_task_for_a_model_only_another_account_has_moves_codex_there_first() {
+        // A (active) and B cannot use model-x; C can.
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("a", "model-x"), ("b", "model-x")]),
+            preferences: Preferences {
+                account_priority: vec!["a".into(), "b".into(), "c".into()],
+                max_concurrent_tasks: 3,
+                ..Preferences::default()
+            },
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-x", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert_eq!(ops.world().switches, vec!["c".to_string()]);
+        assert_eq!(ops.world().switch_reasons, vec![SwitchReason::Model]);
+    }
+
+    #[test]
+    fn a_model_no_usable_account_has_is_refused_without_a_switch() {
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("a", "model-x"), ("b", "model-x")]),
+            quotas: HashMap::from([
+                ("a".into(), quota(90, 90)),
+                ("b".into(), quota(90, 90)),
+                // C has the model but no usage left.
+                ("c".into(), quota(0, 90)),
+            ]),
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-x", "high"));
+        assert_eq!(
+            block_on(coordinator.begin_run(&lease)),
+            Err(FailoverCode::ModelUnavailable)
+        );
+        assert!(ops.world().switches.is_empty());
+
+        // With the user's own Codex open, the switch is reported, not waited for.
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("a", "model-x")]),
+            other_codex: true,
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-x", "high"));
+        assert_eq!(
+            block_on(coordinator.begin_run(&lease)),
+            Err(FailoverCode::ExternalCodexRunning)
+        );
+        assert!(ops.world().switches.is_empty());
+    }
+
+    #[test]
+    fn a_task_for_another_accounts_model_waits_until_running_tasks_finish() {
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("a", "model-x")]),
+            ..world()
+        });
+        let running = running_worker(&coordinator, &ops, 1, 901);
+        let lease = coordinator.open_lease(2, request("model-x", "high"));
+        let waiting = Arc::clone(&coordinator);
+        let started = std::thread::spawn(move || block_on(waiting.begin_run(&lease)));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !started.is_finished(),
+            "it must not switch under a running task"
+        );
+        assert!(ops.world().switches.is_empty());
+
+        assert_eq!(coordinator.end_run(&running), Ok(RunEnd::Unchanged));
+        assert_eq!(started.join().expect("thread"), Ok(()));
+        assert_eq!(ops.world().switches, vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn neither_a_failover_nor_a_preference_moves_to_an_account_without_the_model_in_use() {
+        // B has the most usage left, but lacks the running model.
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("b", "model-a")]),
+            quotas: HashMap::from([
+                ("a".into(), quota(0, 90)),
+                ("b".into(), quota(95, 95)),
+                ("c".into(), quota(50, 50)),
+            ]),
+            ..world()
+        });
+        let worker = running_worker(&coordinator, &ops, 1, 911);
+        assert_eq!(coordinator.report_limit(&worker), Ok(LimitAck::Started));
+        assert_eq!(block_on(coordinator.await_failover(&worker)), Ok(()));
+        assert_eq!(ops.world().switches, vec!["c".to_string()]);
+
+        let (coordinator, ops) = setup(World {
+            missing_models: missing(&[("b", "model-a")]),
+            quotas: HashMap::from([("a".into(), quota(50, 50)), ("b".into(), quota(90, 90))]),
+            preferences: ranked(&["b", "a"], 20, 2),
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert!(ops.world().switches.is_empty());
     }
 }

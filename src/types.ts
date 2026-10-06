@@ -45,6 +45,8 @@ export interface CatalogModel {
   supported_reasoning_efforts: string[];
   default_reasoning_effort?: string;
   is_default: boolean;
+  /** Saved accounts that can use the model, when some cannot. */
+  only_on?: string[] | null;
 }
 
 export type CredentialStoreMode =
@@ -53,6 +55,11 @@ export type CredentialStoreMode =
   | "auto"
   | "ephemeral"
   | "unknown";
+
+export interface AppVersion {
+  version: string;
+  dev: boolean;
+}
 
 export interface RuntimeInfo {
   codex_home: string;

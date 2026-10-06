@@ -177,6 +177,15 @@ pub fn open_latest_release(app: AppHandle) -> Result<(), String> {
         .map_err(|_| "Unable to open the GSwitch release page in your browser".to_string())
 }
 
+/// The running app's version, shown next to its name.
+#[tauri::command]
+pub fn get_app_version(app: AppHandle) -> crate::types::AppVersion {
+    crate::types::AppVersion {
+        version: app.package_info().version.to_string(),
+        dev: app.config().identifier != crate::SHARED_DATA_IDENTIFIER,
+    }
+}
+
 /// Looks for a newer installed-app release. The user decides whether to install it.
 #[tauri::command]
 pub async fn check_app_update(app: AppHandle) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
@@ -575,10 +584,24 @@ fn read_and_remember_catalog(
     state: &AppState,
     invoke: &InvokeState,
 ) -> Result<Vec<CatalogModel>, String> {
-    let _operation = state.acquire_operation()?;
-    let catalog = invoke::read_model_catalog(&state.isolated_profile_root()?)?;
+    let installed = {
+        let _operation = state.acquire_operation()?;
+        invoke::read_model_catalog(&state.isolated_profile_root()?)?
+    };
+    // Which accounts can use each model; read after the operation lock is
+    // released, like an automatic quota refresh.
+    let access = crate::model_access::read(state, &codex_client_version());
+    let catalog = access.annotate(installed);
+    invoke.remember_model_access(access);
     invoke.remember_catalog(catalog.clone());
     Ok(catalog)
+}
+
+/// The installed Codex CLI's version, which Codex's model list is filtered by.
+pub(crate) fn codex_client_version() -> String {
+    crate::cli_update::inspect()
+        .version
+        .unwrap_or_else(|| "0.0.0".to_string())
 }
 
 #[tauri::command]

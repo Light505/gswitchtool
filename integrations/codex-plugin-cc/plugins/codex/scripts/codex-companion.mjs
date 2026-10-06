@@ -1071,7 +1071,13 @@ function renderInvokeStatus(report) {
     lines.push("- none (ask the user to allow models in GSwitch's Invoke settings)");
   }
   for (const profile of profiles) {
-    lines.push(`- ${profile.model}: ${profile.reasoning_efforts.join(", ")}`);
+    lines.push(
+      `- ${profile.model}: ${profile.reasoning_efforts.join(", ")}${
+        profile.exclusive
+          ? " (only on some of the user's accounts: GSwitch switches to one when this model is used, after other Codex tasks finish)"
+          : ""
+      }`
+    );
   }
   lines.push(`Codex workers running: ${report.workers_running ?? 0}`);
   if (report.max_concurrent_tasks) {

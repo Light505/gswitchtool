@@ -134,6 +134,14 @@ installer runs only after its signature matches the public key in
 `tauri.main.conf.json`, and only when the user chooses to update. The private
 signing key stays outside the repository on the maintainer's computer.
 
+## Model availability reads
+
+To learn which models each saved account offers, GSwitch sends each signed-in
+ChatGPT account's current access token to Codex's own model-list endpoint, the
+same read the Codex CLI makes at startup. The read changes nothing, sends no
+model request, and never refreshes or rotates a sign-in: a rejected or expired
+token only leaves that account unknown. The result is kept in memory.
+
 ## Codex's background daemon
 
 Newer Codex versions leave a windowless managed App Server daemon running after

@@ -783,6 +783,11 @@ summary:focus-visible {
   background: var(--success-soft);
 }
 
+.badge-exclusive {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
 .badge-muted {
   color: var(--warning);
   background: var(--warning-soft);
@@ -1853,6 +1858,17 @@ textarea {
 .switch-input:disabled {
   cursor: default;
   opacity: 0.55;
+}
+
+.brand-version {
+  align-self: center;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .invoke-panel {

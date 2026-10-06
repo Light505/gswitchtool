@@ -11,6 +11,7 @@ mod intake;
 mod invoke;
 mod invoke_ipc;
 mod migration;
+mod model_access;
 mod quota;
 mod runtime;
 mod storage;
@@ -169,6 +170,15 @@ pub fn run() {
                 Ok(_) => "Invoke endpoint ready; startup finished",
                 Err(_) => "Invoke endpoint failed; startup finished",
             });
+            // Learn which accounts can use which models, for Invoke routing.
+            {
+                let state = app.state::<accounts::AppState>().inner().clone();
+                let invoke = invoke.clone();
+                std::thread::spawn(move || {
+                    let access = model_access::read(&state, &commands::codex_client_version());
+                    invoke.remember_model_access(access);
+                });
+            }
             app.manage(coordinator);
             app.manage(invoke);
             Ok(())
@@ -189,6 +199,7 @@ pub fn run() {
             commands::open_oauth_login,
             commands::get_update_delivery,
             commands::open_latest_release,
+            commands::get_app_version,
             commands::check_app_update,
             commands::install_app_update,
             commands::import_auth_json,

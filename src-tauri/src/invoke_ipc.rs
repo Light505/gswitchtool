@@ -143,9 +143,24 @@ async fn dispatch(
                 .invoke
                 .settings()
                 .map_err(|_| "UNAVAILABLE".to_string())?;
-            // Manual Mode offers Claude nothing to choose from.
+            // Manual Mode offers Claude nothing to choose from. A model only
+            // some accounts offer is marked, since using it may switch accounts.
+            let access = endpoint.invoke.model_access();
             let profiles = if settings.invoke_mode {
-                settings.allowed_invocation_profiles
+                settings
+                    .allowed_invocation_profiles
+                    .iter()
+                    .map(|profile| {
+                        let mut entry = json!({
+                            "model": profile.model,
+                            "reasoning_efforts": profile.reasoning_efforts,
+                        });
+                        if access.only_on(&profile.model).is_some() {
+                            entry["exclusive"] = json!(true);
+                        }
+                        entry
+                    })
+                    .collect::<Vec<_>>()
             } else {
                 Vec::new()
             };
@@ -420,6 +435,9 @@ mod tests {
         fn preferences(&self) -> crate::failover::Preferences {
             crate::failover::Preferences::default()
         }
+        fn model_available(&self, _account_id: &str, _model: &str) -> bool {
+            true
+        }
         fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }
 
@@ -441,6 +459,7 @@ mod tests {
             supported_reasoning_efforts: vec!["medium".into(), "high".into()],
             default_reasoning_effort: None,
             is_default: true,
+            only_on: None,
         }];
         invoke
             .set_profiles(
@@ -748,6 +767,9 @@ mod tests {
         fn switched(&self, _from: &str, _to: &str, _reason: crate::failover::SwitchReason) {}
         fn preferences(&self) -> crate::failover::Preferences {
             crate::failover::Preferences::default()
+        }
+        fn model_available(&self, _account_id: &str, _model: &str) -> bool {
+            true
         }
         fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }

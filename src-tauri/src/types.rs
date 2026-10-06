@@ -176,6 +176,9 @@ pub struct CatalogModel {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_reasoning_effort: Option<String>,
     pub is_default: bool,
+    /// The saved accounts that can use the model, when some cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub only_on: Option<Vec<String>>,
 }
 
 /// A display-only outcome for one bounded user-selected account-file batch.
@@ -267,6 +270,13 @@ pub enum CredentialStoreMode {
     Auto,
     Ephemeral,
     Unknown,
+}
+
+/// The running app's version, and whether it is the dev build.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AppVersion {
+    pub version: String,
+    pub dev: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

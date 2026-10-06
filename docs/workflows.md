@@ -485,6 +485,29 @@ switch as a priority switch. It never waits for the user here: with the user's
 own Codex open, or a refused switch, the task runs on the current account. A
 running task is never switched away by another task's start.
 
+### Models only some accounts offer
+
+GSwitch reads Codex's model list (`/backend-api/codex/models`, the list the
+Codex CLI itself reads) for each signed-in saved ChatGPT account at startup and
+whenever Invoke settings reads models. Each read uses that account's current
+access token the way an automatic quota refresh does, never refreshes a
+sign-in, and stores nothing but the result in memory. An account offers a model
+when its list includes it as a listed model and the model's
+`available_in_plans` includes the account's plan; an account whose list could
+not be read is unknown and never blocked. Listed models the installed CLI's
+catalog lacks are added to Invoke settings, and a model only some accounts
+offer is labelled with their plans. `status` marks such an allowed model as
+exclusive.
+
+A task whose model the live account does not offer waits until no other task
+runs, then switches to the first account in the user's order that offers the
+model and has usage left, reported as a model switch. It is refused with
+`MODEL_UNAVAILABLE` when no such account exists, and with
+`EXTERNAL_CODEX_RUNNING` when the user's own Codex is open, since the task
+cannot run otherwise. A failover only switches to an account that offers every
+model a worker uses, and a preference switch only to one that offers the
+starting task's model.
+
 When no allowed account has usable quota, GSwitch pauses Invoke Mode. The pause
 records when the first account can use Codex again: for each allowed account and
 the exhausted one, the latest reset among its spent Codex windows (or, when the

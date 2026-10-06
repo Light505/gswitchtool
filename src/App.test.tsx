@@ -61,6 +61,7 @@ const mocks = vi.hoisted(() => ({
   setInvokeProfiles: vi.fn(),
   setAccountInvokeAllowed: vi.fn(),
   setInvokePreferences: vi.fn(),
+  appVersion: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
@@ -222,6 +223,7 @@ function prepareDefaults() {
   mocks.setInvokeMode.mockImplementation(async (enabled: boolean) => ({ invoke_mode: enabled, allowed_invocation_profiles: [] }));
   mocks.modelCatalog.mockResolvedValue([]);
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
+  mocks.appVersion.mockResolvedValue({ version: "1.2.0", dev: false });
   mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number) => ({
     invoke_mode: true,
     allowed_invocation_profiles: [],
@@ -2323,10 +2325,12 @@ describe("GSwitch account workspace", () => {
   it("checks for updates when asked and always answers", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     updaterMocks.check.mockResolvedValue(null);
+    mocks.appVersion.mockResolvedValue({ version: "1.2.0", dev: false });
     render(<App />);
 
+    expect(await screen.findByText("v1.2.0")).toHaveAttribute("title", "Version 1.2.0");
     await userEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
-    expect(await screen.findByText("GSwitch Claude Tool is up to date.")).toBeInTheDocument();
+    expect(await screen.findByText("GSwitch Claude Tool 1.2.0 is up to date.")).toBeInTheDocument();
 
     updaterMocks.check.mockRejectedValue("GITHUB_SIGN_IN_MISSING");
     await userEvent.click(screen.getByRole("button", { name: "Check for updates" }));
@@ -2474,6 +2478,25 @@ describe("Invoke Mode", () => {
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
+  it("marks a model that only some accounts offer", async () => {
+    const pro: AccountView = { ...chatAccount, id: "account-2", email: "pro@example.com", label: "Pro", plan_type: "pro" };
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, plan_type: "plus" }, pro]);
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.modelCatalog.mockResolvedValue([
+      { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
+      { model: "model-pro", display_name: "Model Pro", supported_reasoning_efforts: ["high"], is_default: false, only_on: ["account-2"] },
+      { model: "model-gone", display_name: "Model Gone", supported_reasoning_efforts: ["high"], is_default: false, only_on: [] },
+    ]);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const badge = await within(dialog).findByText("Only on Pro");
+    expect(badge).toHaveAttribute("title", expect.stringContaining("pro@example.com"));
+    expect(within(dialog).getByText("Not on your accounts")).toBeInTheDocument();
+    expect(within(dialog).getAllByText(/^Only on /)).toHaveLength(1);
+  });
+
   it("says when Invoke Mode moved Codex to a preferred account", async () => {
     const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
     mocks.listAccounts.mockResolvedValue([{ ...chatAccount, active: true }, second]);
@@ -2489,6 +2512,10 @@ describe("Invoke Mode", () => {
     act(() => announce!({ from: "account-1", to: "account-2", reason: "priority" }));
     expect(await screen.findByText(
       "Invoke Mode switched Codex from person@example.com to second@example.com, your preferred account with usage left.",
+    )).toBeInTheDocument();
+    act(() => announce!({ from: "account-2", to: "account-1", reason: "model" }));
+    expect(await screen.findByText(
+      "Invoke Mode switched Codex from second@example.com to person@example.com, which offers the model Claude asked for.",
     )).toBeInTheDocument();
   });
 

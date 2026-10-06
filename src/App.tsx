@@ -66,6 +66,7 @@ import type {
   CodexCliInfo,
   CodexCliUpdateFailure,
   InvocationProfile,
+  AppVersion,
   InvokePause,
   InvokeSettings,
   LiveAccountView,
@@ -1283,6 +1284,15 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
                 <div className="invoke-model-name">
                   <strong title={model.model}>{model.display_name}</strong>
                   {model.is_default ? <span className="badge">{t("invoke.defaultModel")}</span> : null}
+                  {model.only_on ? (() => {
+                    const holders = accounts.filter((account) => model.only_on?.includes(account.id));
+                    const plans = [...new Set(holders.map((account) => accountPlan(account, t)))];
+                    return holders.length ? (
+                      <span className="badge badge-exclusive" title={t("invoke.onlyOnTitle", { accounts: holders.map(accountPrimaryName).join(", ") })}>
+                        {t("invoke.onlyOn", { plans: plans.join(", ") })}
+                      </span>
+                    ) : <span className="badge badge-muted">{t("invoke.onNoAccount")}</span>;
+                  })() : null}
                 </div>
                 <div className="invoke-efforts">
                   {model.supported_reasoning_efforts.map((effort) => (
@@ -1658,7 +1668,10 @@ export default function App() {
           };
           setNotice({
             kind: "info",
-            text: t(reason === "priority" ? "invoke.switchedPriority" : "invoke.switched", { from: name(from), to: name(to) }),
+            text: t(
+              reason === "priority" ? "invoke.switchedPriority" : reason === "model" ? "invoke.switchedModel" : "invoke.switched",
+              { from: name(from), to: name(to) },
+            ),
           });
           void loadSnapshot();
         });
@@ -1820,13 +1833,21 @@ export default function App() {
   }, [loading, requestQuotaRefresh]);
 
   const [updateChecking, setUpdateChecking] = useState(false);
+  const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
+
+  useEffect(() => {
+    api.appVersion().then(setAppVersion, () => setAppVersion(null));
+  }, []);
 
   const checkForUpdateNow = async () => {
     setUpdateChecking(true);
     try {
       const update = await updater.check();
       if (!update) {
-        setNotice({ kind: "success", text: t("update.upToDate") });
+        setNotice({
+          kind: "success",
+          text: appVersion ? t("update.upToDateVersion", { version: appVersion.version }) : t("update.upToDate"),
+        });
         return;
       }
       // Asking again brings back a version dismissed with Later.
@@ -2618,6 +2639,11 @@ export default function App() {
         <div className="brand-lockup">
           <img alt="" aria-hidden="true" className="brand-mark" src="/gswitch-icon.svg" />
           <h1>GSwitch Claude Tool</h1>
+          {appVersion ? (
+            <span className="brand-version" title={t(appVersion.dev ? "app.devVersion" : "app.version", { version: appVersion.version })}>
+              v{appVersion.version}{appVersion.dev ? " · dev" : ""}
+            </span>
+          ) : null}
         </div>
         <div className="toolbar-actions">
           {invokeSettings ? (

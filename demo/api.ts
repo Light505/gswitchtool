@@ -63,6 +63,7 @@ const displayOnly = {
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
+  appVersion: async () => ({ version: "1.3.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   modelCatalog: async () => [
     { model: "gpt-6-astra", display_name: "gpt-6-astra", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: true },

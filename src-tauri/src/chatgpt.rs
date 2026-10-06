@@ -118,6 +118,23 @@ impl ChatGptClient {
         )
     }
 
+    /// Codex's model list for this account, with each model's plans. A
+    /// read-only request with the current access token.
+    pub(crate) fn models(
+        &self,
+        credential: &Value,
+        client_version: &str,
+    ) -> Result<Value, RequestFailure> {
+        let version = client_version
+            .chars()
+            .filter(|character| character.is_ascii_alphanumeric() || ".-+".contains(*character))
+            .collect::<String>();
+        self.get_json(
+            &format!("/codex/models?client_version={version}"),
+            &quota_credential(credential)?,
+        )
+    }
+
     pub(crate) fn account_check(&self, credential: &Value) -> Result<Value, RequestFailure> {
         let snapshot = credential_snapshot(credential).map_err(|_| RequestFailure {
             kind: RequestFailureKind::Authentication,

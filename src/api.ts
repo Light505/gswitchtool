@@ -19,6 +19,7 @@ import type {
   ResetCreditDetail,
   ResetCreditOutcome,
   RuntimeInfo,
+  AppVersion,
   SwitchOutcome,
   WakeOperationView,
   WakeStart,
@@ -32,11 +33,12 @@ export type UpdateDelivery = "installer_exits" | "relaunch_required" | "release_
 export interface InvokeSwitch {
   from: string;
   to: string;
-  reason?: "usage_limit" | "priority";
+  reason?: "usage_limit" | "priority" | "model";
 }
 
 export const api = {
   runtimeInfo: () => invoke<RuntimeInfo>("get_runtime_info"),
+  appVersion: () => invoke<AppVersion>("get_app_version"),
   codexCliInfo: () => invoke<CodexCliInfo>("get_codex_cli_info"),
   updateCodexCli: () => invoke<CodexCliInfo>("update_codex_cli"),
   openCodexCliGuide: () => invoke<void>("open_codex_cli_guide"),

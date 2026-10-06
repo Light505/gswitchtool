@@ -32,7 +32,8 @@ async function startFakeGSwitch({
   waitingForCodex = false,
   failoverDetail = null,
   paused = null,
-  maxTasks = null
+  maxTasks = null,
+  exclusiveModel = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -49,7 +50,9 @@ async function startFakeGSwitch({
       case "status":
         return ok({
           invoke_mode: policy.invokeMode,
-          allowed_invocation_profiles: policy.invokeMode ? PROFILES : [],
+          allowed_invocation_profiles: policy.invokeMode
+            ? PROFILES.map((profile) => (profile.model === exclusiveModel ? { ...profile, exclusive: true } : profile))
+            : [],
           workers_running: 0,
           failover_in_progress: waitingForCodex,
           ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
@@ -165,6 +168,14 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
     const text = await companion(["invoke-status"], ctx);
     assert.match(text.stdout, /- model-a: high, xhigh/);
     assert.match(text.stdout, /- model-b: medium/);
+  }));
+
+test("invoke-status marks a model only some accounts offer", () =>
+  withGSwitch({ exclusiveModel: "model-b" }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /- model-a: high, xhigh\n/);
+    assert.match(result.stdout, /- model-b: medium \(only on some of the user's accounts: GSwitch switches to one when this model is used/);
   }));
 
 test("invoke-status tells Claude how many Codex tasks GSwitch runs at once", () =>
