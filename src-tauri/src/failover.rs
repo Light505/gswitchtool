@@ -26,8 +26,9 @@ use crate::{
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FailoverCode {
     InvokeModeDisabled,
-    /// Codex is signed in to an account that is not saved in GSwitch.
-    CurrentAccountNotSaved,
+    /// GSwitch cannot tell which saved account Codex is using: it is not
+    /// saved, Codex is signed out, or an earlier switch needs recovery.
+    CurrentAccountUnknown,
     ExternalCodexRunning,
     CodexShutdownFailed,
     NoEligibleAccount,
@@ -104,11 +105,32 @@ struct Inner {
     leases: HashMap<String, Lease>,
     /// The account being replaced while a failover runs.
     replacing: Option<String>,
-    /// The last failed failover and the account it tried to replace.
-    last_failure: Option<(String, FailoverCode)>,
+    /// The last finished failover. Workers resume only after a recorded
+    /// success for their own account.
+    last_outcome: Option<FailoverOutcome>,
     /// Set while a failover waits for the user to close Codex.
     waiting_for_codex: Option<SwitchAccounts>,
     cancel_requested: bool,
+}
+
+struct FailoverOutcome {
+    replaced: String,
+    result: Result<(), FailoverCode>,
+    /// The switch transaction's own reason when it refused, for diagnosis.
+    detail: Option<String>,
+}
+
+/// A refused switch: the failover code plus the switch transaction's reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchRefusal {
+    pub code: FailoverCode,
+    pub detail: Option<String>,
+}
+
+impl From<FailoverCode> for SwitchRefusal {
+    fn from(code: FailoverCode) -> Self {
+        Self { code, detail: None }
+    }
 }
 
 /// The accounts a failover replaces and switches to, by saved-account ID.
@@ -125,7 +147,7 @@ pub trait FailoverOps: Send + Sync {
     fn active_account(&self) -> Option<String>;
     fn accounts(&self) -> Vec<AccountView>;
     fn read_quota(&self, account_id: &str) -> Option<QuotaSnapshot>;
-    fn switch_to(&self, account_id: &str) -> Result<(), FailoverCode>;
+    fn switch_to(&self, account_id: &str) -> Result<(), SwitchRefusal>;
     fn terminate(&self, pid: u32);
     fn alive(&self, pid: u32) -> bool;
     fn other_codex_running(&self) -> bool;
@@ -285,7 +307,7 @@ impl Coordinator {
         self.notify();
         Ok(if replacing {
             RunEnd::FailoverInProgress
-        } else if account != self.ops.active_account() {
+        } else if switched_away(account.as_deref(), self.ops.active_account().as_deref()) {
             RunEnd::AccountSwitched
         } else {
             RunEnd::Unchanged
@@ -305,15 +327,20 @@ impl Coordinator {
         if inner.replacing.is_some() {
             return Ok(LimitAck::Joined);
         }
-        if account != self.ops.active_account() {
+        // An unknown live account is never mistaken for a completed switch.
+        let live = self
+            .ops
+            .active_account()
+            .ok_or(FailoverCode::CurrentAccountUnknown)?;
+        if account.as_deref() != Some(live.as_str()) {
             return Ok(LimitAck::AlreadySwitched);
         }
         if !self.ops.invoke_mode() {
             return Err(FailoverCode::InvokeModeDisabled);
         }
-        let exhausted = account.ok_or(FailoverCode::CurrentAccountNotSaved)?;
+        let exhausted = live;
         inner.replacing = Some(exhausted.clone());
-        inner.last_failure = None;
+        inner.last_outcome = None;
         drop(inner);
         self.notify();
 
@@ -322,9 +349,15 @@ impl Coordinator {
             let result = coordinator.run_failover(&exhausted);
             let mut inner = coordinator.lock();
             inner.replacing = None;
-            if let Err(code) = result {
-                inner.last_failure = Some((exhausted, code));
-            }
+            let (result, detail) = match result {
+                Ok(()) => (Ok(()), None),
+                Err(refusal) => (Err(refusal.code), refusal.detail),
+            };
+            inner.last_outcome = Some(FailoverOutcome {
+                replaced: exhausted,
+                result,
+                detail,
+            });
             drop(inner);
             coordinator.notify();
         });
@@ -344,15 +377,28 @@ impl Coordinator {
             if inner.replacing.is_some() {
                 return Ok(None);
             }
-            if account != self.ops.active_account() {
-                return Ok(Some(()));
-            }
-            match &inner.last_failure {
-                Some((failed, code)) if Some(failed) == account.as_ref() => Err(*code),
+            match &inner.last_outcome {
+                Some(outcome) if Some(&outcome.replaced) == account.as_ref() => {
+                    outcome.result.map(Some)
+                }
+                // Another way the account changed: resume only when the live
+                // account is known and differs from the one this run used.
+                _ if switched_away(account.as_deref(), self.ops.active_account().as_deref()) => {
+                    Ok(Some(()))
+                }
                 _ => Err(FailoverCode::Unavailable),
             }
         })
         .await
+    }
+
+    /// The switch transaction's reason for the last failed failover, if any.
+    pub fn last_failure_detail(&self) -> Option<String> {
+        self.lock()
+            .last_outcome
+            .as_ref()
+            .filter(|outcome| outcome.result.is_err())
+            .and_then(|outcome| outcome.detail.clone())
     }
 
     /// Forgets a worker whose connection closed and stops an App Server it
@@ -378,7 +424,7 @@ impl Coordinator {
         self.notify();
     }
 
-    fn run_failover(&self, exhausted: &str) -> Result<(), FailoverCode> {
+    fn run_failover(&self, exhausted: &str) -> Result<(), SwitchRefusal> {
         // Quiesce: give runs that were already allowed to start a moment to
         // register their App Server, then stop every registered one.
         let grace = Instant::now() + self.timings.start_grace;
@@ -406,7 +452,7 @@ impl Coordinator {
         let deadline = Instant::now() + self.timings.shutdown;
         while pids.iter().any(|pid| self.ops.alive(*pid)) {
             if Instant::now() >= deadline {
-                return Err(FailoverCode::CodexShutdownFailed);
+                return Err(FailoverCode::CodexShutdownFailed.into());
             }
             std::thread::sleep(self.timings.poll);
         }
@@ -414,7 +460,7 @@ impl Coordinator {
         // just ran out. Choosing first means the user is never asked to close
         // Codex when no account could take over.
         if !self.ops.invoke_mode() {
-            return Err(FailoverCode::InvokeModeDisabled);
+            return Err(FailoverCode::InvokeModeDisabled.into());
         }
         let candidates = self
             .ops
@@ -426,8 +472,8 @@ impl Coordinator {
                 (account, quota)
             })
             .collect::<Vec<_>>();
-        let target =
-            select_account(&candidates, exhausted).ok_or(FailoverCode::NoEligibleAccount)?;
+        let target = select_account(&candidates, exhausted)
+            .ok_or(SwitchRefusal::from(FailoverCode::NoEligibleAccount))?;
 
         // Switch and verify through the normal transaction. A Codex the user
         // opened is never stopped: GSwitch asks the user to close it and waits.
@@ -438,7 +484,7 @@ impl Coordinator {
         loop {
             self.wait_for_codex_to_close(&accounts)?;
             match self.ops.switch_to(&target) {
-                Err(FailoverCode::ExternalCodexRunning) => continue,
+                Err(refusal) if refusal.code == FailoverCode::ExternalCodexRunning => continue,
                 result => result?,
             }
             self.ops.switched(exhausted, &target);
@@ -520,6 +566,11 @@ impl Coordinator {
         self.changed
             .send_modify(|version| *version = version.wrapping_add(1));
     }
+}
+
+/// True only when the live account is known and is not the one the run used.
+fn switched_away(run_account: Option<&str>, live: Option<&str>) -> bool {
+    live.is_some() && live != run_account
 }
 
 fn eligible(account: &AccountView, exhausted: &str) -> bool {
@@ -626,18 +677,23 @@ impl FailoverOps for AppOps {
             .and_then(|view| view.snapshot)
     }
 
-    fn switch_to(&self, account_id: &str) -> Result<(), FailoverCode> {
+    fn switch_to(&self, account_id: &str) -> Result<(), SwitchRefusal> {
         switching::switch_account(&self.state, account_id)
             .map(|_| ())
-            .map_err(|failure| match failure.code {
-                SwitchFailureCode::CodexOpen => FailoverCode::ExternalCodexRunning,
-                SwitchFailureCode::PostWriteVerificationFailed
-                | SwitchFailureCode::VerificationFailed
-                | SwitchFailureCode::LocalVerificationFailed
-                | SwitchFailureCode::TargetWorkspaceMismatch => {
-                    FailoverCode::AccountVerificationFailed
-                }
-                _ => FailoverCode::AccountSwitchFailed,
+            .map_err(|failure| SwitchRefusal {
+                code: match failure.code {
+                    SwitchFailureCode::CodexOpen => FailoverCode::ExternalCodexRunning,
+                    SwitchFailureCode::PostWriteVerificationFailed
+                    | SwitchFailureCode::VerificationFailed
+                    | SwitchFailureCode::LocalVerificationFailed
+                    | SwitchFailureCode::TargetWorkspaceMismatch => {
+                        FailoverCode::AccountVerificationFailed
+                    }
+                    _ => FailoverCode::AccountSwitchFailed,
+                },
+                detail: serde_json::to_value(failure.code)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_string)),
             })
     }
 
@@ -675,6 +731,9 @@ mod tests {
         accounts: Vec<AccountView>,
         quotas: HashMap<String, QuotaSnapshot>,
         switch_result: Option<FailoverCode>,
+        /// A refused switch leaves the live account unidentifiable, as a
+        /// pending switch record does.
+        unknown_after_refusal: bool,
         switches: Vec<String>,
         alive: HashSet<u32>,
         terminated: Vec<u32>,
@@ -707,11 +766,19 @@ mod tests {
             world.quota_reads.push(account_id.to_string());
             world.quotas.get(account_id).cloned()
         }
-        fn switch_to(&self, account_id: &str) -> Result<(), FailoverCode> {
+        fn switch_to(&self, account_id: &str) -> Result<(), SwitchRefusal> {
             let mut world = self.world();
             world.switches.push(account_id.to_string());
             match world.switch_result {
-                Some(code) => Err(code),
+                Some(code) => {
+                    if world.unknown_after_refusal {
+                        world.active = None;
+                    }
+                    Err(SwitchRefusal {
+                        code,
+                        detail: Some("recovery_required".into()),
+                    })
+                }
                 None => {
                     world.active = Some(account_id.to_string());
                     Ok(())
@@ -1136,17 +1203,44 @@ mod tests {
     }
 
     #[test]
-    fn an_unsaved_live_account_is_reported_without_a_switch() {
+    fn an_unidentified_live_account_is_reported_without_a_switch() {
         let mut world = world();
         world.active = None;
         let (coordinator, ops) = setup(world);
         let worker = running_worker(&coordinator, &ops, 1, 1301);
         assert_eq!(
             coordinator.report_limit(&worker),
-            Err(FailoverCode::CurrentAccountNotSaved)
+            Err(FailoverCode::CurrentAccountUnknown)
         );
         assert!(ops.world().switches.is_empty());
         assert!(!coordinator.status().1);
+    }
+
+    #[test]
+    fn a_refused_switch_that_leaves_the_live_account_unknown_never_resumes() {
+        // Found in a real run: a pending switch record makes the live account
+        // unidentifiable, which must not read as a completed switch.
+        let mut world = world();
+        world.switch_result = Some(FailoverCode::AccountSwitchFailed);
+        world.unknown_after_refusal = true;
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 1401);
+
+        assert_eq!(coordinator.end_run(&worker), Ok(RunEnd::Unchanged));
+        coordinator.report_limit(&worker).expect("start");
+        assert_eq!(
+            block_on(coordinator.await_failover(&worker)),
+            Err(FailoverCode::AccountSwitchFailed)
+        );
+        assert_eq!(
+            coordinator.last_failure_detail().as_deref(),
+            Some("recovery_required")
+        );
+        assert_eq!(coordinator.end_run(&worker), Ok(RunEnd::Unchanged));
+        assert_eq!(
+            coordinator.report_limit(&worker),
+            Err(FailoverCode::CurrentAccountUnknown)
+        );
     }
 
     #[test]

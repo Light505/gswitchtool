@@ -460,6 +460,12 @@ error on a worker's turn. GSwitch then:
    failed switch or verification. If Codex is opened again during the switch,
    it asks again.
 
+A worker resumes only after GSwitch records a verified switch away from the
+account it ran on, or when the live account is known and differs from it; a
+live account GSwitch cannot identify, such as during a pending switch recovery,
+never counts as switched. The failover identifies the exhausted account from
+the live Codex credential, not from GSwitch's record of its last switch.
+
 Each worker then starts a new App Server and resumes its own Codex thread by ID
 with its original model, effort, sandbox, and working directory, sending a fixed
 continuation message. A run stopped before its thread existed starts over with
@@ -469,7 +475,8 @@ the usage limit instead of continuing.
 When no allowed account has usable quota, an App Server will not stop, the user
 keeps Codex open or cancels, Invoke Mode was turned off, or the switch or
 verification fails, nothing resumes. Each worker returns a stable code with its
-thread ID so the work can be resumed later. While Invoke Mode is on, an
+thread ID so the work can be resumed later; a refused switch also carries the
+switch transaction's own reason, such as `codex_open` or `recovery_required`. While Invoke Mode is on, an
 automatic switch updates the window and names both accounts in one notice.
 
 ## Recovery

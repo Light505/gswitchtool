@@ -29,7 +29,8 @@ async function startFakeGSwitch({
   invokeMode = true,
   failoverError = null,
   manualAfterLease = false,
-  waitingForCodex = false
+  waitingForCodex = false,
+  failoverDetail = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -68,7 +69,10 @@ async function startFakeGSwitch({
       case "limit_reached":
         return policy.invokeMode ? ok({ failover: "started" }) : fail("INVOKE_MODE_DISABLED");
       case "await_failover":
-        return failoverError ? fail(failoverError) : ok();
+        if (!failoverError) return ok();
+        return failoverDetail
+          ? { id: request.id, error: { code: failoverError, detail: failoverDetail } }
+          : fail(failoverError);
       default:
         return fail("UNKNOWN_METHOD");
     }
@@ -351,3 +355,19 @@ test("the acceptance switch reports one usage limit after a finished turn", () =
     assert.equal(fakeState.threads.length, 1);
     assert.deepEqual(fakeState.turns.map((turn) => turn.prompt), ["do the work", FAILOVER_RESUME_PROMPT]);
   }));
+
+test("a refused switch reports GSwitch's reason and does not resume", () =>
+  withGSwitch(
+    { failoverError: "ACCOUNT_SWITCH_FAILED", failoverDetail: "recovery_required" },
+    "usage-limit-once",
+    async (ctx) => {
+      const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+      assert.equal(result.status, 1);
+      const payload = JSON.parse(result.stdout);
+      assert.equal(payload.code, "ACCOUNT_SWITCH_FAILED");
+      assert.equal(payload.detail, "recovery_required");
+      assert.match(payload.message, /GSwitch reason: recovery_required/);
+      assert.ok(payload.threadId);
+      assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes after a refused switch");
+    }
+  ));

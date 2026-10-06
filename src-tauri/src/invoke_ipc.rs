@@ -218,10 +218,13 @@ async fn dispatch(
             Ok(json!({ "failover": ack }))
         }
         "await_failover" => {
-            coordinator
-                .await_failover(&text("lease_id")?)
-                .await
-                .map_err(code)?;
+            if let Err(failure) = coordinator.await_failover(&text("lease_id")?).await {
+                // Keep the switch transaction's own reason for diagnosis.
+                return Err(match coordinator.last_failure_detail() {
+                    Some(detail) => format!("{}:{detail}", code(failure)),
+                    None => code(failure),
+                });
+            }
             Ok(json!({}))
         }
         _ => Err("UNKNOWN_METHOD".to_string()),
@@ -243,8 +246,12 @@ fn code<T: Serialize>(value: T) -> String {
         .unwrap_or_else(|| "UNAVAILABLE".to_string())
 }
 
+/// A code may carry the switch transaction's reason as `CODE:detail`.
 fn error_response(id: Value, code: &str) -> Value {
-    json!({ "id": id, "error": { "code": code } })
+    match code.split_once(':') {
+        Some((code, detail)) => json!({ "id": id, "error": { "code": code, "detail": detail } }),
+        None => json!({ "id": id, "error": { "code": code } }),
+    }
 }
 
 fn token_matches(presented: &str, expected: &str) -> bool {
@@ -378,8 +385,8 @@ mod tests {
         fn read_quota(&self, _account_id: &str) -> Option<QuotaSnapshot> {
             None
         }
-        fn switch_to(&self, _account_id: &str) -> Result<(), FailoverCode> {
-            Err(FailoverCode::AccountSwitchFailed)
+        fn switch_to(&self, _account_id: &str) -> Result<(), crate::failover::SwitchRefusal> {
+            Err(FailoverCode::AccountSwitchFailed.into())
         }
         fn terminate(&self, _pid: u32) {}
         fn alive(&self, _pid: u32) -> bool {
@@ -641,7 +648,7 @@ mod tests {
                 reset_credits: None,
             })
         }
-        fn switch_to(&self, account_id: &str) -> Result<(), FailoverCode> {
+        fn switch_to(&self, account_id: &str) -> Result<(), crate::failover::SwitchRefusal> {
             self.switches
                 .lock()
                 .expect("switches")

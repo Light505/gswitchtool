@@ -1203,10 +1203,11 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
   let runPrompt = prompt;
   let failovers = 0;
   const touched = new Set();
-  const failed = (code, message) => ({
+  const failed = (code, message, detail = null) => ({
     ...base,
     status: "failed",
     code,
+    detail,
     message,
     jobId: job.id,
     threadId,
@@ -1299,7 +1300,7 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
         await session.request("await_failover", { lease_id: leaseId });
       }
     } catch (error) {
-      return failed(error.code ?? "GSWITCH_UNAVAILABLE", error.message);
+      return failed(error.code ?? "GSWITCH_UNAVAILABLE", error.message, error.detail ?? null);
     }
 
     failovers += 1;

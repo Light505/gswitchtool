@@ -18,8 +18,8 @@ const ERROR_MESSAGES = {
   MODEL_NOT_ALLOWED: "That Codex model is not in the allowed Invoke profiles. Run invoke-status and choose an allowed model.",
   REASONING_NOT_ALLOWED:
     "That reasoning effort is not allowed for the chosen model. Run invoke-status and choose an allowed effort.",
-  CURRENT_ACCOUNT_NOT_SAVED:
-    "The Codex account ran out, but Codex is signed in to an account that is not saved in GSwitch, so it could not switch. Ask the user to save the current account in GSwitch.",
+  CURRENT_ACCOUNT_UNKNOWN:
+    "The Codex account ran out, but GSwitch cannot identify the account Codex is using (it may not be saved, or an earlier switch needs recovery in GSwitch), so it did not switch. Tell the user to check GSwitch.",
   EXTERNAL_CODEX_RUNNING:
     "The Codex account ran out, but the user's own Codex stayed open or the user cancelled the switch in GSwitch, so accounts were not switched. Tell the user.",
   CODEX_SHUTDOWN_FAILED: "The Codex account ran out, but Codex did not stop for the account switch. Tell the user.",
@@ -36,9 +36,12 @@ const ERROR_MESSAGES = {
 };
 
 export class GSwitchError extends Error {
-  constructor(code) {
-    super(ERROR_MESSAGES[code] ?? ERROR_MESSAGES.UNAVAILABLE);
+  constructor(code, detail = null) {
+    const message = ERROR_MESSAGES[code] ?? ERROR_MESSAGES.UNAVAILABLE;
+    // GSwitch adds its switch transaction's reason for a refused switch.
+    super(detail ? `${message} GSwitch reason: ${detail}.` : message);
     this.code = ERROR_MESSAGES[code] ? code : "UNAVAILABLE";
+    this.detail = detail;
   }
 }
 
@@ -184,7 +187,7 @@ export class GSwitchSession {
         continue;
       }
       if (message.error) {
-        pending.reject(new GSwitchError(message.error.code));
+        pending.reject(new GSwitchError(message.error.code, message.error.detail ?? null));
       } else {
         pending.resolve(message.result ?? {});
       }
