@@ -24,6 +24,12 @@ Desktop compilation without producing an installer:
 pnpm tauri build --no-bundle
 ```
 
+This builds the dev identity, **GSwitch Claude Tool (Dev)**. Run the app from
+`dev` with `pnpm run app:dev` (a release-profile build: an unoptimized build
+makes vault commits take minutes). It shares accounts and settings with the
+installed app and refuses to start while the installed app is open. Installers
+come only from `main` through `pnpm run build:installer`.
+
 Release configuration checks:
 
 ```bash

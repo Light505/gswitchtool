@@ -18,9 +18,22 @@ mod types;
 mod vault;
 mod wake;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use tauri::{Emitter, Manager};
+
+/// The installed build and the dev build (`com.light505.gswitchtool.dev`) keep
+/// one data folder, named after the installed build, so their accounts and
+/// settings are the same; `storage::acquire_app_instance` keeps them from
+/// running at the same time.
+const SHARED_DATA_IDENTIFIER: &str = "com.light505.gswitchtool";
+
+fn shared_data_dir(own_config_dir: PathBuf) -> PathBuf {
+    match own_config_dir.parent() {
+        Some(parent) => parent.join(SHARED_DATA_IDENTIFIER),
+        None => own_config_dir,
+    }
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -40,7 +53,28 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let config_dir = app.path().app_config_dir()?;
+            let config_dir = shared_data_dir(app.path().app_config_dir()?);
+            let name = app.package_info().name.clone();
+            match storage::acquire_app_instance(&config_dir, &name)
+                .map_err(std::io::Error::other)?
+            {
+                storage::AppInstance::Acquired(lock) => {
+                    app.manage(lock);
+                }
+                storage::AppInstance::HeldBy(running) => {
+                    let running = running.unwrap_or_else(|| "Another GSwitch Claude Tool".into());
+                    rfd::MessageDialog::new()
+                        .set_level(rfd::MessageLevel::Info)
+                        .set_title(&name)
+                        .set_description(format!(
+                            "{running} is already open. Close it before opening {name}; \
+                             both use the same accounts and settings."
+                        ))
+                        .set_buttons(rfd::MessageButtons::Ok)
+                        .show();
+                    std::process::exit(0);
+                }
+            }
             let state = accounts::AppState::new(config_dir.join("accounts.json"))
                 .map_err(std::io::Error::other)?;
             app.manage(state.clone());
@@ -129,4 +163,22 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running GSwitch");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installed_and_dev_builds_share_one_data_folder() {
+        let roaming = PathBuf::from("roaming");
+        assert_eq!(
+            shared_data_dir(roaming.join("com.light505.gswitchtool.dev")),
+            roaming.join("com.light505.gswitchtool")
+        );
+        assert_eq!(
+            shared_data_dir(roaming.join("com.light505.gswitchtool")),
+            roaming.join("com.light505.gswitchtool")
+        );
+    }
 }

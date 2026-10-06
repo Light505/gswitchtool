@@ -21,6 +21,7 @@ fs2 = "0.4"
 getrandom = { version = "0.4", features = ["std"] }
 iota_stronghold = "=2.1.0"
 keyring = { version = "=4.2.0", default-features = false, features = ["v1"] }
+rfd = { version = "0.16", default-features = false }
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 serde = { version = "1", features = ["derive"] }

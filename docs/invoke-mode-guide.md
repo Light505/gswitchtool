@@ -39,14 +39,20 @@ git clone https://github.com/Light505/gswitchtool.git
 cd gswitchtool
 npm install -g pnpm@10.17.1
 pnpm install --frozen-lockfile
-pnpm tauri build
+pnpm run build:installer
 ```
 
-The installer is written to
+`build:installer` builds only from a clean, up-to-date `main`, so the installed
+app is always a reviewed version. The installer is written to
 `src-tauri/target/release/bundle/nsis/GSwitch Claude Tool_<version>_x64-setup.exe`.
-Run it to install **GSwitch Claude Tool**. It does not update itself; to update,
-pull the repository and build again. Its accounts and settings are separate from any
-upstream GSwitch installed on the same computer.
+Run it to install **GSwitch Claude Tool**.
+
+It does not update itself. To update, close GSwitch Claude Tool, then
+`git checkout main && git pull`, `pnpm install --frozen-lockfile`,
+`pnpm run build:installer`, and run the new installer over the old one; there is
+no need to uninstall. Accounts and settings are kept in your user profile, not
+in the install folder, so updating or reinstalling keeps them. They are separate
+from any upstream GSwitch installed on the same computer.
 
 ## 2. Add your accounts
 
@@ -84,9 +90,16 @@ plugin, so remove that one first if you installed it.
 /plugin install codex@gswitchtool
 ```
 
-To install from a local copy instead, use the folder path:
-`/plugin marketplace add C:\path\to\gswitchtool`. Start a new Claude Code session
-after installing or updating the plugin.
+This installs the plugin from GitHub `main`. To update it after `main` changes:
+
+```
+/plugin marketplace update gswitchtool
+/plugin update codex@gswitchtool
+```
+
+Start a new Claude Code session after installing or updating the plugin. To try
+plugin changes that are not on `main` yet, see
+[Working on the tool](#working-on-the-tool).
 
 ## 5. Use it in Claude Code
 
@@ -154,7 +167,40 @@ with the thread so the work can continue later.
 | `CURRENT_ACCOUNT_UNKNOWN` | Save the account Codex is using in GSwitch, or finish **Review recovery** if GSwitch shows it. |
 | The GSwitch window freezes while opening | Close it, end any leftover `msedgewebview2.exe` processes for GSwitch Claude Tool in Task Manager, and open it again. |
 | Claude does not see a plugin change | Start a new Claude Code session. |
+| *… is already open. Close it before opening …* | The installed app and the dev app share accounts, so only one runs at a time. Close the one that is open. |
 | Building fails while downloading libsodium | Some networks block its plain-HTTP download. Download `LATEST.tar.gz`, `libsodium-1.0.22-stable-msvc.zip`, and their `.minisig` files from https://download.libsodium.org/libsodium/releases/ into one folder and set `SODIUM_DIST_DIR` to it; the build still checks their signatures. |
+
+## Working on the tool
+
+Changes are made on the `dev` branch and reach the installed app only through
+`main` and `pnpm run build:installer`. To try them before that:
+
+**The app.** Close GSwitch Claude Tool, then run this on `dev`:
+
+```bash
+pnpm run app:dev
+```
+
+It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. It
+uses the same accounts and Invoke settings as the installed app, so anything you
+add or change in one appears in the other. Only one of them can be open at a
+time; opening the second shows a message naming the one to close. The Claude
+Code plugin talks to whichever is open.
+
+If a dev change upgrades the account file format, an older installed app cannot
+read that file until the change reaches `main` and is installed.
+
+**The plugin.** Start Claude Code from a terminal with the repository's copy of
+the plugin instead of the installed one. In the repository folder:
+
+```bash
+claude --plugin-dir integrations/codex-plugin-cc/plugins/codex --settings scripts/claude-dev-settings.json
+```
+
+`--plugin-dir` loads the plugin from your checkout for that session only, and
+the settings file turns off the installed `codex@gswitchtool` for that session so
+the two do not clash. Other sessions keep using the installed plugin. Start a new
+session to pick up further changes.
 
 ## Sharing with colleagues
 

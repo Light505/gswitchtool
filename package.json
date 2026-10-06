@@ -12,7 +12,9 @@
     "tauri": "tauri",
     "bundle:linux": "tauri build --bundles appimage,deb",
     "version:sync": "node scripts/sync-version.mjs",
-    "version:check": "node scripts/sync-version.mjs --check"
+    "version:check": "node scripts/sync-version.mjs --check",
+    "build:installer": "node scripts/build-installer.mjs",
+    "app:dev": "tauri dev --release"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",

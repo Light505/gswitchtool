@@ -128,7 +128,11 @@ Credential-affecting operations are serialized by an in-process mutex and a
 cross-process file lock. GSwitch also runs as a single instance, because a
 second process would act on its own stale in-memory copy of the store and could
 overwrite a pending reset record or point metadata at a retired secret
-generation. A new secret generation is durably written and
+generation. The installed and dev builds of GSwitch Claude Tool have different
+identifiers but share one data folder, so the single-instance plugin alone
+cannot separate them; an exclusive `app-instance.lock` in that folder, held for
+the life of the process, does, and the second build exits with a message naming
+the first. A new secret generation is durably written and
 readable in the vault before metadata points at it; metadata commits before an
 old reachable generation can be retired. Persist metadata successfully before
 changing its in-memory projection. Startup hydration and legacy migration hold

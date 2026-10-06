@@ -115,6 +115,42 @@ pub fn preserve_damaged_store(path: &Path, recovery_dir: &Path) -> Result<(), St
     }
 }
 
+/// Held for the life of the app. The installed and dev builds share one data
+/// folder, and each keeps its own in-memory copy of the account store, so only
+/// one of them may run at a time.
+pub struct AppInstanceLock {
+    _file: fs::File,
+}
+
+pub enum AppInstance {
+    Acquired(AppInstanceLock),
+    /// Another build already runs; carries the name it recorded, if readable.
+    HeldBy(Option<String>),
+}
+
+pub fn acquire_app_instance(data_dir: &Path, name: &str) -> Result<AppInstance, String> {
+    use fs2::FileExt;
+
+    fs::create_dir_all(data_dir).map_err(|_| "Unable to prepare GSwitch storage".to_string())?;
+    let file = fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(data_dir.join("app-instance.lock"))
+        .map_err(|_| "Unable to open the GSwitch instance lock".to_string())?;
+    let name_path = data_dir.join("app-instance.name");
+    if file.try_lock_exclusive().is_err() {
+        let running = fs::read_to_string(&name_path)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+        return Ok(AppInstance::HeldBy(running));
+    }
+    let _ = fs::write(&name_path, name);
+    Ok(AppInstance::Acquired(AppInstanceLock { _file: file }))
+}
+
 pub fn read_json(path: &Path, label: &str) -> Result<Value, String> {
     let content = fs::read_to_string(path).map_err(|_| format!("Unable to read {label}"))?;
     deserialize(&content, label)
@@ -165,6 +201,27 @@ mod tests {
     use super::*;
     use crate::types::{AccountIdentity, AccountKind, PendingResetCredit, StoredAccount};
     use serde_json::json;
+
+    #[test]
+    fn only_one_build_can_use_the_shared_data_folder_at_a_time() {
+        let dir = std::env::temp_dir().join(format!("gswitch-instance-{}", Uuid::new_v4()));
+        let first = match acquire_app_instance(&dir, "GSwitch Claude Tool").expect("lock") {
+            AppInstance::Acquired(lock) => lock,
+            AppInstance::HeldBy(_) => panic!("the first build must get the lock"),
+        };
+        match acquire_app_instance(&dir, "GSwitch Claude Tool (Dev)").expect("lock") {
+            AppInstance::HeldBy(running) => {
+                assert_eq!(running.as_deref(), Some("GSwitch Claude Tool"))
+            }
+            AppInstance::Acquired(_) => panic!("a second build must not run at the same time"),
+        }
+        drop(first);
+        assert!(matches!(
+            acquire_app_instance(&dir, "GSwitch Claude Tool (Dev)").expect("lock"),
+            AppInstance::Acquired(_)
+        ));
+        let _ = fs::remove_dir_all(dir);
+    }
     use std::{
         env,
         time::{SystemTime, UNIX_EPOCH},

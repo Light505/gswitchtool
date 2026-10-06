@@ -6,10 +6,18 @@ this document supplies the checks and sequence, not another approval step.
 
 ## Fork distribution
 
-GSwitch Claude Tool is private and has no release channel. Builds come from
-`pnpm tauri build` on a user's machine, and the bundled updater has no
+GSwitch Claude Tool is private and has no release channel. Installers come from
+`pnpm run build:installer` on a user's machine, which refuses to build anything
+but a clean `main` that is not behind GitHub. The bundled updater has no
 endpoint, so a build never downloads an update, including upstream GSwitch
-releases. The upstream release workflow and scripts below name upstream's
+releases.
+
+`src-tauri/tauri.conf.json` is the dev identity, **GSwitch Claude Tool (Dev)**
+(`com.light505.gswitchtool.dev`), used by `pnpm run app:dev` and plain
+`pnpm tauri build`. `build:installer` adds `src-tauri/tauri.main.conf.json`,
+the installed identity **GSwitch Claude Tool** (`com.light505.gswitchtool`), so
+a dev build never installs over or replaces the installed app. Both identities
+use the installed identity's data folder. The upstream release workflow and scripts below name upstream's
 artifacts and need upstream's signing setup; they are not used for this fork.
 
 ## Current release policy

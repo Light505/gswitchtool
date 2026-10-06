@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "GSwitch Claude Tool",
+  "productName": "GSwitch Claude Tool (Dev)",
   "version": "1.0.24",
-  "identifier": "com.light505.gswitchtool",
+  "identifier": "com.light505.gswitchtool.dev",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "GSwitch Claude Tool",
+        "title": "GSwitch Claude Tool (Dev)",
         "width": 1360,
         "height": 900,
         "minWidth": 700,
@@ -56,7 +56,7 @@
           "SimpChinese"
         ],
         "installMode": "currentUser",
-        "startMenuFolder": "GSwitch Claude Tool"
+        "startMenuFolder": "GSwitch Claude Tool (Dev)"
       }
     },
     "macOS": {
