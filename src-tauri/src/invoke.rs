@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use crate::{
     app_server::{AppServer, TempCodexHome},
     storage,
-    types::{CatalogModel, InvocationProfile, InvokeSettings},
+    types::{CatalogModel, InvocationProfile, InvokeSettings, MAX_CONCURRENT_TASKS_LIMIT},
 };
 
 const SETTINGS_LABEL: &str = "Invoke Mode settings";
@@ -76,6 +76,34 @@ impl InvokeState {
     ) -> Result<InvokeSettings, String> {
         let profiles = normalize_profiles(requested, catalog)?;
         self.update(|settings| settings.allowed_invocation_profiles = profiles)
+    }
+
+    /// Sets the account order, the usage a preferred account must have left,
+    /// and how many Codex tasks may run at once.
+    pub fn set_preferences(
+        &self,
+        account_priority: Vec<String>,
+        preferred_min_remaining: u8,
+        max_concurrent_tasks: u8,
+    ) -> Result<InvokeSettings, String> {
+        if preferred_min_remaining > 90 {
+            return Err("Choose a usage threshold from 0% to 90%".to_string());
+        }
+        if !(1..=MAX_CONCURRENT_TASKS_LIMIT).contains(&max_concurrent_tasks) {
+            return Err(format!(
+                "Choose from 1 to {MAX_CONCURRENT_TASKS_LIMIT} Codex tasks at once"
+            ));
+        }
+        let mut seen = std::collections::HashSet::new();
+        let account_priority = account_priority
+            .into_iter()
+            .filter(|id| !id.is_empty() && seen.insert(id.clone()))
+            .collect::<Vec<_>>();
+        self.update(|settings| {
+            settings.account_priority = account_priority;
+            settings.preferred_min_remaining = preferred_min_remaining;
+            settings.max_concurrent_tasks = max_concurrent_tasks;
+        })
     }
 
     /// Checks one delegation request exactly against the human's policy. It
@@ -277,6 +305,59 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[test]
+    fn preferences_keep_one_entry_per_account_and_stay_in_range() {
+        let path = temp_path("preferences");
+        let state = InvokeState::load(path.clone());
+        let defaults = state.settings().expect("settings");
+        assert_eq!(
+            (
+                defaults.preferred_min_remaining,
+                defaults.max_concurrent_tasks
+            ),
+            (20, 2)
+        );
+
+        let saved = state
+            .set_preferences(
+                vec!["b".into(), "a".into(), "b".into(), String::new()],
+                35,
+                3,
+            )
+            .expect("save");
+        assert_eq!(
+            saved.account_priority,
+            vec!["b".to_string(), "a".to_string()]
+        );
+        assert_eq!(
+            (saved.preferred_min_remaining, saved.max_concurrent_tasks),
+            (35, 3)
+        );
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().expect("reload"),
+            saved
+        );
+
+        assert!(state.set_preferences(Vec::new(), 91, 2).is_err());
+        assert!(state.set_preferences(Vec::new(), 20, 0).is_err());
+        assert!(state.set_preferences(Vec::new(), 20, 7).is_err());
+        assert_eq!(state.settings().expect("unchanged"), saved);
+
+        // A policy file from an older version gets the defaults.
+        std::fs::write(
+            &path,
+            r#"{"invoke_mode":true,"allowed_invocation_profiles":[]}"#,
+        )
+        .expect("write");
+        let older = InvokeState::load(path.clone()).settings().expect("older");
+        assert!(older.invoke_mode);
+        assert_eq!(
+            (older.preferred_min_remaining, older.max_concurrent_tasks),
+            (20, 2)
+        );
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
+
     fn temp_path(name: &str) -> PathBuf {
         let suffix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -322,6 +403,7 @@ mod tests {
         InvokeSettings {
             invoke_mode: true,
             allowed_invocation_profiles: profiles,
+            ..InvokeSettings::default()
         }
     }
 

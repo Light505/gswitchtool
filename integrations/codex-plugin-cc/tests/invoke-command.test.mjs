@@ -31,7 +31,8 @@ async function startFakeGSwitch({
   manualAfterLease = false,
   waitingForCodex = false,
   failoverDetail = null,
-  paused = null
+  paused = null,
+  maxTasks = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -52,7 +53,8 @@ async function startFakeGSwitch({
           workers_running: 0,
           failover_in_progress: waitingForCodex,
           ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
-          ...(paused ? { paused } : {})
+          ...(paused ? { paused } : {}),
+          ...(maxTasks ? { max_concurrent_tasks: maxTasks } : {})
         });
       case "lease_open": {
         if (!policy.invokeMode) return fail("INVOKE_MODE_DISABLED");
@@ -163,6 +165,13 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
     const text = await companion(["invoke-status"], ctx);
     assert.match(text.stdout, /- model-a: high, xhigh/);
     assert.match(text.stdout, /- model-b: medium/);
+  }));
+
+test("invoke-status tells Claude how many Codex tasks GSwitch runs at once", () =>
+  withGSwitch({ maxTasks: 3 }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /GSwitch runs at most 3 Codex tasks at once; more wait their turn./);
   }));
 
 test("invoke-status tells Claude not to delegate in Manual Mode", () =>

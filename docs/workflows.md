@@ -447,9 +447,11 @@ error on a worker's turn. GSwitch then:
    refuses to continue if any remain;
 3. checks Invoke Mode again, reads the quota of every ChatGPT account the user
    allowed in Invoke Mode that is signed in and is not the exhausted account,
-   and picks the one with the most usable capacity: the provider must allow
-   ordinary use, no Codex window may be at zero, and the score is the smallest
-   remaining percentage; ties keep account order;
+   and picks one. An account is usable when the provider allows ordinary use
+   and no Codex window is at zero; its score is the smallest remaining
+   percentage. With the user's account order, the first usable account whose
+   score reaches the preferred threshold wins; without an order, or when no
+   account reaches it, the highest score wins, ties keeping the order;
 4. if a Codex the user opened is running (the app, the CLI, or an IDE
    extension), never stops it: as with a manual switch, the window asks the
    user to quit Codex, names both accounts, and requests attention. The
@@ -471,6 +473,17 @@ with its original model, effort, sandbox, and working directory, sending a fixed
 continuation message. A run stopped before its thread existed starts over with
 the original task. After three failovers in one invocation, the worker reports
 the usage limit instead of continuing.
+
+Invoke settings also hold an account order, the preferred threshold (default
+20% of each window left), and how many Codex tasks may run at once (default 2,
+up to 6). A task that would exceed the limit waits for a free slot without a
+time limit; closing its connection gives up. When a task starts while no other
+runs, and at most every ten minutes, GSwitch reads quota in the user's order
+until it finds an account at or above the threshold. If that is not the live
+account, it switches to it through the normal switch transaction, reporting the
+switch as a priority switch. It never waits for the user here: with the user's
+own Codex open, or a refused switch, the task runs on the current account. A
+running task is never switched away by another task's start.
 
 When no allowed account has usable quota, GSwitch pauses Invoke Mode. The pause
 records when the first account can use Codex again: for each allowed account and

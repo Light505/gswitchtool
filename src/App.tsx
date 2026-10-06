@@ -8,6 +8,8 @@ import {
   CircleAlert,
   CircleCheck,
   Copy,
+  ChevronDown,
+  ChevronUp,
   CircleArrowUp,
   Download,
   FileJson,
@@ -1175,12 +1177,39 @@ function UpdateNotice({
 
 // The whitelist is a set of model/effort pairs: efforts differ per model, so
 // each model lists only the efforts the installed Codex reports for it.
-function InvokeSettingsDialog({ settings, onClose, onSaved, t }: {
+/** Saved ChatGPT accounts in the user's Invoke order; unlisted ones follow. */
+function orderedAccounts(accounts: AccountView[], priority: string[]) {
+  const rank = (account: AccountView) => {
+    const index = priority.indexOf(account.id);
+    return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+  };
+  return accounts.map((account, index) => ({ account, index })).sort((left, right) =>
+    rank(left.account) - rank(right.account) || left.index - right.index,
+  ).map(({ account }) => account);
+}
+
+function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   settings: InvokeSettings;
+  accounts: AccountView[];
   onClose: () => void;
   onSaved: (settings: InvokeSettings) => void;
   t: Translator;
 }) {
+  const [order, setOrder] = useState<AccountView[]>(() => orderedAccounts(accounts, settings.account_priority ?? []));
+  const [minRemaining, setMinRemaining] = useState(String(settings.preferred_min_remaining ?? 20));
+  const [maxTasks, setMaxTasks] = useState(String(settings.max_concurrent_tasks ?? 2));
+  const move = (index: number, offset: number) => {
+    setOrder((current) => {
+      const next = [...current];
+      const [account] = next.splice(index, 1);
+      next.splice(index + offset, 0, account);
+      return next;
+    });
+  };
+  const clamp = (value: string, min: number, max: number, fallback: number) => {
+    const number = Math.round(Number(value));
+    return Number.isFinite(number) && value.trim() !== "" ? Math.min(max, Math.max(min, number)) : fallback;
+  };
   const [catalog, setCatalog] = useState<CatalogModel[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1224,7 +1253,12 @@ function InvokeSettingsDialog({ settings, onClose, onSaved, t }: {
     setSaving(true);
     setSaveError(null);
     try {
-      onSaved(await api.setInvokeProfiles(profiles));
+      await api.setInvokeProfiles(profiles);
+      onSaved(await api.setInvokePreferences(
+        order.map((account) => account.id),
+        clamp(minRemaining, 0, 90, 20),
+        clamp(maxTasks, 1, 6, 2),
+      ));
     } catch {
       setSaveError(t("error.invokeSave"));
     } finally {
@@ -1235,6 +1269,7 @@ function InvokeSettingsDialog({ settings, onClose, onSaved, t }: {
   return (
     <Modal dismissible={!saving} onClose={onClose} t={t} title={t("invoke.settings")} wide>
       <div className="invoke-panel">
+        <h3>{t("invoke.modelsTitle")}</h3>
         <p>{t("invoke.modelsIntro")}</p>
         {loadingModels && !catalog ? (
           <p className="invoke-loading" role="status"><LoaderCircle className="spin" size={15} />{t("invoke.loadingModels")}</p>
@@ -1267,6 +1302,43 @@ function InvokeSettingsDialog({ settings, onClose, onSaved, t }: {
             ))}
           </ul>
         ) : null}
+        <h3>{t("invoke.accountsTitle")}</h3>
+        <p>{t("invoke.orderIntro")}</p>
+        {order.length ? (
+          <ol className="invoke-order">
+            {order.map((account, index) => {
+              const name = accountPrimaryName(account);
+              return (
+                <li key={account.id}>
+                  <span className="invoke-order-rank">{index + 1}</span>
+                  <span className="invoke-order-name" title={name}>{name}</span>
+                  <span className="badge">{accountPlan(account, t)}</span>
+                  {account.invoke_allowed ? null : <span className="badge badge-muted">{t("invoke.notAllowed")}</span>}
+                  <span className="invoke-order-actions">
+                    <button aria-label={t("invoke.moveUp", { name })} className="icon-button" disabled={saving || index === 0} onClick={() => move(index, -1)} type="button"><ChevronUp size={15} /></button>
+                    <button aria-label={t("invoke.moveDown", { name })} className="icon-button" disabled={saving || index === order.length - 1} onClick={() => move(index, 1)} type="button"><ChevronDown size={15} /></button>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        ) : <p>{t("invoke.orderEmpty")}</p>}
+        <div className="invoke-limits">
+          <label>
+            <span>{t("invoke.minRemaining")}</span>
+            <span className="invoke-limit-input">
+              <input disabled={saving} inputMode="numeric" max={90} min={0} onChange={(event) => setMinRemaining(event.target.value)} step={5} type="number" value={minRemaining} />
+              <small>{t("invoke.minRemainingHint")}</small>
+            </span>
+          </label>
+          <label>
+            <span>{t("invoke.maxTasks")}</span>
+            <span className="invoke-limit-input">
+              <input disabled={saving} inputMode="numeric" max={6} min={1} onChange={(event) => setMaxTasks(event.target.value)} type="number" value={maxTasks} />
+              <small>{t("invoke.maxTasksHint")}</small>
+            </span>
+          </label>
+        </div>
         {saveError ? <p className="remove-error" role="alert">{saveError}</p> : null}
         <div className="modal-actions">
           <button className="button button-quiet" disabled={loadingModels || saving} onClick={() => void loadModels(true)} type="button">
@@ -1579,12 +1651,15 @@ export default function App() {
     let disposed = false;
     void (async () => {
       try {
-        const unlisten = await api.onInvokeAccountSwitched(({ from, to }) => {
+        const unlisten = await api.onInvokeAccountSwitched(({ from, to, reason }) => {
           const name = (id: string) => {
             const account = accountsRef.current.find((saved) => saved.id === id);
             return account ? accountPrimaryName(account) : t("common.unknown");
           };
-          setNotice({ kind: "info", text: t("invoke.switched", { from: name(from), to: name(to) }) });
+          setNotice({
+            kind: "info",
+            text: t(reason === "priority" ? "invoke.switchedPriority" : "invoke.switched", { from: name(from), to: name(to) }),
+          });
           void loadSnapshot();
         });
         if (disposed) unlisten();
@@ -3322,6 +3397,7 @@ export default function App() {
 
       {dialog === "invoke-settings" && invokeSettings ? (
         <InvokeSettingsDialog
+          accounts={accounts.filter((account) => account.kind === "chat_gpt")}
           onClose={() => setDialog(null)}
           onSaved={(saved) => {
             setInvokeSettings(saved);

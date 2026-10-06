@@ -22,6 +22,11 @@ export interface InvocationProfile {
 export interface InvokeSettings {
   invoke_mode: boolean;
   allowed_invocation_profiles: InvocationProfile[];
+  /** Saved-account IDs, most preferred first. */
+  account_priority?: string[];
+  /** Percent of each usage window a preferred account must have left. */
+  preferred_min_remaining?: number;
+  max_concurrent_tasks?: number;
 }
 
 export interface SwitchAccounts {

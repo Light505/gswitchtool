@@ -130,10 +130,10 @@ pub fn run() {
                     state,
                     invoke: invoke.clone(),
                     // The window reloads its accounts and names both accounts.
-                    on_switched: Box::new(move |from, to| {
+                    on_switched: Box::new(move |from, to, reason| {
                         let _ = switched.emit(
                             "invoke-account-switched",
-                            serde_json::json!({ "from": from, "to": to }),
+                            serde_json::json!({ "from": from, "to": to, "reason": reason }),
                         );
                     }),
                     // A switch blocked by a Codex the user opened asks the user
@@ -218,6 +218,7 @@ pub fn run() {
             commands::set_invoke_mode,
             commands::get_model_catalog,
             commands::set_invoke_profiles,
+            commands::set_invoke_preferences,
             commands::set_account_invoke_allowed,
             commands::get_invoke_failover,
             commands::cancel_invoke_failover,

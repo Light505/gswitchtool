@@ -98,6 +98,14 @@ Credentials stay encrypted on your computer. Claude never sees them.
 3. On each account card, turn on **Allow in Invoke Mode** for the accounts GSwitch
    may switch to automatically. An account you leave off is never used
    automatically, whatever its quota.
+4. Under **Accounts** in Invoke settings, put the accounts in the order you want
+   them used, for example your larger plan first. GSwitch uses the first account
+   that still has **Enough usage left** (20% of each usage window by default):
+   before a task starts while nothing else runs, it switches to that account, and
+   when an account runs out it switches to the next one in order. If none has
+   enough, it takes the one with the most usage left.
+5. **Codex tasks at once** (default 2) caps how many delegated tasks Claude can
+   run in parallel; more wait their turn.
 
 Keep GSwitch Claude Tool open while you use Invoke Mode. Switching back to
 **Manual** turns everything off: Claude cannot use Codex through GSwitch and no
@@ -151,8 +159,9 @@ model allowlist and no account switching.
 When Codex reports that the active account has used up its quota, GSwitch:
 
 1. pauses the Codex work it is running;
-2. picks the allowed account with the most usable quota, never one you have not
-   allowed and never the account that just ran out;
+2. picks the next allowed account in your order that has enough usage left (or,
+   without an order, the one with the most), never one you have not allowed and
+   never the account that just ran out;
 3. if you have Codex open yourself (the app, the CLI, or an IDE extension), shows
    **Close Codex to continue** in its window. Close Codex and it carries on, or
    choose **Cancel switch**;

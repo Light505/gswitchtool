@@ -73,6 +73,36 @@ pub struct InvokePause {
     pub resumes_at: Option<i64>,
 }
 
+/// Why Invoke Mode switched the Codex account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwitchReason {
+    /// The account ran out of Codex usage.
+    UsageLimit,
+    /// A higher-priority account has the preferred usage left.
+    Priority,
+}
+
+/// The user's account order and limits from Invoke settings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Preferences {
+    /// Saved-account IDs, most preferred first. Empty means no preference:
+    /// a failover then picks the most usable capacity.
+    pub account_priority: Vec<String>,
+    pub preferred_min_remaining: u8,
+    pub max_concurrent_tasks: u8,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            account_priority: Vec::new(),
+            preferred_min_remaining: crate::types::DEFAULT_PREFERRED_MIN_REMAINING,
+            max_concurrent_tasks: crate::types::DEFAULT_MAX_CONCURRENT_TASKS,
+        }
+    }
+}
+
 /// The configuration a worker's Codex thread must keep across a failover.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeaseRequest {
@@ -123,6 +153,9 @@ struct Inner {
     waiting_for_codex: Option<SwitchAccounts>,
     cancel_requested: bool,
     paused: Option<InvokePause>,
+    /// Set while a task's start checks for a preferred account.
+    preferring: bool,
+    last_preference: Option<Instant>,
 }
 
 struct FailoverOutcome {
@@ -165,7 +198,8 @@ pub trait FailoverOps: Send + Sync {
     fn other_codex_running(&self) -> bool;
     /// Asks the user to close Codex (`Some`) or withdraws that request.
     fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>);
-    fn switched(&self, from: &str, to: &str);
+    fn switched(&self, from: &str, to: &str, reason: SwitchReason);
+    fn preferences(&self) -> Preferences;
     /// Reports that Invoke Mode paused (`Some`) or was resumed.
     fn paused(&self, pause: Option<&InvokePause>);
     fn now_unix(&self) -> i64 {
@@ -187,6 +221,8 @@ pub struct Timings {
     /// How long a failover waits for the user to close Codex.
     pub user_close: Duration,
     pub poll: Duration,
+    /// How often a task's start may look for a preferred account.
+    pub preference_interval: Duration,
 }
 
 impl Default for Timings {
@@ -197,6 +233,7 @@ impl Default for Timings {
             wait: Duration::from_secs(15 * 60),
             user_close: Duration::from_secs(10 * 60),
             poll: Duration::from_millis(100),
+            preference_interval: Duration::from_secs(10 * 60),
         }
     }
 }
@@ -267,27 +304,132 @@ impl Coordinator {
         id
     }
 
-    /// Lets a worker start Codex once no failover is running.
-    pub async fn begin_run(&self, lease_id: &str) -> Result<(), FailoverCode> {
-        self.wait_until(|inner| {
-            if !inner.leases.contains_key(lease_id) {
-                return Err(FailoverCode::UnknownLease);
+    /// Lets a worker start Codex once no failover is running and a task slot
+    /// is free. The first task to start while nothing runs may first move
+    /// Codex to the preferred account. Waiting for a slot has no time limit:
+    /// the worker can always give up by closing its connection.
+    pub async fn begin_run(self: &Arc<Self>, lease_id: &str) -> Result<(), FailoverCode> {
+        enum Next {
+            Started,
+            Prefer,
+            Full,
+        }
+        let deadline = tokio::time::Instant::now() + self.timings.wait;
+        // One start checks for a preferred account at most once.
+        let mut preferred = false;
+        loop {
+            // Subscribe before checking, so a change in between is not missed.
+            let mut changes = self.changed.subscribe();
+            let next = {
+                let mut guard = self.lock();
+                let inner = &mut *guard;
+                if !inner.leases.contains_key(lease_id) {
+                    return Err(FailoverCode::UnknownLease);
+                }
+                if inner.replacing.is_some() || inner.preferring {
+                    None
+                } else if self.current_pause(inner).is_some() {
+                    return Err(FailoverCode::InvokePaused);
+                } else {
+                    let active = inner
+                        .leases
+                        .iter()
+                        .filter(|(id, lease)| {
+                            id.as_str() != lease_id && lease.run != RunState::Idle
+                        })
+                        .count();
+                    let preferences = self.ops.preferences();
+                    if active >= usize::from(preferences.max_concurrent_tasks.max(1)) {
+                        Some(Next::Full)
+                    } else if active == 0
+                        && !preferred
+                        && !preferences.account_priority.is_empty()
+                        && inner
+                            .last_preference
+                            .is_none_or(|at| at.elapsed() >= self.timings.preference_interval)
+                    {
+                        inner.preferring = true;
+                        Some(Next::Prefer)
+                    } else {
+                        let account = self.ops.active_account();
+                        let lease = inner
+                            .leases
+                            .get_mut(lease_id)
+                            .ok_or(FailoverCode::UnknownLease)?;
+                        lease.run = RunState::Starting;
+                        lease.account = account;
+                        Some(Next::Started)
+                    }
+                }
+            };
+            match next {
+                Some(Next::Started) => {
+                    self.notify();
+                    return Ok(());
+                }
+                Some(Next::Prefer) => {
+                    preferred = true;
+                    let coordinator = Arc::clone(self);
+                    let _ = tokio::task::spawn_blocking(move || coordinator.prefer_account()).await;
+                    let mut inner = self.lock();
+                    inner.preferring = false;
+                    inner.last_preference = Some(Instant::now());
+                    drop(inner);
+                    self.notify();
+                }
+                Some(Next::Full) => {
+                    let _ = changes.changed().await;
+                }
+                None => {
+                    if tokio::time::timeout_at(deadline, changes.changed())
+                        .await
+                        .is_err()
+                    {
+                        return Err(FailoverCode::Unavailable);
+                    }
+                }
             }
-            if inner.replacing.is_some() {
-                return Ok(None);
+        }
+    }
+
+    /// Moves Codex to the highest-priority account that has the preferred
+    /// usage left, if that is not the current one. It never waits for the
+    /// user: with their Codex open, or a refused switch, the task simply runs
+    /// on the current account.
+    fn prefer_account(&self) {
+        if !self.ops.invoke_mode() {
+            return;
+        }
+        let Some(live) = self.ops.active_account() else {
+            return;
+        };
+        let preferences = self.ops.preferences();
+        let accounts = self.ops.accounts();
+        let candidates = by_priority(
+            accounts
+                .iter()
+                .filter(|account| account.id == live || preferable(account)),
+            &preferences.account_priority,
+        );
+        for account in candidates {
+            let enough = self
+                .ops
+                .read_quota(&account.id)
+                .as_ref()
+                .and_then(usable_capacity)
+                .is_some_and(|score| score >= preferences.preferred_min_remaining);
+            if !enough {
+                continue;
             }
-            if self.current_pause(inner).is_some() {
-                return Err(FailoverCode::InvokePaused);
+            if account.id == live || self.ops.other_codex_running() {
+                return;
             }
-            let lease = inner
-                .leases
-                .get_mut(lease_id)
-                .ok_or(FailoverCode::UnknownLease)?;
-            lease.run = RunState::Starting;
-            lease.account = self.ops.active_account();
-            Ok(Some(()))
-        })
-        .await
+            if self.ops.switch_to(&account.id).is_ok() {
+                self.ops
+                    .switched(&live, &account.id, SwitchReason::Priority);
+            }
+            return;
+        }
     }
 
     /// Records the worker's App Server. One that starts during a failover is
@@ -528,7 +670,7 @@ impl Coordinator {
                 (account, quota)
             })
             .collect::<Vec<_>>();
-        let Some(target) = select_account(&candidates, exhausted) else {
+        let Some(target) = select_account(&candidates, exhausted, &self.ops.preferences()) else {
             // Nothing can take over: pause until the first of these accounts,
             // or the one that ran out, can use Codex again.
             let mut quotas = candidates
@@ -556,7 +698,8 @@ impl Coordinator {
                 Err(refusal) if refusal.code == FailoverCode::ExternalCodexRunning => continue,
                 result => result?,
             }
-            self.ops.switched(exhausted, &target);
+            self.ops
+                .switched(exhausted, &target, SwitchReason::UsageLimit);
             return Ok(());
         }
     }
@@ -642,29 +785,68 @@ fn switched_away(run_account: Option<&str>, live: Option<&str>) -> bool {
     live.is_some() && live != run_account
 }
 
-fn eligible(account: &AccountView, exhausted: &str) -> bool {
-    account.id != exhausted
-        && account.invoke_allowed
-        && account.kind == AccountKind::ChatGpt
-        && !account.sign_in_required
+/// An account Invoke Mode may switch to: allowed by the user, a signed-in
+/// ChatGPT sign-in.
+fn preferable(account: &AccountView) -> bool {
+    account.invoke_allowed && account.kind == AccountKind::ChatGpt && !account.sign_in_required
 }
 
-/// Picks the eligible account with the most usable capacity: the smallest
-/// remaining percentage across its Codex windows. Ties keep account order.
+fn eligible(account: &AccountView, exhausted: &str) -> bool {
+    account.id != exhausted && preferable(account)
+}
+
+/// Orders accounts by the user's priority; unlisted accounts follow in saved
+/// order.
+fn by_priority<'a>(
+    accounts: impl Iterator<Item = &'a AccountView>,
+    priority: &[String],
+) -> Vec<&'a AccountView> {
+    let rank = |account: &AccountView| {
+        priority
+            .iter()
+            .position(|id| *id == account.id)
+            .unwrap_or(usize::MAX)
+    };
+    let mut ordered = accounts.collect::<Vec<_>>();
+    ordered.sort_by_key(|account| rank(account));
+    ordered
+}
+
+/// Picks the replacement account. With an account order, the first eligible
+/// account that has the preferred usage left; without one, or when none has,
+/// the most usable capacity: the smallest remaining percentage across its
+/// Codex windows. Ties keep the order.
 fn select_account(
     candidates: &[(AccountView, Option<QuotaSnapshot>)],
     exhausted: &str,
+    preferences: &Preferences,
 ) -> Option<String> {
-    let mut best: Option<(u8, &str)> = None;
-    for (account, quota) in candidates {
-        if !eligible(account, exhausted) {
-            continue;
+    let scored = by_priority(
+        candidates.iter().map(|(account, _)| account),
+        &preferences.account_priority,
+    )
+    .into_iter()
+    .filter(|account| eligible(account, exhausted))
+    .filter_map(|account| {
+        let quota = candidates
+            .iter()
+            .find(|(candidate, _)| candidate.id == account.id)
+            .and_then(|(_, quota)| quota.as_ref())?;
+        usable_capacity(quota).map(|score| (score, account.id.as_str()))
+    })
+    .collect::<Vec<_>>();
+    if !preferences.account_priority.is_empty() {
+        if let Some((_, id)) = scored
+            .iter()
+            .find(|(score, _)| *score >= preferences.preferred_min_remaining)
+        {
+            return Some(id.to_string());
         }
-        let Some(score) = quota.as_ref().and_then(usable_capacity) else {
-            continue;
-        };
+    }
+    let mut best: Option<(u8, &str)> = None;
+    for (score, id) in scored {
         if best.is_none_or(|(best_score, _)| score > best_score) {
-            best = Some((score, &account.id));
+            best = Some((score, id));
         }
     }
     best.map(|(_, id)| id.to_string())
@@ -735,7 +917,7 @@ fn account_reset(snapshot: &QuotaSnapshot) -> Option<i64> {
 }
 
 /// Called with the replaced and the new account ID after a verified switch.
-pub type SwitchedCallback = Box<dyn Fn(&str, &str) + Send + Sync>;
+pub type SwitchedCallback = Box<dyn Fn(&str, &str, SwitchReason) + Send + Sync>;
 
 /// Called when a failover starts or stops waiting for the user to close Codex.
 pub type WaitingCallback = Box<dyn Fn(Option<&SwitchAccounts>) + Send + Sync>;
@@ -818,8 +1000,19 @@ impl FailoverOps for AppOps {
         (self.on_waiting)(accounts);
     }
 
-    fn switched(&self, from: &str, to: &str) {
-        (self.on_switched)(from, to);
+    fn switched(&self, from: &str, to: &str, reason: SwitchReason) {
+        (self.on_switched)(from, to, reason);
+    }
+
+    fn preferences(&self) -> Preferences {
+        self.invoke
+            .settings()
+            .map(|settings| Preferences {
+                account_priority: settings.account_priority,
+                preferred_min_remaining: settings.preferred_min_remaining,
+                max_concurrent_tasks: settings.max_concurrent_tasks,
+            })
+            .unwrap_or_default()
     }
 
     fn paused(&self, pause: Option<&InvokePause>) {
@@ -852,6 +1045,8 @@ mod tests {
         waiting_events: Vec<Option<SwitchAccounts>>,
         pause_events: Vec<Option<InvokePause>>,
         now: i64,
+        preferences: Preferences,
+        switch_reasons: Vec<SwitchReason>,
     }
 
     struct FakeOps(Mutex<World>);
@@ -912,7 +1107,12 @@ mod tests {
         fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>) {
             self.world().waiting_events.push(accounts.cloned());
         }
-        fn switched(&self, _from: &str, _to: &str) {}
+        fn switched(&self, _from: &str, _to: &str, reason: SwitchReason) {
+            self.world().switch_reasons.push(reason);
+        }
+        fn preferences(&self) -> Preferences {
+            self.world().preferences.clone()
+        }
         fn paused(&self, pause: Option<&InvokePause>) {
             self.world().pause_events.push(pause.cloned());
         }
@@ -971,6 +1171,7 @@ mod tests {
             wait: Duration::from_secs(5),
             user_close: Duration::from_secs(3),
             poll: Duration::from_millis(10),
+            preference_interval: Duration::ZERO,
         }
     }
 
@@ -980,6 +1181,11 @@ mod tests {
             invoke_mode: true,
             active: Some("a".into()),
             accounts: vec![account("a", true), account("b", true), account("c", true)],
+            // Tests of the task limit set their own.
+            preferences: Preferences {
+                max_concurrent_tasks: u8::MAX,
+                ..Preferences::default()
+            },
             quotas: HashMap::from([
                 ("a".into(), quota(0, 90)),
                 ("b".into(), quota(80, 30)),
@@ -1013,7 +1219,7 @@ mod tests {
 
     /// Opens a lease, starts a run, and registers its App Server.
     fn running_worker(
-        coordinator: &Coordinator,
+        coordinator: &Arc<Coordinator>,
         ops: &FakeOps,
         connection: u64,
         pid: u32,
@@ -1061,13 +1267,14 @@ mod tests {
             (account("b", true), Some(quota(80, 30))),
             (account("c", true), Some(quota(60, 70))),
         ];
-        assert_eq!(select_account(&entries, "a").as_deref(), Some("c"));
+        let none = Preferences::default();
+        assert_eq!(select_account(&entries, "a", &none).as_deref(), Some("c"));
 
         let tied = vec![
             (account("b", true), Some(quota(50, 50))),
             (account("c", true), Some(quota(50, 90))),
         ];
-        assert_eq!(select_account(&tied, "a").as_deref(), Some("b"));
+        assert_eq!(select_account(&tied, "a", &none).as_deref(), Some("b"));
     }
 
     #[test]
@@ -1087,7 +1294,7 @@ mod tests {
             (account("f", true), None),
             (account("g", true), Some(denied)),
         ];
-        assert_eq!(select_account(&entries, "a"), None);
+        assert_eq!(select_account(&entries, "a", &Preferences::default()), None);
     }
 
     #[test]
@@ -1561,5 +1768,140 @@ mod tests {
             Some(600)
         );
         assert_eq!(earliest_reset(&[None]), None);
+    }
+
+    fn ranked(order: &[&str], min: u8, tasks: u8) -> Preferences {
+        Preferences {
+            account_priority: order.iter().map(|id| id.to_string()).collect(),
+            preferred_min_remaining: min,
+            max_concurrent_tasks: tasks,
+        }
+    }
+
+    #[test]
+    fn a_failover_follows_the_account_order_while_an_account_has_enough_left() {
+        let entries = vec![
+            (account("b", true), Some(quota(80, 90))),
+            (account("c", true), Some(quota(30, 40))),
+            (account("d", true), Some(quota(15, 90))),
+        ];
+        // C comes first and has at least 20% of every window left.
+        assert_eq!(
+            select_account(&entries, "a", &ranked(&["c", "b"], 20, 2)).as_deref(),
+            Some("c")
+        );
+        // Below the threshold, the next account in order is used.
+        assert_eq!(
+            select_account(&entries, "a", &ranked(&["c", "b"], 50, 2)).as_deref(),
+            Some("b")
+        );
+        // When no account has enough, the most capacity wins.
+        assert_eq!(
+            select_account(&entries, "a", &ranked(&["d", "c"], 95, 2)).as_deref(),
+            Some("b")
+        );
+        // Unlisted accounts follow in saved order.
+        assert_eq!(
+            select_account(&entries, "a", &ranked(&["d"], 10, 2)).as_deref(),
+            Some("d")
+        );
+    }
+
+    #[test]
+    fn a_task_first_moves_codex_to_the_preferred_account_with_usage_left() {
+        // A is active with plenty left, but B comes first and has enough.
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([
+                ("a".into(), quota(90, 90)),
+                ("b".into(), quota(60, 50)),
+                ("c".into(), quota(100, 100)),
+            ]),
+            preferences: ranked(&["b", "a", "c"], 20, 2),
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert_eq!(ops.world().switches, vec!["b".to_string()]);
+        assert_eq!(ops.world().switch_reasons, vec![SwitchReason::Priority]);
+        assert_eq!(ops.world().active.as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn a_task_stays_on_the_current_account_when_it_is_preferred_or_nothing_better_has_enough() {
+        // The active account comes first and has enough: no switch, one read.
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([("a".into(), quota(50, 50)), ("b".into(), quota(100, 100))]),
+            preferences: ranked(&["a", "b"], 20, 2),
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert!(ops.world().switches.is_empty());
+        assert_eq!(ops.world().quota_reads, vec!["a".to_string()]);
+
+        // B comes first but is below the threshold; A keeps the task.
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([("a".into(), quota(50, 50)), ("b".into(), quota(10, 100))]),
+            preferences: ranked(&["b", "a"], 20, 2),
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert!(ops.world().switches.is_empty());
+
+        // The user's own Codex is open: never wait for it, run where we are.
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([("a".into(), quota(50, 50)), ("b".into(), quota(90, 90))]),
+            preferences: ranked(&["b", "a"], 20, 2),
+            other_codex: true,
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert!(ops.world().switches.is_empty());
+        assert!(ops.world().waiting_events.is_empty());
+
+        // Without an account order nothing is read or switched.
+        let (coordinator, ops) = setup(world());
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert!(ops.world().quota_reads.is_empty());
+    }
+
+    #[test]
+    fn a_running_task_is_never_switched_away_by_another_tasks_start() {
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([("a".into(), quota(50, 50)), ("b".into(), quota(90, 90))]),
+            preferences: ranked(&["a", "b"], 20, 3),
+            ..world()
+        });
+        running_worker(&coordinator, &ops, 1, 701);
+        // B is now preferred, but A's task is running.
+        ops.world().preferences = ranked(&["b", "a"], 20, 3);
+        let second = coordinator.open_lease(2, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&second)), Ok(()));
+        assert!(ops.world().switches.is_empty());
+    }
+
+    #[test]
+    fn tasks_beyond_the_limit_wait_for_a_free_slot() {
+        let (coordinator, ops) = setup(World {
+            preferences: Preferences {
+                max_concurrent_tasks: 1,
+                ..Preferences::default()
+            },
+            ..world()
+        });
+        let first = running_worker(&coordinator, &ops, 1, 801);
+        let second = coordinator.open_lease(2, request("model-a", "high"));
+        let waiting = Arc::clone(&coordinator);
+        let started = std::thread::spawn(move || block_on(waiting.begin_run(&second)));
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(!started.is_finished(), "the second task waits for a slot");
+        assert_eq!(coordinator.status().0, 1);
+
+        assert_eq!(coordinator.end_run(&first), Ok(RunEnd::Unchanged));
+        assert_eq!(started.join().expect("thread"), Ok(()));
+        assert_eq!(coordinator.status().0, 1);
     }
 }

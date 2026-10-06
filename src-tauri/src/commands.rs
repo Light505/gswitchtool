@@ -539,6 +539,22 @@ pub async fn set_invoke_profiles(
     .await
 }
 
+/// Saves the account order, the usage a preferred account must have left, and
+/// how many Codex tasks may run at once.
+#[tauri::command]
+pub fn set_invoke_preferences(
+    invoke: State<'_, InvokeState>,
+    account_priority: Vec<String>,
+    preferred_min_remaining: u8,
+    max_concurrent_tasks: u8,
+) -> Result<InvokeSettings, String> {
+    invoke.set_preferences(
+        account_priority,
+        preferred_min_remaining,
+        max_concurrent_tasks,
+    )
+}
+
 #[tauri::command]
 pub async fn set_account_invoke_allowed(
     state: State<'_, AppState>,

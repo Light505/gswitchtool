@@ -11,10 +11,10 @@ Date.now = () => fixedNow;
 const at = (day: number, hour: number, minute = 0) => Math.floor(new Date(2026, 8, day, hour, minute).getTime() / 1000);
 
 const accounts: AccountView[] = [
-  { id: "demo-1", label: "Studio", kind: "chat_gpt", email: "alex@example.com", workspace_name: "Studio", plan_type: "team", active: true },
+  { id: "demo-1", label: "Studio", kind: "chat_gpt", email: "alex@example.com", workspace_name: "Studio", plan_type: "team", active: true, invoke_allowed: true },
   { id: "demo-2", label: "Studio", kind: "chat_gpt", email: "riley@example.org", workspace_name: "Studio", plan_type: "team", active: false },
-  { id: "demo-3", label: "Research", kind: "chat_gpt", email: "sam@example.net", workspace_name: "Research", plan_type: "team", active: false },
-  { id: "demo-4", label: "Personal", kind: "chat_gpt", email: "taylor@example.com", workspace_name: "Personal", plan_type: "plus", active: false },
+  { id: "demo-3", label: "Research", kind: "chat_gpt", email: "sam@example.net", workspace_name: "Research", plan_type: "team", active: false, invoke_allowed: true },
+  { id: "demo-4", label: "Personal", kind: "chat_gpt", email: "taylor@example.com", workspace_name: "Personal", plan_type: "plus", active: false, invoke_allowed: true },
   { id: "demo-5", label: "Research", kind: "chat_gpt", email: "morgan@example.org", workspace_name: "Research", plan_type: "team", active: false },
   { id: "demo-6", label: "Personal", kind: "chat_gpt", email: "casey@example.net", workspace_name: "Personal", plan_type: "free", active: false },
 ];
@@ -52,7 +52,13 @@ const displayOnly = {
   appSnapshot: async () => snapshot,
   accountQuota: async (id: string) => quotas[id] || { account_id: id, status: "unknown" },
   codexCliInfo: async () => ({ version: "0.158.0", latest_version: "0.158.0", supports_update: true, update_status: "current" as const }),
-  invokeSettings: async () => ({ invoke_mode: false, allowed_invocation_profiles: [] }),
+  invokeSettings: async () => ({
+    invoke_mode: true,
+    allowed_invocation_profiles: [{ model: "gpt-6-sol", reasoning_efforts: ["low", "medium", "high"] }],
+    account_priority: ["demo-1", "demo-3", "demo-4"],
+    preferred_min_remaining: 20,
+    max_concurrent_tasks: 2,
+  }),
   onInvokeAccountSwitched: async () => () => undefined,
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,

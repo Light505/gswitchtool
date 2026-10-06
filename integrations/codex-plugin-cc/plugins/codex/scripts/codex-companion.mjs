@@ -1074,6 +1074,11 @@ function renderInvokeStatus(report) {
     lines.push(`- ${profile.model}: ${profile.reasoning_efforts.join(", ")}`);
   }
   lines.push(`Codex workers running: ${report.workers_running ?? 0}`);
+  if (report.max_concurrent_tasks) {
+    lines.push(
+      `GSwitch runs at most ${report.max_concurrent_tasks} Codex task${report.max_concurrent_tasks === 1 ? "" : "s"} at once; more wait their turn.`
+    );
+  }
   if (report.waiting_for_codex_to_close) {
     lines.push(
       "An account switch is waiting for the user to close Codex (the app, the CLI, and any IDE extension). Ask the user to close it; delegated work resumes automatically."

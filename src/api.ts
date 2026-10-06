@@ -28,6 +28,13 @@ export type UpdateDelivery = "installer_exits" | "relaunch_required" | "release_
 
 // Keep provider payloads on the Rust side. The WebView only deals with this
 // small, display-oriented capacity view.
+/** An account switch Invoke Mode made: after a usage limit, or to a preferred account. */
+export interface InvokeSwitch {
+  from: string;
+  to: string;
+  reason?: "usage_limit" | "priority";
+}
+
 export const api = {
   runtimeInfo: () => invoke<RuntimeInfo>("get_runtime_info"),
   codexCliInfo: () => invoke<CodexCliInfo>("get_codex_cli_info"),
@@ -102,6 +109,8 @@ export const api = {
     invoke<CatalogModel[]>("get_model_catalog", { refresh }),
   setInvokeProfiles: (profiles: InvocationProfile[]) =>
     invoke<InvokeSettings>("set_invoke_profiles", { profiles }),
+  setInvokePreferences: (accountPriority: string[], preferredMinRemaining: number, maxConcurrentTasks: number) =>
+    invoke<InvokeSettings>("set_invoke_preferences", { accountPriority, preferredMinRemaining, maxConcurrentTasks }),
   setAccountInvokeAllowed: (id: string, allowed: boolean) =>
     invoke<AccountView>("set_account_invoke_allowed", { id, allowed }),
   invokeFailover: () => invoke<SwitchAccounts | null>("get_invoke_failover"),
@@ -113,8 +122,8 @@ export const api = {
   onInvokePaused: (handler: (pause: InvokePause | null) => void) =>
     listen<InvokePause | null>("invoke-paused", (event) => handler(event.payload)),
   // Rust reports a verified Invoke Mode failover with account IDs only.
-  onInvokeAccountSwitched: (handler: (switched: { from: string; to: string }) => void) =>
-    listen<{ from: string; to: string }>("invoke-account-switched", (event) => handler(event.payload)),
+  onInvokeAccountSwitched: (handler: (switched: InvokeSwitch) => void) =>
+    listen<InvokeSwitch>("invoke-account-switched", (event) => handler(event.payload)),
   updateDelivery: () => invoke<UpdateDelivery>("get_update_delivery"),
   openLatestRelease: () => invoke<void>("open_latest_release"),
 };

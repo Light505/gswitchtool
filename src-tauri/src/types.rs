@@ -124,12 +124,47 @@ pub struct InvocationProfile {
 
 /// Human-owned Invoke Mode policy. Only the WebView commands change it; the
 /// Claude-facing surface can read it but never write it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct InvokeSettings {
     #[serde(default)]
     pub invoke_mode: bool,
     #[serde(default)]
     pub allowed_invocation_profiles: Vec<InvocationProfile>,
+    /// Saved-account IDs, most preferred first. Accounts not listed follow in
+    /// saved order.
+    #[serde(default)]
+    pub account_priority: Vec<String>,
+    /// A preferred account is used while it has at least this much of every
+    /// Codex usage window left, in percent.
+    #[serde(default = "default_preferred_min_remaining")]
+    pub preferred_min_remaining: u8,
+    /// How many delegated Codex tasks may run at once; more wait their turn.
+    #[serde(default = "default_max_concurrent_tasks")]
+    pub max_concurrent_tasks: u8,
+}
+
+pub const DEFAULT_PREFERRED_MIN_REMAINING: u8 = 20;
+pub const DEFAULT_MAX_CONCURRENT_TASKS: u8 = 2;
+pub const MAX_CONCURRENT_TASKS_LIMIT: u8 = 6;
+
+fn default_preferred_min_remaining() -> u8 {
+    DEFAULT_PREFERRED_MIN_REMAINING
+}
+
+fn default_max_concurrent_tasks() -> u8 {
+    DEFAULT_MAX_CONCURRENT_TASKS
+}
+
+impl Default for InvokeSettings {
+    fn default() -> Self {
+        Self {
+            invoke_mode: false,
+            allowed_invocation_profiles: Vec::new(),
+            account_priority: Vec::new(),
+            preferred_min_remaining: DEFAULT_PREFERRED_MIN_REMAINING,
+            max_concurrent_tasks: DEFAULT_MAX_CONCURRENT_TASKS,
+        }
+    }
 }
 
 /// A model reported by the installed Codex App Server's `model/list`.

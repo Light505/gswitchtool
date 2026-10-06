@@ -1868,6 +1868,82 @@ textarea {
   line-height: 1.45;
 }
 
+.invoke-panel > h3 {
+  margin: 4px 0 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.invoke-order {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  list-style: none;
+}
+
+.invoke-order li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+.invoke-order li + li {
+  border-top: 1px solid var(--border);
+}
+
+.invoke-order-rank {
+  width: 18px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.invoke-order-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.invoke-order-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.invoke-limits {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px 16px;
+}
+
+.invoke-limits label {
+  display: grid;
+  gap: 4px;
+  font-size: 13px;
+}
+
+.invoke-limit-input {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.invoke-limit-input input {
+  width: 72px;
+}
+
+.invoke-limit-input small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .invoke-panel .invoke-loading {
   display: flex;
   align-items: center;

@@ -156,6 +156,7 @@ async fn dispatch(
                 "workers_running": running,
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
+                "max_concurrent_tasks": settings.max_concurrent_tasks,
                 "paused": coordinator.pause(),
                 "workers": coordinator.workers(),
             }))
@@ -415,7 +416,10 @@ mod tests {
             false
         }
         fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
-        fn switched(&self, _from: &str, _to: &str) {}
+        fn switched(&self, _from: &str, _to: &str, _reason: crate::failover::SwitchReason) {}
+        fn preferences(&self) -> crate::failover::Preferences {
+            crate::failover::Preferences::default()
+        }
         fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }
 
@@ -454,6 +458,7 @@ mod tests {
             wait: Duration::from_secs(5),
             user_close: Duration::from_secs(1),
             poll: Duration::from_millis(5),
+            preference_interval: Duration::ZERO,
         };
         Endpoint {
             token: TOKEN.into(),
@@ -531,6 +536,7 @@ mod tests {
                 "workers_running": 0,
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
+                "max_concurrent_tasks": 2,
                 "paused": null,
                 "workers": [],
             })
@@ -739,7 +745,10 @@ mod tests {
             false
         }
         fn waiting_for_codex(&self, _accounts: Option<&crate::failover::SwitchAccounts>) {}
-        fn switched(&self, _from: &str, _to: &str) {}
+        fn switched(&self, _from: &str, _to: &str, _reason: crate::failover::SwitchReason) {}
+        fn preferences(&self) -> crate::failover::Preferences {
+            crate::failover::Preferences::default()
+        }
         fn paused(&self, _pause: Option<&crate::failover::InvokePause>) {}
     }
 

@@ -51,9 +51,13 @@ invoke --model <model> --effort <effort> [--write] --cwd "<repository or worktre
 - Codex sees the repository, not this conversation. The brief states the goal, relevant
   paths, constraints, how to check the result (for example which tests to run), and asks
   for a short summary of what changed. Use `--prompt-file <path>` for a long brief.
-- Run long tasks, or several tasks at once, with the Bash tool's `run_in_background`; you
-  are notified when each finishes. Do not run two tasks that edit the same files in the
-  same working tree at the same time.
+- Run long tasks with the Bash tool's `run_in_background`; you are notified when each
+  finishes.
+- Run several tasks at once only when they are independent and each is substantial enough
+  to delegate on its own; otherwise send one task. `invoke-status` shows how many GSwitch
+  runs at once; tasks beyond that only wait for a free slot. Never
+  run two tasks that edit the same files in the same working tree at the same time.
+- GSwitch chooses the Codex account (the user's account order); never ask for one.
 
 ## 5. Use the result
 

@@ -60,6 +60,7 @@ const mocks = vi.hoisted(() => ({
   modelCatalog: vi.fn(),
   setInvokeProfiles: vi.fn(),
   setAccountInvokeAllowed: vi.fn(),
+  setInvokePreferences: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
@@ -221,6 +222,13 @@ function prepareDefaults() {
   mocks.setInvokeMode.mockImplementation(async (enabled: boolean) => ({ invoke_mode: enabled, allowed_invocation_profiles: [] }));
   mocks.modelCatalog.mockResolvedValue([]);
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
+  mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number) => ({
+    invoke_mode: true,
+    allowed_invocation_profiles: [],
+    account_priority: order,
+    preferred_min_remaining: min,
+    max_concurrent_tasks: tasks,
+  }));
   mocks.setAccountInvokeAllowed.mockImplementation(async (id: string, allowed: boolean) => ({ ...chatAccount, id, invoke_allowed: allowed }));
   mocks.onInvokeAccountSwitched.mockResolvedValue(() => undefined);
   mocks.invokeFailover.mockResolvedValue(null);
@@ -2431,6 +2439,57 @@ describe("Invoke Mode", () => {
     ]));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
+  });
+
+  it("saves the account order and limits with the allowed models", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second", plan_type: "pro", invoke_allowed: true };
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: false }, second]);
+    mocks.invokeSettings.mockResolvedValue({
+      invoke_mode: true,
+      allowed_invocation_profiles: [],
+      account_priority: ["account-1", "account-2"],
+      preferred_min_remaining: 20,
+      max_concurrent_tasks: 2,
+    });
+    mocks.modelCatalog.mockResolvedValue([
+      { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
+    ]);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    expect(within(dialog).getByText("Not allowed")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Move person@example.com up" })).toBeDisabled();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Move second@example.com up" }));
+    const threshold = within(dialog).getByRole("spinbutton", { name: /Enough usage left/ });
+    await userEvent.clear(threshold);
+    await userEvent.type(threshold, "35");
+    const tasks = within(dialog).getByRole("spinbutton", { name: /Codex tasks at once/ });
+    await userEvent.clear(tasks);
+    await userEvent.type(tasks, "9");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
+
+    // Out-of-range values are kept within limits.
+    await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6));
+    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+  });
+
+  it("says when Invoke Mode moved Codex to a preferred account", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, active: true }, second]);
+    let announce: ((switched: { from: string; to: string; reason?: string }) => void) | undefined;
+    mocks.onInvokeAccountSwitched.mockImplementation(async (handler: typeof announce) => {
+      announce = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    await screen.findAllByText("person@example.com");
+    await waitFor(() => expect(announce).toBeDefined());
+
+    act(() => announce!({ from: "account-1", to: "account-2", reason: "priority" }));
+    expect(await screen.findByText(
+      "Invoke Mode switched Codex from person@example.com to second@example.com, your preferred account with usage left.",
+    )).toBeInTheDocument();
   });
 
   it("reloads accounts and names both accounts after an automatic switch", async () => {
