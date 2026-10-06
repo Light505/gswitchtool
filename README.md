@@ -21,7 +21,10 @@
 >
 > Delegation is always explicit: while GSwitch is open, type
 > `/codex:gswitch-invoke` with a task (or alone, to delegate suitable work for
-> the rest of the session). Claude never calls Codex on its own.
+> the rest of the session). The one exception is review: while Invoke Mode is
+> on, Claude may ask Codex for a read-only review of its changes when it judges
+> one useful (`codex:gswitch-review`). With Invoke Mode off, GSwitch refuses every
+> request and Codex never starts.
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.

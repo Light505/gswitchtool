@@ -16,7 +16,9 @@
 > ```
 >
 > 委派始终是显式的：GSwitch 打开时，输入 `/codex:gswitch-invoke` 加上任务（或不带任务，
-> 让 Claude 在本次会话剩余时间委派合适的工作）。Claude 不会自行调用 Codex。
+> 让 Claude 在本次会话剩余时间委派合适的工作）。唯一的例外是审查：调用模式开启时，Claude 可在
+> 认为有用时请 Codex 只读审查它的改动（`codex:gswitch-review`）。调用模式关闭时，GSwitch
+> 会拒绝所有请求，Codex 不会启动。
 
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。
 

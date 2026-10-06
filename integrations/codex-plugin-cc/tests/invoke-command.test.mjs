@@ -371,3 +371,19 @@ test("a refused switch reports GSwitch's reason and does not resume", () =>
       assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes after a refused switch");
     }
   ));
+
+test("Codex delegation is explicit while GSwitch reviews may be chosen by Claude", () => {
+  const skill = (name) =>
+    fs.readFileSync(path.join(ROOT, "plugins", "codex", "skills", name, "SKILL.md"), "utf8");
+  const frontmatter = (text) => text.split("---")[1];
+
+  assert.match(frontmatter(skill("gswitch-invoke")), /disable-model-invocation:\s*true/);
+  assert.doesNotMatch(frontmatter(skill("gswitch-review")), /disable-model-invocation/);
+  const review = skill("gswitch-review");
+  assert.match(review, /Never add `--write`/);
+  assert.doesNotMatch(review.replace("Never add `--write`", ""), /--write/);
+  for (const command of ["rescue.md", "review.md", "adversarial-review.md"]) {
+    const source = fs.readFileSync(path.join(ROOT, "plugins", "codex", "commands", command), "utf8");
+    assert.match(frontmatter(source), /disable-model-invocation:\s*true/, command);
+  }
+});
