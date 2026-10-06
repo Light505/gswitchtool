@@ -2312,6 +2312,18 @@ describe("GSwitch account workspace", () => {
     expect(mocks.switchAccount).not.toHaveBeenCalled();
   });
 
+  it("waits to update while Claude's delegated Codex work is running", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
+    const downloadAndInstall = vi.fn().mockRejectedValue("INVOKE_BUSY");
+    updaterMocks.check.mockResolvedValue({ version: "1.0.2", downloadAndInstall });
+    mocks.updateDelivery.mockResolvedValue("installer_exits");
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Update GSwitch" }));
+    expect(await screen.findByText(/Claude's delegated Codex work is running\. Update after it finishes/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Update GSwitch" })).toBeEnabled();
+  });
+
   it("restarts only after a macOS or AppImage update finishes", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     const downloadAndInstall = vi.fn().mockResolvedValue(undefined);

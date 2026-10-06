@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
-use tauri::{AppHandle, State};
+use tauri::{ipc::Channel, AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
 use crate::{
     accounts::AppState,
+    app_update::{self, AppUpdateFailure, AppUpdateView, DownloadEvent},
     cli_update, codex,
     failover::{Coordinator, InvokePause, SwitchAccounts},
     intake,
@@ -170,10 +171,28 @@ pub fn get_update_delivery() -> UpdateDelivery {
 pub fn open_latest_release(app: AppHandle) -> Result<(), String> {
     app.opener()
         .open_url(
-            "https://github.com/ginbing/GSwitch/releases/latest",
+            "https://github.com/Light505/gswitchtool/releases/latest",
             None::<&str>,
         )
         .map_err(|_| "Unable to open the GSwitch release page in your browser".to_string())
+}
+
+/// Looks for a newer installed-app release. The user decides whether to install it.
+#[tauri::command]
+pub async fn check_app_update(app: AppHandle) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
+    app_update::check(&app).await
+}
+
+/// Installs the update the user agreed to, unless Claude's delegated Codex
+/// work is running, which the restart would stop.
+#[tauri::command]
+pub async fn install_app_update(
+    app: AppHandle,
+    coordinator: State<'_, Arc<Coordinator>>,
+    on_event: Channel<DownloadEvent>,
+) -> Result<(), AppUpdateFailure> {
+    let (running, failover) = coordinator.status();
+    app_update::install(&app, running > 0 || failover, on_event).await
 }
 
 fn update_delivery_for(os: &str, appimage: bool) -> UpdateDelivery {

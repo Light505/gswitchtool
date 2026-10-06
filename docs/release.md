@@ -6,11 +6,22 @@ this document supplies the checks and sequence, not another approval step.
 
 ## Fork distribution
 
-GSwitch Claude Tool is private and has no release channel. Installers come from
-`pnpm run build:installer` on a user's machine, which refuses to build anything
-but a clean `main` that is not behind GitHub. The bundled updater has no
-endpoint, so a build never downloads an update, including upstream GSwitch
-releases.
+GSwitch Claude Tool is private. Its releases are GitHub releases of the private
+`Light505/gswitchtool` repository, published by `pnpm run release` from a clean
+`main` that matches GitHub and carries a new version. The script builds the
+installed identity with updater artifacts, signs the installer with the key at
+`~/.tauri/gswitchtool-updater.key` (or `GSWITCH_UPDATER_KEY`), and publishes a
+draft release with the installer and `latest.json`, marking it latest only once
+both are uploaded; a failed upload deletes the draft. `pnpm run build:installer`
+still builds an unsigned local installer from `main`.
+
+The installed app checks for updates through its own commands, not the
+updater's web API: it reads the user's GitHub sign-in from Git Credential
+Manager without prompting, finds the latest release's `latest.json` asset, and
+offers a newer version for the user to install or postpone. The download goes
+only to this repository's release assets and is verified against the public key
+in `tauri.main.conf.json`. It never offers upstream GSwitch releases, and the dev
+identity never checks.
 
 `src-tauri/tauri.conf.json` is the dev identity, **GSwitch Claude Tool (Dev)**
 (`com.light505.gswitchtool.dev`), used by `pnpm run app:dev` and plain

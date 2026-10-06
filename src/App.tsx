@@ -2061,7 +2061,14 @@ export default function App() {
         }
       });
       setUpdatePhase(pendingUpdate.delivery === "installer_exits" ? "installing" : "ready");
-    } catch {
+    } catch (error) {
+      if (error === "INVOKE_BUSY") {
+        // Restarting would stop Claude's delegated Codex work; offer it again later.
+        setUpdatePhase("available");
+        setUpdateProgress(null);
+        setNotice({ kind: "info", text: t("update.invokeBusy") });
+        return;
+      }
       setUpdatePhase("error");
     }
   };

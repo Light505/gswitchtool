@@ -45,14 +45,34 @@ pnpm run build:installer
 `build:installer` builds only from a clean, up-to-date `main`, so the installed
 app is always a reviewed version. The installer is written to
 `src-tauri/target/release/bundle/nsis/GSwitch Claude Tool_<version>_x64-setup.exe`.
-Run it to install **GSwitch Claude Tool**.
+Run it to install **GSwitch Claude Tool**. You can also download the installer
+from the repository's **Releases** page on GitHub instead of building it.
 
-It does not update itself. To update, close GSwitch Claude Tool, then
-`git checkout main && git pull`, `pnpm install --frozen-lockfile`,
-`pnpm run build:installer`, and run the new installer over the old one; there is
-no need to uninstall. Accounts and settings are kept in your user profile, not
-in the install folder, so updating or reinstalling keeps them. They are separate
-from any upstream GSwitch installed on the same computer.
+Accounts and settings are kept in your user profile, not in the install folder,
+so updating or reinstalling keeps them. They are separate from any upstream
+GSwitch installed on the same computer.
+
+### Updates
+
+From version 1.1.0, the app checks the repository's GitHub releases when it
+opens and every six hours. When there is a newer version it shows **GSwitch
+<version> is available**:
+
+- **Update GSwitch** downloads it, checks its signature, and installs it over the
+  current version. The app closes, updates, and keeps your accounts and settings.
+- **Later** leaves everything as it is. The app does not ask again about that
+  version until it next opens.
+
+Nothing is installed without your choice. While Claude's delegated Codex work is
+running, the app waits and asks you to update after it finishes.
+
+The check uses the GitHub sign-in that Git already saved when you cloned the
+repository; nothing to set up. If Git has no saved sign-in, the app finds no
+updates; run `git pull` in the repository once to sign in. The sign-in stays on
+your computer and is sent only to GitHub.
+
+A version before 1.1.0 cannot update itself: install 1.1.0 once by hand, as
+above.
 
 ## 2. Add your accounts
 
@@ -184,6 +204,8 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | `CURRENT_ACCOUNT_UNKNOWN` | Save the account Codex is using in GSwitch, or finish **Review recovery** if GSwitch shows it. |
 | The GSwitch window freezes while opening | Close it, end any leftover `msedgewebview2.exe` processes for GSwitch Claude Tool in Task Manager, and open it again. |
 | Claude does not see a plugin change | Start a new Claude Code session. |
+| GSwitch never offers an update | Run `git pull` in the repository once so Git saves your GitHub sign-in, then reopen the app. Versions before 1.1.0 cannot update themselves. |
+| *Quit Codex* although no Codex window is open | GSwitch stops Codex's background service by itself; an IDE extension or a `codex` command running in a terminal still counts as open. |
 | *… is already open. Close it before opening …* | The installed app and the dev app share accounts, so only one runs at a time. Close the one that is open. |
 | Building fails while downloading libsodium | Some networks block its plain-HTTP download. Download `LATEST.tar.gz`, `libsodium-1.0.22-stable-msvc.zip`, and their `.minisig` files from https://download.libsodium.org/libsodium/releases/ into one folder and set `SODIUM_DIST_DIR` to it; the build still checks their signatures. |
 
@@ -218,6 +240,27 @@ claude --plugin-dir integrations/codex-plugin-cc/plugins/codex --settings script
 the settings file turns off the installed `codex@gswitchtool` for that session so
 the two do not clash. Other sessions keep using the installed plugin. Start a new
 session to pick up further changes.
+
+**Publishing an update.** Once changes are on `main`, publish them to every
+installed copy:
+
+1. On `dev`, raise `"version"` in `src-tauri/tauri.conf.json` (for example
+   `1.1.0` to `1.1.1`), run `pnpm run version:sync`, and commit.
+2. Merge `dev` into `main` and push `main`.
+3. On `main`, run:
+
+   ```bash
+   pnpm run release -- --notes "What changed"
+   ```
+
+It builds the installed app, signs it, and publishes a GitHub release with the
+installer and `latest.json`. It refuses unless `main` is clean and matches
+GitHub, and unless the version is new.
+
+The signing key is `~/.tauri/gswitchtool-updater.key` on the maintainer's
+computer. Keep a private backup of it: installed copies accept only updates
+signed with this key, so losing it means everyone reinstalls by hand once with a
+new key. Never commit or share it. Colleagues do not need it.
 
 ## Sharing with colleagues
 

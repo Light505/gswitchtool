@@ -25,5 +25,14 @@
         "startMenuFolder": "GSwitch Claude Tool"
       }
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDc1QjI5NUUzMTg4RDNERDQKUldUVVBZMFk0NVd5ZFFac0xiOCtvZndvR01MOWZEdDI4ZkpGbUc2YkExRGN2ei92d3pzU1kzcE8K",
+      "endpoints": [],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

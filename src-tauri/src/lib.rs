@@ -1,5 +1,6 @@
 mod accounts;
 mod app_server;
+mod app_update;
 mod chatgpt;
 mod cli_update;
 mod codex;
@@ -75,6 +76,7 @@ pub fn run() {
                     std::process::exit(0);
                 }
             }
+            app.manage(app_update::AppUpdateState::default());
             let state = accounts::AppState::new(config_dir.join("accounts.json"))
                 .map_err(std::io::Error::other)?;
             app.manage(state.clone());
@@ -142,6 +144,8 @@ pub fn run() {
             commands::open_oauth_login,
             commands::get_update_delivery,
             commands::open_latest_release,
+            commands::check_app_update,
+            commands::install_app_update,
             commands::import_auth_json,
             commands::import_auth_file,
             commands::import_auth_files,

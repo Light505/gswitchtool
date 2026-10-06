@@ -53,6 +53,12 @@ endpoint and coordinator with a fake Codex:
 cargo test --manifest-path src-tauri/Cargo.toml --locked -- --ignored
 ```
 
+Two more ignored tests touch real systems. One reads the latest release of the
+private repository with the saved Git sign-in and changes nothing. The other
+needs a running Codex daemon (start it first with `codex app-server daemon start`
+in a terminal; Codex refuses to start it under the test runner) and no other
+Codex open, and checks that GSwitch's preflight stops it.
+
 The Claude Code plugin in `integrations/codex-plugin-cc` has its own Node test
 suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.
 

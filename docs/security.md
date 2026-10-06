@@ -122,6 +122,29 @@ GSwitch's files directly.
 The model catalog is read from the installed Codex App Server in an empty,
 GSwitch-owned profile. No credential is copied into that profile.
 
+## Updates of GSwitch Claude Tool
+
+The installed app reads the user's saved github.com sign-in with
+`git credential fill`, never prompting, to read releases of the private
+repository. The credential stays in Rust: it is never shown, logged, returned to
+the window, or stored by GSwitch, and it is sent only to
+`api.github.com/repos/Light505/gswitchtool`. An update whose download address is
+not one of that repository's release assets is refused before download. The
+installer runs only after its signature matches the public key in
+`tauri.main.conf.json`, and only when the user chooses to update. The private
+signing key stays outside the repository on the maintainer's computer.
+
+## Codex's background daemon
+
+Newer Codex versions leave a windowless managed App Server daemon running after
+Codex closes. It keeps a credential like any App Server, so GSwitch must not
+change the live credential under it. Before a credential-changing operation, or
+a Codex CLI update, GSwitch stops it through Codex's own
+`codex app-server daemon stop` and continues only once it has exited; Codex
+starts it again when needed. A Codex the user opened is never stopped: the user
+is asked to close it. The daemon's `pid-update-loop` helper holds no credential,
+survives the stop, and is ignored.
+
 ## Storage and concurrency
 
 Credential-affecting operations are serialized by an in-process mutex and a
