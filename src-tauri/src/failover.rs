@@ -811,7 +811,7 @@ impl FailoverOps for AppOps {
     }
 
     fn other_codex_running(&self) -> bool {
-        runtime::external_codex_running(&[]).unwrap_or(true)
+        runtime::user_codex_open(&[]).unwrap_or(true)
     }
 
     fn waiting_for_codex(&self, accounts: Option<&SwitchAccounts>) {

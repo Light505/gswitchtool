@@ -147,7 +147,7 @@ fn run_official_update(mut command: Command) -> Result<(), CodexCliUpdateFailure
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    hide_console(&mut command);
+    runtime::hide_console(&mut command);
     let status = command
         .status()
         .map_err(|_| CodexCliUpdateFailure::UpdateFailed)?;
@@ -163,7 +163,7 @@ fn probe(mut command: Command, argument: &str) -> Option<String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    hide_console(&mut command);
+    runtime::hide_console(&mut command);
     let mut child = command.spawn().ok()?;
     let Some(mut stdout) = child.stdout.take() else {
         let _ = child.kill();
@@ -238,16 +238,6 @@ fn help_lists_update(output: &str) -> bool {
         .lines()
         .any(|line| line.split_whitespace().next() == Some("update"))
 }
-
-#[cfg(windows)]
-fn hide_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    command.creation_flags(CREATE_NO_WINDOW);
-}
-
-#[cfg(not(windows))]
-fn hide_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
