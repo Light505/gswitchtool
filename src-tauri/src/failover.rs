@@ -26,6 +26,8 @@ use crate::{
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FailoverCode {
     InvokeModeDisabled,
+    /// Codex is signed in to an account that is not saved in GSwitch.
+    CurrentAccountNotSaved,
     ExternalCodexRunning,
     CodexShutdownFailed,
     NoEligibleAccount,
@@ -309,7 +311,7 @@ impl Coordinator {
         if !self.ops.invoke_mode() {
             return Err(FailoverCode::InvokeModeDisabled);
         }
-        let exhausted = account.ok_or(FailoverCode::AccountSwitchFailed)?;
+        let exhausted = account.ok_or(FailoverCode::CurrentAccountNotSaved)?;
         inner.replacing = Some(exhausted.clone());
         inner.last_failure = None;
         drop(inner);
@@ -603,12 +605,12 @@ impl FailoverOps for AppOps {
             .unwrap_or(false)
     }
 
+    // The saved account Codex is signed in to now. GSwitch's own active
+    // record is set only by a switch made in GSwitch, so it can be empty.
     fn active_account(&self) -> Option<String> {
-        self.state
-            .list()
+        switching::live_account(&self.state)
             .ok()?
-            .into_iter()
-            .find(|account| account.active)
+            .account
             .map(|account| account.id)
     }
 
@@ -1131,6 +1133,20 @@ mod tests {
             Err(FailoverCode::CodexShutdownFailed)
         );
         assert!(ops.world().switches.is_empty());
+    }
+
+    #[test]
+    fn an_unsaved_live_account_is_reported_without_a_switch() {
+        let mut world = world();
+        world.active = None;
+        let (coordinator, ops) = setup(world);
+        let worker = running_worker(&coordinator, &ops, 1, 1301);
+        assert_eq!(
+            coordinator.report_limit(&worker),
+            Err(FailoverCode::CurrentAccountNotSaved)
+        );
+        assert!(ops.world().switches.is_empty());
+        assert!(!coordinator.status().1);
     }
 
     #[test]

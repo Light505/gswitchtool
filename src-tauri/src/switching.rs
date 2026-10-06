@@ -18,6 +18,15 @@ use crate::{
 const CONFIG_STORE_KEY: &str = "cli_auth_credentials_store";
 
 pub fn live_account(state: &AppState) -> Result<LiveAccountView, String> {
+    live_account_in(state, &codex::codex_home()?)
+}
+
+/// Identifies the saved account that Codex in `codex_home` is signed in to,
+/// from the local credential file only.
+pub(crate) fn live_account_in(
+    state: &AppState,
+    codex_home: &std::path::Path,
+) -> Result<LiveAccountView, String> {
     if state.recovery_required() {
         return Ok(LiveAccountView {
             status: LiveAccountStatus::RecoveryRequired,
@@ -30,8 +39,7 @@ pub fn live_account(state: &AppState) -> Result<LiveAccountView, String> {
         });
     }
 
-    let codex_home = codex::codex_home()?;
-    let credential_store = codex::credential_store_mode(&codex_home)?;
+    let credential_store = codex::credential_store_mode(codex_home)?;
 
     if state.has_pending_switch()? {
         return Ok(LiveAccountView {
@@ -53,7 +61,7 @@ pub fn live_account(state: &AppState) -> Result<LiveAccountView, String> {
         });
     }
 
-    let Some(credential) = codex::read_optional_auth_document(&codex_home)? else {
+    let Some(credential) = codex::read_optional_auth_document(codex_home)? else {
         return Ok(LiveAccountView {
             status: LiveAccountStatus::NotSignedIn,
             credential_store,
@@ -905,6 +913,44 @@ mod tests {
             .expect("target");
         drop(operation);
         (state, target, root)
+    }
+
+    #[test]
+    fn the_live_account_is_found_without_a_switch_made_in_gswitch() {
+        // Invoke Mode failover identifies the exhausted account this way.
+        let (state, saved, root) = state_with_chatgpt_target();
+        let codex_home = root.join("codex-home");
+        fs::create_dir_all(&codex_home).expect("codex home");
+        assert_eq!(
+            live_account_in(&state, &codex_home)
+                .expect("signed out")
+                .status,
+            LiveAccountStatus::NotSignedIn
+        );
+
+        codex::write_auth_document(&codex_home, &credential("user", "workspace", "rotated"))
+            .expect("auth");
+        let live = live_account_in(&state, &codex_home).expect("live");
+        assert_eq!(live.status, LiveAccountStatus::Ready);
+        assert_eq!(live.account.map(|account| account.id), Some(saved.id));
+        assert!(
+            state
+                .list()
+                .expect("list")
+                .iter()
+                .all(|account| !account.active),
+            "GSwitch has not recorded any switch"
+        );
+
+        codex::write_auth_document(&codex_home, &credential("other", "workspace", "token"))
+            .expect("auth");
+        assert_eq!(
+            live_account_in(&state, &codex_home)
+                .expect("unknown")
+                .status,
+            LiveAccountStatus::UnknownAccount
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -18,6 +18,8 @@ const ERROR_MESSAGES = {
   MODEL_NOT_ALLOWED: "That Codex model is not in the allowed Invoke profiles. Run invoke-status and choose an allowed model.",
   REASONING_NOT_ALLOWED:
     "That reasoning effort is not allowed for the chosen model. Run invoke-status and choose an allowed effort.",
+  CURRENT_ACCOUNT_NOT_SAVED:
+    "The Codex account ran out, but Codex is signed in to an account that is not saved in GSwitch, so it could not switch. Ask the user to save the current account in GSwitch.",
   EXTERNAL_CODEX_RUNNING:
     "The Codex account ran out, but the user's own Codex stayed open or the user cancelled the switch in GSwitch, so accounts were not switched. Tell the user.",
   CODEX_SHUTDOWN_FAILED: "The Codex account ran out, but Codex did not stop for the account switch. Tell the user.",
