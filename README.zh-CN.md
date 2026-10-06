@@ -6,6 +6,16 @@
 > 的分支。它增加了可选的调用模式，让 Claude Code 通过 OpenAI
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc) 的修改版把工作委派给
 > Codex。本项目与上述两个项目均无隶属关系，详见 [CREDITS.md](./CREDITS.md)。本文其余部分介绍上游 GSwitch。
+>
+> **调用模式设置。** 在 GSwitch 中选择**调用**，打开调用设置允许模型和推理强度，并为 Codex
+> 可使用的每个账户打开**允许用于调用模式**。在 Claude Code 中用本仓库的插件替换官方 Codex 插件：
+>
+> ```
+> /plugin marketplace add Light505/gswitchtool
+> /plugin install codex@gswitchtool
+> ```
+>
+> GSwitch 打开时，Claude 会通过 `codex:gswitch-invoke` 技能委派任务。
 
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。
 

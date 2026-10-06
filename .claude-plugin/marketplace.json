@@ -1,0 +1,19 @@
+{
+  "name": "gswitchtool",
+  "owner": {
+    "name": "Light505"
+  },
+  "metadata": {
+    "description": "Claude Code plugin for GSwitch Invoke Mode: a modified copy of OpenAI's codex-plugin-cc."
+  },
+  "plugins": [
+    {
+      "name": "codex",
+      "description": "Use Codex from Claude Code to review code or delegate tasks, with GSwitch Invoke Mode. Modified from OpenAI's codex-plugin-cc (Apache-2.0).",
+      "author": {
+        "name": "OpenAI; modified by Light505"
+      },
+      "source": "./integrations/codex-plugin-cc/plugins/codex"
+    }
+  ]
+}

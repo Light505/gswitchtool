@@ -22,7 +22,9 @@ import {
     runAppServerReview,
     runAppServerTurn
   } from "./lib/codex.mjs";
+import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
+import { GSwitchError, readInvokeStatus, validateInvocation } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -82,6 +84,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
+      "  node scripts/codex-companion.mjs invoke-status [--json]",
+      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -1050,6 +1054,159 @@ async function handleCancel(argv) {
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
 
+function renderInvokeStatus(report) {
+  if (!report.available) {
+    return `${report.message}\n`;
+  }
+  if (!report.invoke_mode) {
+    return "Invoke Mode is off in GSwitch. Do not delegate through invoke; only the user can turn it on.\n";
+  }
+  const profiles = report.allowed_invocation_profiles ?? [];
+  const lines = ["Invoke Mode is on. Allowed Codex models and reasoning efforts:"];
+  if (profiles.length === 0) {
+    lines.push("- none (ask the user to allow models in GSwitch's Invoke settings)");
+  }
+  for (const profile of profiles) {
+    lines.push(`- ${profile.model}: ${profile.reasoning_efforts.join(", ")}`);
+  }
+  lines.push(`Codex workers running: ${report.workers_running ?? 0}`);
+  if (report.failover_in_progress) {
+    lines.push("An account failover is in progress; new invocations wait for it.");
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function handleInvokeStatus(argv) {
+  const { options } = parseCommandInput(argv, { booleanOptions: ["json"] });
+  let report;
+  try {
+    report = { available: true, ...(await readInvokeStatus()) };
+  } catch (error) {
+    if (!(error instanceof GSwitchError)) {
+      throw error;
+    }
+    report = { available: false, code: error.code, message: error.message };
+  }
+  outputCommandResult(report, renderInvokeStatus(report), options.json);
+}
+
+// Keeps the result compact for the invoking model: Codex's final answer plus
+// one line naming what is needed to resume or inspect the run.
+function renderInvokeResult(result) {
+  const lines = [];
+  if (result.output) {
+    lines.push(result.output.trimEnd(), "");
+  } else if (result.message) {
+    lines.push(result.message, "");
+  }
+  const facts = [result.code ? `${result.status} (${result.code})` : result.status];
+  if (result.threadId) facts.push(`thread ${result.threadId}`);
+  if (result.jobId) facts.push(`job ${result.jobId}`);
+  facts.push(`${result.model}/${result.reasoningEffort}`);
+  if (result.write) facts.push("write");
+  lines.push(`[codex invoke] ${facts.join(" · ")}`);
+  const files = result.touchedFiles ?? [];
+  if (files.length) {
+    const shown = files.slice(0, 20).join(", ");
+    lines.push(`Changed files: ${shown}${files.length > 20 ? `, and ${files.length - 20} more` : ""}`);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+async function handleInvoke(argv) {
+  const { options, positionals } = parseCommandInput(argv, {
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread"],
+    booleanOptions: ["json", "write"],
+    aliasMap: {
+      m: "model"
+    }
+  });
+
+  const cwd = resolveCommandCwd(options);
+  const workspaceRoot = resolveCommandWorkspace(options);
+  // Invoke uses exact model names from invoke-status; aliases are not mapped.
+  const model = String(options.model ?? "").trim();
+  const effort = normalizeReasoningEffort(options.effort);
+  if (!model || !effort) {
+    throw new Error("invoke requires --model and --effort chosen from invoke-status.");
+  }
+  const resumeThreadId = normalizeResumeThreadId(options["resume-thread"]);
+  const prompt = readTaskPrompt(cwd, options, positionals);
+  if (!prompt && !resumeThreadId) {
+    throw new Error("Provide the task for Codex as the prompt, --prompt-file, or piped stdin.");
+  }
+  const write = Boolean(options.write);
+  const base = { model, reasoningEffort: effort, write };
+
+  try {
+    await validateInvocation(model, effort);
+  } catch (error) {
+    if (!(error instanceof GSwitchError)) {
+      throw error;
+    }
+    const rejected = { ...base, status: "rejected", code: error.code, message: error.message };
+    outputCommandResult(rejected, renderInvokeResult(rejected), options.json);
+    process.exitCode = 2;
+    return;
+  }
+
+  // Each Invoke worker owns its app server, so it can be stopped and started
+  // again under another account without touching other workers.
+  process.env[DISABLE_BROKER_ENV] = "1";
+  // The invoking model reads stderr too; Node's warning about the Windows
+  // shell launch of Codex would cost it tokens on every run.
+  process.noDeprecation = true;
+  ensureCodexAvailable(cwd);
+  const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), write);
+  const { logFile, progress } = createTrackedProgress(job, { stderr: false });
+
+  let result;
+  try {
+    const execution = await runTrackedJob(
+      job,
+      () =>
+        executeTaskRun({
+          cwd,
+          model,
+          effort,
+          prompt,
+          write,
+          resumeLast: false,
+          resumeThreadId,
+          jobId: job.id,
+          onProgress: progress
+        }),
+      { logFile }
+    );
+    const completed = execution.exitStatus === 0;
+    const errorInfo = execution.payload.error?.codexErrorInfo ?? null;
+    result = {
+      ...base,
+      status: completed ? "completed" : "failed",
+      code: completed ? null : errorInfo === "usageLimitExceeded" ? "USAGE_LIMIT_EXCEEDED" : "CODEX_FAILED",
+      message: completed ? null : execution.payload.error?.message ?? null,
+      jobId: job.id,
+      threadId: execution.threadId ?? null,
+      output: execution.payload.rawOutput,
+      touchedFiles: execution.payload.touchedFiles ?? []
+    };
+  } catch (error) {
+    result = {
+      ...base,
+      status: "failed",
+      code: "CODEX_FAILED",
+      message: error instanceof Error ? error.message : String(error),
+      jobId: job.id,
+      threadId: readStoredJob(workspaceRoot, job.id)?.threadId ?? resumeThreadId,
+      output: "",
+      touchedFiles: []
+    };
+  }
+
+  outputCommandResult(result, renderInvokeResult(result), options.json);
+  process.exitCode = result.status === "completed" ? 0 : 1;
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -1089,6 +1246,12 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "invoke-status":
+      await handleInvokeStatus(argv);
+      break;
+    case "invoke":
+      await handleInvoke(argv);
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

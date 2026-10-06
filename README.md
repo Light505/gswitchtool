@@ -8,6 +8,19 @@
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc). It is not
 > affiliated with either project; see [CREDITS.md](./CREDITS.md). The rest of
 > this README describes upstream GSwitch.
+>
+> **Invoke Mode setup.** In GSwitch, choose **Invoke**, open Invoke settings to
+> allow models and reasoning efforts, and switch on **Allow in Invoke Mode** for
+> each account Codex may use. In Claude Code, add this repository's plugin in
+> place of the stock Codex plugin:
+>
+> ```
+> /plugin marketplace add Light505/gswitchtool
+> /plugin install codex@gswitchtool
+> ```
+>
+> Claude then delegates through the `codex:gswitch-invoke` skill while GSwitch
+> is open.
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.
