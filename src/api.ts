@@ -111,8 +111,10 @@ export const api = {
     invoke<CatalogModel[]>("get_model_catalog", { refresh }),
   setInvokeProfiles: (profiles: InvocationProfile[]) =>
     invoke<InvokeSettings>("set_invoke_profiles", { profiles }),
-  setInvokePreferences: (accountPriority: string[], preferredMinRemaining: number, maxConcurrentTasks: number) =>
-    invoke<InvokeSettings>("set_invoke_preferences", { accountPriority, preferredMinRemaining, maxConcurrentTasks }),
+  setInvokePreferences: (accountPriority: string[], preferredMinRemaining: number, maxConcurrentTasks: number, autoWake: boolean) =>
+    invoke<InvokeSettings>("set_invoke_preferences", { accountPriority, preferredMinRemaining, maxConcurrentTasks, autoWake }),
+  onInvokeAutoWoke: (handler: (accounts: string[]) => void) =>
+    listen<string[]>("invoke-auto-woke", (event) => handler(event.payload)),
   setAccountInvokeAllowed: (id: string, allowed: boolean) =>
     invoke<AccountView>("set_account_invoke_allowed", { id, allowed }),
   invokeFailover: () => invoke<SwitchAccounts | null>("get_invoke_failover"),

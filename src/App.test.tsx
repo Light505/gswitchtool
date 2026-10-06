@@ -62,6 +62,7 @@ const mocks = vi.hoisted(() => ({
   setAccountInvokeAllowed: vi.fn(),
   setInvokePreferences: vi.fn(),
   appVersion: vi.fn(),
+  onInvokeAutoWoke: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
@@ -224,7 +225,9 @@ function prepareDefaults() {
   mocks.modelCatalog.mockResolvedValue([]);
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
   mocks.appVersion.mockResolvedValue({ version: "1.2.0", dev: false });
-  mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number) => ({
+  mocks.onInvokeAutoWoke.mockResolvedValue(() => undefined);
+  mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number, autoWake: boolean) => ({
+    auto_wake: autoWake,
     invoke_mode: true,
     allowed_invocation_profiles: [],
     account_priority: order,
@@ -2471,10 +2474,13 @@ describe("Invoke Mode", () => {
     const tasks = within(dialog).getByRole("spinbutton", { name: /Codex tasks at once/ });
     await userEvent.clear(tasks);
     await userEvent.type(tasks, "9");
+    const autoWake = within(dialog).getByRole("checkbox", { name: /Start reset timers automatically/ });
+    expect(autoWake).not.toBeChecked();
+    await userEvent.click(autoWake);
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
 
     // Out-of-range values are kept within limits.
-    await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6));
+    await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6, true));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
@@ -2495,6 +2501,22 @@ describe("Invoke Mode", () => {
     expect(badge).toHaveAttribute("title", expect.stringContaining("pro@example.com"));
     expect(within(dialog).getByText("Not on your accounts")).toBeInTheDocument();
     expect(within(dialog).getAllByText(/^Only on /)).toHaveLength(1);
+  });
+
+  it("says which accounts automatic Wake started", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
+    mocks.listAccounts.mockResolvedValue([chatAccount, second]);
+    let announce: ((accounts: string[]) => void) | undefined;
+    mocks.onInvokeAutoWoke.mockImplementation(async (handler: typeof announce) => {
+      announce = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    await screen.findAllByText("person@example.com");
+    await waitFor(() => expect(announce).toBeDefined());
+
+    act(() => announce!(["account-2"]));
+    expect(await screen.findByText("Started the reset timer for second@example.com.")).toBeInTheDocument();
   });
 
   it("says when Invoke Mode moved Codex to a preferred account", async () => {

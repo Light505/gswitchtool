@@ -1960,6 +1960,33 @@ textarea {
   line-height: 1.35;
 }
 
+.invoke-toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.invoke-toggle input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 2px 0 0;
+  padding: 0;
+  accent-color: var(--accent);
+}
+
+.invoke-toggle span {
+  display: grid;
+  gap: 3px;
+}
+
+.invoke-toggle small {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .invoke-panel .invoke-loading {
   display: flex;
   align-items: center;

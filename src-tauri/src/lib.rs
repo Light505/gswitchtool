@@ -1,6 +1,7 @@
 mod accounts;
 mod app_server;
 mod app_update;
+mod auto_wake;
 mod chatgpt;
 mod cli_update;
 mod codex;
@@ -170,6 +171,18 @@ pub fn run() {
                 Ok(_) => "Invoke endpoint ready; startup finished",
                 Err(_) => "Invoke endpoint failed; startup finished",
             });
+            // Start idle accounts' reset timers when the user turned it on.
+            {
+                let state = app.state::<accounts::AppState>().inner().clone();
+                let woke = app.handle().clone();
+                auto_wake::start(
+                    state,
+                    invoke.clone(),
+                    Box::new(move |accounts| {
+                        let _ = woke.emit("invoke-auto-woke", accounts);
+                    }),
+                );
+            }
             // Learn which accounts can use which models, for Invoke routing.
             {
                 let state = app.state::<accounts::AppState>().inner().clone();

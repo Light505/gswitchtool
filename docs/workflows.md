@@ -385,8 +385,9 @@ There is no automatic redemption, expiry watcher, or scheduler.
 
 Wake sends one short Codex model request for each selected saved ChatGPT
 account, even when quota is already available or that plan has no five-hour
-window. It does not redeem reset credits, route normal work, schedule future
-requests, or rotate the active account. The card exposes Wake for every saved
+window. It does not redeem reset credits, route normal work, or rotate the
+active account, and it schedules no future requests except the opt-in
+[automatic Wake](#automatic-wake) of Invoke Mode. The card exposes Wake for every saved
 ChatGPT account; quota display and refresh are separate actions. A running
 Codex process does not make an account ineligible: a matching active identity
 uses one live access-token snapshot, a different identity uses the saved
@@ -484,6 +485,20 @@ account, it switches to it through the normal switch transaction, reporting the
 switch as a priority switch. It never waits for the user here: with the user's
 own Codex open, or a refused switch, the task runs on the current account. A
 running task is never switched away by another task's start.
+
+### Automatic Wake
+
+A Codex usage window starts counting at the first model request after it
+resets. Until then the provider reports it with nothing used and its full length
+remaining, its reset time moving with each read. When the user turns on
+**Start reset timers automatically** in Invoke settings, and only while Invoke
+Mode is on, GSwitch checks every allowed, signed-in ChatGPT account every ten
+minutes (first one minute after start) with the same snapshot read as an
+automatic quota refresh. An account with such an idle window (0% used and at
+least the window's length minus two minutes ahead of the read) gets the normal
+Wake request described above. Each account is woken at most once an hour,
+whatever the result, and the window names the accounts it woke. A window that
+is running, used, or at its limit is never woken.
 
 ### Models only some accounts offer
 

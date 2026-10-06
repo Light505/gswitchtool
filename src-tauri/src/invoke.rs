@@ -88,6 +88,7 @@ impl InvokeState {
         account_priority: Vec<String>,
         preferred_min_remaining: u8,
         max_concurrent_tasks: u8,
+        auto_wake: bool,
     ) -> Result<InvokeSettings, String> {
         if preferred_min_remaining > 90 {
             return Err("Choose a usage threshold from 0% to 90%".to_string());
@@ -106,6 +107,7 @@ impl InvokeState {
             settings.account_priority = account_priority;
             settings.preferred_min_remaining = preferred_min_remaining;
             settings.max_concurrent_tasks = max_concurrent_tasks;
+            settings.auto_wake = auto_wake;
         })
     }
 
@@ -335,12 +337,14 @@ mod tests {
             ),
             (20, 2)
         );
+        assert!(!defaults.auto_wake);
 
         let saved = state
             .set_preferences(
                 vec!["b".into(), "a".into(), "b".into(), String::new()],
                 35,
                 3,
+                true,
             )
             .expect("save");
         assert_eq!(
@@ -351,14 +355,15 @@ mod tests {
             (saved.preferred_min_remaining, saved.max_concurrent_tasks),
             (35, 3)
         );
+        assert!(saved.auto_wake);
         assert_eq!(
             InvokeState::load(path.clone()).settings().expect("reload"),
             saved
         );
 
-        assert!(state.set_preferences(Vec::new(), 91, 2).is_err());
-        assert!(state.set_preferences(Vec::new(), 20, 0).is_err());
-        assert!(state.set_preferences(Vec::new(), 20, 7).is_err());
+        assert!(state.set_preferences(Vec::new(), 91, 2, false).is_err());
+        assert!(state.set_preferences(Vec::new(), 20, 0, false).is_err());
+        assert!(state.set_preferences(Vec::new(), 20, 7, false).is_err());
         assert_eq!(state.settings().expect("unchanged"), saved);
 
         // A policy file from an older version gets the defaults.
@@ -373,6 +378,7 @@ mod tests {
             (older.preferred_min_remaining, older.max_concurrent_tasks),
             (20, 2)
         );
+        assert!(!older.auto_wake);
         let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
     }
 

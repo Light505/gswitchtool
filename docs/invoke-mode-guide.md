@@ -107,6 +107,13 @@ Credentials stay encrypted on your computer. Claude never sees them.
 5. **Codex tasks at once** (default 2) caps how many delegated tasks Claude can
    run in parallel; more wait their turn.
 
+**Start reset timers automatically** (off until you turn it on): a usage window
+starts counting at the first request after it resets. With this on, GSwitch
+checks your allowed accounts every ten minutes and sends any account whose window
+has not started one short Wake message, the same as the **Wake** button, so its
+reset timer is already running when you need it. Each Wake uses a tiny amount of
+usage. The window tells you which accounts it woke.
+
 A model that only some of your accounts can use, such as a model for a higher
 plan, shows **Only on Pro** (or the plans that have it) in Invoke settings. If
 you allow it and Claude uses it, GSwitch waits for other Codex tasks to finish,

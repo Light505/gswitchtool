@@ -141,6 +141,9 @@ pub struct InvokeSettings {
     /// How many delegated Codex tasks may run at once; more wait their turn.
     #[serde(default = "default_max_concurrent_tasks")]
     pub max_concurrent_tasks: u8,
+    /// Wake allowed accounts whose usage window has not started.
+    #[serde(default)]
+    pub auto_wake: bool,
 }
 
 pub const DEFAULT_PREFERRED_MIN_REMAINING: u8 = 20;
@@ -163,6 +166,7 @@ impl Default for InvokeSettings {
             account_priority: Vec::new(),
             preferred_min_remaining: DEFAULT_PREFERRED_MIN_REMAINING,
             max_concurrent_tasks: DEFAULT_MAX_CONCURRENT_TASKS,
+            auto_wake: false,
         }
     }
 }

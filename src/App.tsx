@@ -1199,6 +1199,7 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   const [order, setOrder] = useState<AccountView[]>(() => orderedAccounts(accounts, settings.account_priority ?? []));
   const [minRemaining, setMinRemaining] = useState(String(settings.preferred_min_remaining ?? 20));
   const [maxTasks, setMaxTasks] = useState(String(settings.max_concurrent_tasks ?? 2));
+  const [autoWake, setAutoWake] = useState(settings.auto_wake ?? false);
   const move = (index: number, offset: number) => {
     setOrder((current) => {
       const next = [...current];
@@ -1259,6 +1260,7 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
         order.map((account) => account.id),
         clamp(minRemaining, 0, 90, 20),
         clamp(maxTasks, 1, 6, 2),
+        autoWake,
       ));
     } catch {
       setSaveError(t("error.invokeSave"));
@@ -1349,6 +1351,13 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
             </span>
           </label>
         </div>
+        <label className="invoke-toggle">
+          <input checked={autoWake} disabled={saving} onChange={(event) => setAutoWake(event.target.checked)} type="checkbox" />
+          <span>
+            <strong>{t("invoke.autoWake")}</strong>
+            <small>{t("invoke.autoWakeHint")}</small>
+          </span>
+        </label>
         {saveError ? <p className="remove-error" role="alert">{saveError}</p> : null}
         <div className="modal-actions">
           <button className="button button-quiet" disabled={loadingModels || saving} onClick={() => void loadModels(true)} type="button">
@@ -1744,6 +1753,32 @@ export default function App() {
     }, delay);
     return () => window.clearTimeout(timer);
   }, [invokePause]);
+
+  useEffect(() => {
+    // Automatic Wake started some accounts' reset timers; say which.
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeAutoWoke((ids) => {
+          const names = ids.map((id) => {
+            const account = accountsRef.current.find((saved) => saved.id === id);
+            return account ? accountPrimaryName(account) : t("common.unknown");
+          });
+          setNotice({ kind: "info", text: t("invoke.autoWoke", { accounts: names.join(", ") }) });
+          void loadSnapshot();
+        });
+        if (disposed) unlisten();
+        else stop = unlisten;
+      } catch {
+        // Without the event the cards still refresh on their schedule.
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [loadSnapshot, t]);
 
   const resumeInvoke = async () => {
     setInvokeResuming(true);

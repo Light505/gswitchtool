@@ -556,11 +556,13 @@ pub fn set_invoke_preferences(
     account_priority: Vec<String>,
     preferred_min_remaining: u8,
     max_concurrent_tasks: u8,
+    auto_wake: bool,
 ) -> Result<InvokeSettings, String> {
     invoke.set_preferences(
         account_priority,
         preferred_min_remaining,
         max_concurrent_tasks,
+        auto_wake,
     )
 }
 

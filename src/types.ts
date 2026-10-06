@@ -27,6 +27,8 @@ export interface InvokeSettings {
   /** Percent of each usage window a preferred account must have left. */
   preferred_min_remaining?: number;
   max_concurrent_tasks?: number;
+  /** Wake allowed accounts whose usage window has not started. */
+  auto_wake?: boolean;
 }
 
 export interface SwitchAccounts {
