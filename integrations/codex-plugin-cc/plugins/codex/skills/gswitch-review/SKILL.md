@@ -1,6 +1,6 @@
 ---
 name: gswitch-review
-description: Ask Codex for a read-only review of code changes through GSwitch Invoke Mode when you judge a second review would help, such as after a substantial, risky, or security-sensitive change. It works only while the user has Invoke Mode on in GSwitch; otherwise it refuses and you continue without it.
+description: Use proactively after you finish any non-trivial code change, before reporting back, to get a read-only Codex review through GSwitch Invoke Mode. Non-trivial means new or changed behavior, validation, error handling, data or money logic, concurrency, security, or edits across several functions or files; skip only typos, comments, formatting, renames, and one-line fixes. It works only while the user has Invoke Mode on in GSwitch; otherwise it refuses and you continue without it.
 argument-hint: "[what to review, or nothing to review the current changes]"
 ---
 
@@ -20,10 +20,12 @@ carry on; do not mention it again in this session unless the user asks.
 
 ## 2. Decide whether to review
 
-Review when a second opinion is likely to catch something: a substantial or multi-file
-change, tricky logic, concurrency, security or credential handling, data migrations, or
-before you call non-trivial work done. Skip trivial edits, and review each change once;
-do not loop review and fix. If the user asked for a review ($ARGUMENTS), review that.
+Reviewing is the default once you have finished a non-trivial code change and before you
+report back: new or changed behavior, input validation, error handling, data or money
+calculations, concurrency, security or credential handling, migrations, or edits across
+several functions or files. Skip only trivial edits: typos, comments, formatting, renames,
+and one-line fixes. Review each change once; do not loop review and fix. If the user asked
+for a review ($ARGUMENTS), review that.
 
 ## 3. Run a read-only review
 
