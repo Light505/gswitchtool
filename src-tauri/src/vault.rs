@@ -17,8 +17,10 @@ use crate::storage;
 
 const CLIENT_PATH: &[u8] = b"gswitch-credentials";
 const PENDING_CREDENTIAL_INDEX: &[u8] = b"pending-credential-index-v1";
+// The fork keeps its own root key so it never shares a vault key with an
+// upstream GSwitch installed for the same user.
 #[cfg(not(test))]
-const ROOT_SERVICE: &str = "GSwitch credential vault";
+const ROOT_SERVICE: &str = "gswitchtool credential vault";
 #[cfg(not(test))]
 const ROOT_USER: &str = "root-key-v1";
 // Stronghold owns process-global runtime resources. Serialize snapshot access

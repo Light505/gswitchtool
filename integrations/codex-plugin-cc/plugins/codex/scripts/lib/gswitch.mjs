@@ -6,9 +6,9 @@ import path from "node:path";
 import process from "node:process";
 
 export const GSWITCH_CONFIG_DIR_ENV = "GSWITCH_CONFIG_DIR";
-// Tauri keeps GSwitch's configuration in a directory named after its bundle
-// identifier; GSWITCH_CONFIG_DIR overrides it.
-const GSWITCH_IDENTIFIER = "com.ginbing.gswitch";
+// Tauri keeps the gswitchtool app configuration in a directory named after its
+// bundle identifier; GSWITCH_CONFIG_DIR overrides it.
+const GSWITCH_IDENTIFIER = "com.light505.gswitchtool";
 const ENDPOINT_FILE = "invoke-endpoint.json";
 const REQUEST_TIMEOUT_MS = 10_000;
 
