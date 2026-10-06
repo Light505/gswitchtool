@@ -2457,7 +2457,7 @@ export default function App() {
       <header className="toolbar">
         <div className="brand-lockup">
           <img alt="" aria-hidden="true" className="brand-mark" src="/gswitch-icon.svg" />
-          <h1>GSwitch</h1>
+          <h1>GSwitch Claude Tool</h1>
         </div>
         <div className="toolbar-actions">
           {invokeSettings ? (

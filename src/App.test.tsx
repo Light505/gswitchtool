@@ -473,7 +473,7 @@ describe("GSwitch account workspace", () => {
     const card = (await screen.findByRole("heading", { name: account.email })).closest("article")!;
     expect(within(card).getByText("Current", { selector: ".badge-active" })).toBeInTheDocument();
     expect(container.querySelector("header")).not.toHaveTextContent(account.email);
-    expect(within(container.querySelector("header")!).getByRole("heading", { name: "GSwitch" })).toBeInTheDocument();
+    expect(within(container.querySelector("header")!).getByRole("heading", { name: "GSwitch Claude Tool" })).toBeInTheDocument();
   });
 
   it("shows a signed-out notice with saved accounts and no extra action", async () => {
@@ -1422,7 +1422,7 @@ describe("GSwitch account workspace", () => {
     await user.tab({ shift: true });
     expect(warning).toHaveFocus();
     expect(screen.getByRole("tooltip")).toBeInTheDocument();
-    await user.click(screen.getByRole("heading", { name: "GSwitch" }));
+    await user.click(screen.getByRole("heading", { name: "GSwitch Claude Tool" }));
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
     mocks.refreshAccountQuota.mockResolvedValue({ ...staleQuota, status: "fresh" });

@@ -1,8 +1,8 @@
-# GSwitch
+# GSwitch Claude Tool
 
 [简体中文](./README.zh-CN.md) · English
 
-> **gswitchtool** is a fork of [GSwitch](https://github.com/ginbing/GSwitch) by
+> **GSwitch Claude Tool** (repository `gswitchtool`) is a fork of [GSwitch](https://github.com/ginbing/GSwitch) by
 > Ginbing. It adds an optional Invoke Mode that lets Claude Code delegate work
 > to Codex through a modified copy of OpenAI's
 > [codex-plugin-cc](https://github.com/openai/codex-plugin-cc). It is not

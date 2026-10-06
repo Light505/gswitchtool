@@ -1,9 +1,10 @@
 # Credits
 
-gswitchtool combines and modifies two open-source projects. The original
-authors' commit history is preserved in this repository.
+GSwitch Claude Tool (repository `gswitchtool`) combines and modifies two
+open-source projects. The original authors' commit history is preserved in
+this repository.
 
-gswitchtool is not affiliated with or endorsed by Ginbing or OpenAI.
+GSwitch Claude Tool is not affiliated with or endorsed by Ginbing or OpenAI.
 
 ## GSwitch
 
