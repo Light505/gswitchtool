@@ -28,7 +28,8 @@ identity never checks.
 `pnpm tauri build`. `build:installer` adds `src-tauri/tauri.main.conf.json`,
 the installed identity **GSwitch Claude Tool** (`com.light505.gswitchtool`), so
 a dev build never installs over or replaces the installed app. Both identities
-use the installed identity's data folder. The upstream release workflow and scripts below name upstream's
+use `~/.gswitchtool`, adopted once from the installed identity's AppData folder
+by 1.1.2. The upstream release workflow and scripts below name upstream's
 artifacts and need upstream's signing setup; they are not used for this fork.
 
 ## Current release policy

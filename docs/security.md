@@ -152,10 +152,15 @@ cross-process file lock. GSwitch also runs as a single instance, because a
 second process would act on its own stale in-memory copy of the store and could
 overwrite a pending reset record or point metadata at a retired secret
 generation. The installed and dev builds of GSwitch Claude Tool have different
-identifiers but share one data folder, so the single-instance plugin alone
+identifiers but share one data folder, `~/.gswitchtool`, so the single-instance plugin alone
 cannot separate them; an exclusive `app-instance.lock` in that folder, held for
 the life of the process, does, and the second build exits with a message naming
-the first. A new secret generation is durably written and
+the first. The folder is outside AppData because Windows gives a process started
+from a packaged app, such as Claude's desktop app or the Claude Code session
+in it, a private copy of AppData; there the builds, and the Claude Code plugin
+reading the Invoke endpoint, would each see different data. On first start a
+build copies an older AppData folder in, account list last, and leaves the old
+folder unchanged; if the copy fails, it keeps using the old folder. A new secret generation is durably written and
 readable in the vault before metadata points at it; metadata commits before an
 old reachable generation can be retired. Persist metadata successfully before
 changing its in-memory projection. Startup hydration and legacy migration hold

@@ -23,11 +23,16 @@ use std::{path::PathBuf, sync::Arc};
 
 use tauri::{Emitter, Manager};
 
-/// The installed build and the dev build (`com.light505.gswitchtool.dev`) keep
-/// one data folder, named after the installed build, so their accounts and
-/// settings are the same; `storage::acquire_app_instance` keeps them from
-/// running at the same time.
+/// The installed build's identifier. Only it updates itself; before 1.1.2 its
+/// AppData folder held the data that `~/.gswitchtool` now adopts.
 const SHARED_DATA_IDENTIFIER: &str = "com.light505.gswitchtool";
+
+/// Every build keeps its accounts and settings in `~/.gswitchtool`, so the
+/// installed and dev builds share them and `storage::acquire_app_instance`
+/// keeps them from running at the same time. Not AppData: Windows gives an app
+/// started from a packaged app, such as Claude's desktop app, its own private
+/// copy of AppData, which split the accounts between launches.
+const DATA_DIR_NAME: &str = ".gswitchtool";
 
 /// Records each startup step with its time in `startup.log`, replaced on
 /// every start. It holds no account data; it shows where a start stopped.
@@ -52,7 +57,8 @@ impl StartupTrace {
     }
 }
 
-fn shared_data_dir(own_config_dir: PathBuf) -> PathBuf {
+/// The AppData folder that held the data before 1.1.2.
+fn legacy_data_dir(own_config_dir: PathBuf) -> PathBuf {
     match own_config_dir.parent() {
         Some(parent) => parent.join(SHARED_DATA_IDENTIFIER),
         None => own_config_dir,
@@ -77,7 +83,10 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
-            let config_dir = shared_data_dir(app.path().app_config_dir()?);
+            let config_dir = storage::adopt_data_dir(
+                &legacy_data_dir(app.path().app_config_dir()?),
+                &app.path().home_dir()?.join(DATA_DIR_NAME),
+            );
             let name = app.package_info().name.clone();
             match storage::acquire_app_instance(&config_dir, &name)
                 .map_err(std::io::Error::other)?
@@ -224,14 +233,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn installed_and_dev_builds_share_one_data_folder() {
+    fn both_builds_adopt_the_installed_builds_older_appdata_folder() {
         let roaming = PathBuf::from("roaming");
         assert_eq!(
-            shared_data_dir(roaming.join("com.light505.gswitchtool.dev")),
+            legacy_data_dir(roaming.join("com.light505.gswitchtool.dev")),
             roaming.join("com.light505.gswitchtool")
         );
         assert_eq!(
-            shared_data_dir(roaming.join("com.light505.gswitchtool")),
+            legacy_data_dir(roaming.join("com.light505.gswitchtool")),
             roaming.join("com.light505.gswitchtool")
         );
     }

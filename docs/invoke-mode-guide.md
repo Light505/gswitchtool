@@ -48,8 +48,10 @@ app is always a reviewed version. The installer is written to
 Run it to install **GSwitch Claude Tool**. You can also download the installer
 from the repository's **Releases** page on GitHub instead of building it.
 
-Accounts and settings are kept in your user profile, not in the install folder,
-so updating or reinstalling keeps them. They are separate from any upstream
+Accounts and settings are kept in `.gswitchtool` in your home folder
+(`C:\Users\<you>\.gswitchtool`), not in the install folder, so updating or
+reinstalling keeps them. Credentials there are encrypted. Version 1.1.2 moved
+them there from AppData once; the old folder is left untouched as a backup. They are separate from any upstream
 GSwitch installed on the same computer.
 
 ### Updates
@@ -205,7 +207,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | `CURRENT_ACCOUNT_UNKNOWN` | Save the account Codex is using in GSwitch, or finish **Review recovery** if GSwitch shows it. |
 | The GSwitch window freezes while opening | Close it, end any leftover `msedgewebview2.exe` processes for GSwitch Claude Tool in Task Manager, and open it again. |
 | Claude does not see a plugin change | Start a new Claude Code session. |
-| Accounts are missing right after installing or updating | They are still saved. Close GSwitch Claude Tool and open it again. If it happens again, keep `%APPDATA%\com.light505.gswitchtool\startup.log` (it lists each startup step and holds no account data) to find where the start stopped. |
+| Accounts are missing in a version before 1.1.2 | Versions before 1.1.2 kept data in AppData, and Windows gives an app started from Claude's desktop app its own private copy of AppData, so accounts added in a window opened from Claude did not appear when opening GSwitch from the Start menu. Update to 1.1.2 or later. If accounts are still missing, keep `~/.gswitchtool/startup.log` (each startup step, no account data). |
 | GSwitch never offers an update | Run `git pull` in the repository once so Git saves your GitHub sign-in, then reopen the app. Versions before 1.1.0 cannot update themselves. |
 | *Quit Codex* although no Codex window is open | GSwitch stops Codex's background service by itself; an IDE extension or a `codex` command running in a terminal still counts as open. |
 | *… is already open. Close it before opening …* | The installed app and the dev app share accounts, so only one runs at a time. Close the one that is open. |

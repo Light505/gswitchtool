@@ -151,6 +151,75 @@ pub fn acquire_app_instance(data_dir: &Path, name: &str) -> Result<AppInstance, 
     Ok(AppInstance::Acquired(AppInstanceLock { _file: file }))
 }
 
+/// Files that belong to one running GSwitch and are never carried over.
+const NOT_ADOPTED: &[&str] = &[
+    "app-instance.lock",
+    "app-instance.name",
+    "operations.lock",
+    "credentials.lock",
+    "invoke-endpoint.json",
+    "startup.log",
+    "isolated-codex",
+];
+
+/// Chooses the data folder, adopting an older one once. `target` is used when
+/// it already holds accounts or there is nothing to adopt. Otherwise the older
+/// folder's files are copied in, each through a temporary file and the account
+/// list last, so a copy that stops early is completed on the next start and
+/// never looks finished. The older folder is left as it was. If the copy
+/// fails, the older folder stays in use and nothing is lost.
+pub fn adopt_data_dir(legacy: &Path, target: &Path) -> std::path::PathBuf {
+    let accounts = "accounts.json";
+    if target.join(accounts).exists() || !legacy.join(accounts).exists() {
+        return target.to_path_buf();
+    }
+    let copied = copy_tree(legacy, target, true)
+        .and_then(|()| copy_file(&legacy.join(accounts), &target.join(accounts)));
+    match copied {
+        Ok(()) => target.to_path_buf(),
+        Err(_) => legacy.to_path_buf(),
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path, top: bool) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let name_text = name.to_string_lossy();
+        if top && (NOT_ADOPTED.contains(&name_text.as_ref()) || name_text == "accounts.json") {
+            continue;
+        }
+        // Leftovers of interrupted atomic writes.
+        if name_text.contains(".tmp.") {
+            continue;
+        }
+        let destination = to.join(&name);
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &destination, false)?;
+        } else {
+            copy_file(&entry.path(), &destination)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
+    let temporary = to.with_file_name(format!(
+        "{}.adopting",
+        to.file_name()
+            .map(|name| name.to_string_lossy())
+            .unwrap_or_default()
+    ));
+    fs::copy(from, &temporary)?;
+    // Flushing needs write access on Windows.
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&temporary)?
+        .sync_all()?;
+    fs::rename(&temporary, to)
+}
+
 pub fn read_json(path: &Path, label: &str) -> Result<Value, String> {
     let content = fs::read_to_string(path).map_err(|_| format!("Unable to read {label}"))?;
     deserialize(&content, label)
@@ -201,6 +270,78 @@ mod tests {
     use super::*;
     use crate::types::{AccountIdentity, AccountKind, PendingResetCredit, StoredAccount};
     use serde_json::json;
+
+    #[test]
+    fn the_home_data_folder_adopts_the_older_folder_once_and_leaves_it_intact() {
+        let root = std::env::temp_dir().join(format!("gswitch-adopt-{}", Uuid::new_v4()));
+        let legacy = root.join("appdata");
+        let target = root.join("home").join(".gswitchtool");
+        fs::create_dir_all(legacy.join("damaged-account-stores")).expect("legacy");
+        fs::create_dir_all(legacy.join("isolated-codex")).expect("legacy");
+        for (name, content) in [
+            ("accounts.json", "accounts"),
+            ("credentials.hold", "vault"),
+            ("invoke.json", "policy"),
+            ("invoke-endpoint.json", "old pipe"),
+            ("app-instance.lock", ""),
+            ("startup.log", "old start"),
+            ("credentials.hold.tmp.1e80", "partial"),
+            ("damaged-account-stores/1.json", "kept"),
+            ("isolated-codex/config.toml", "scratch"),
+        ] {
+            fs::write(legacy.join(name), content).expect("write");
+        }
+
+        assert_eq!(adopt_data_dir(&legacy, &target), target);
+        for (name, content) in [
+            ("accounts.json", "accounts"),
+            ("credentials.hold", "vault"),
+            ("invoke.json", "policy"),
+            ("damaged-account-stores/1.json", "kept"),
+        ] {
+            assert_eq!(fs::read_to_string(target.join(name)).expect(name), content);
+        }
+        for name in [
+            "invoke-endpoint.json",
+            "app-instance.lock",
+            "startup.log",
+            "credentials.hold.tmp.1e80",
+            "isolated-codex",
+        ] {
+            assert!(!target.join(name).exists(), "{name} is not adopted");
+        }
+        assert_eq!(
+            fs::read_to_string(legacy.join("accounts.json")).expect("legacy kept"),
+            "accounts"
+        );
+
+        // Once adopted, the home folder is authoritative; later changes to
+        // the older folder are not copied again.
+        fs::write(legacy.join("accounts.json"), "stale").expect("write");
+        assert_eq!(adopt_data_dir(&legacy, &target), target);
+        assert_eq!(
+            fs::read_to_string(target.join("accounts.json")).expect("read"),
+            "accounts"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn a_new_install_starts_in_the_home_folder_and_a_failed_copy_keeps_the_older_folder() {
+        let root = std::env::temp_dir().join(format!("gswitch-adopt-{}", Uuid::new_v4()));
+        let empty_legacy = root.join("none");
+        let target = root.join(".gswitchtool");
+        assert_eq!(adopt_data_dir(&empty_legacy, &target), target);
+
+        let legacy = root.join("appdata");
+        fs::create_dir_all(&legacy).expect("legacy");
+        fs::write(legacy.join("accounts.json"), "accounts").expect("write");
+        // A file where the home folder should be makes every copy fail.
+        let blocked = root.join("blocked");
+        fs::write(&blocked, "not a folder").expect("write");
+        assert_eq!(adopt_data_dir(&legacy, &blocked), legacy);
+        let _ = fs::remove_dir_all(root);
+    }
 
     #[test]
     fn only_one_build_can_use_the_shared_data_folder_at_a_time() {
