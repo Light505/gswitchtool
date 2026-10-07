@@ -65,6 +65,10 @@ needs one idle Claude Code plugin broker, started with the plugin's
 The Claude Code plugin in `integrations/codex-plugin-cc` has its own Node test
 suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.
 
+The router plugin mechanics and Dev packaging use temporary homes and Git
+repositories: `node --test integrations/router-plugin/tests/router.test.mjs`.
+The live-session checks remain in [`router-guide.md`](./router-guide.md#testing-and-dev).
+
 Invoke Mode acceptance with real accounts needs at least two saved ChatGPT
 accounts allowed in Invoke Mode, with the current Codex account saved. Exhausting
 a real account on demand is impractical, so an acceptance run may set

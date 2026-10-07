@@ -167,6 +167,9 @@ plugin changes that are not on `main` yet, see
 | `/codex:gswitch-invoke` | For the rest of this session, Claude hands Codex the work that suits it and keeps the rest. |
 | Nothing | Claude does the work itself. While Invoke Mode is on, it may ask Codex for a read-only review of a non-trivial change before reporting back. |
 
+While Invoke Mode is on, the [router plugin](./router-guide.md) can start Codex
+through `gswitch-delegate` when its rules send a task to Codex.
+
 Claude picks a model and effort from your allowed list: lighter for simple work,
 stronger for complex work. Each Codex result ends with a line like:
 
@@ -184,7 +187,8 @@ the tool rather than from Codex:
 | --- | --- |
 | `Changed files (git): …` | What git shows changed during the run, with lines added and removed. |
 | `Verify: passed` / `Verify: FAILED` | The test command Claude named, run by the tool after Codex finished. On a failure Codex gets one automatic retry in the same thread; after that, Claude takes over. |
-| `WARNING: …` | Something does not add up, such as a file changed outside the expected paths, or a file Codex says it changed that git shows unchanged. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
+| `SCOPE REQUEST: …` / `Scope: n change(s) declined` | Files Codex was stopped from changing, with its reason when given, and how many paths were declined. Claude decides whether to resume the same thread with a wider scope. |
+| `WARNING: …` | Something does not add up, such as a file Codex says it changed that git shows unchanged. With `--write` and `--scope`, edits outside `--scope` are declined before they happen; shell edits are still caught afterwards by `WARNING: changed outside --scope`. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
 | `Full answer: …` | A long answer was shortened; the whole answer is in that file. |
 | `Worktree: applied …` / `Worktree kept: …` | When Claude runs two editing tasks at once, each works in its own copy of the repository, and the result is copied back into your working tree. A kept copy (a conflict that could not be resolved, or a failed test) is left for you with its reason; nothing in your working tree changes. The copies share your real `node_modules` and Rust build folder (so nothing is reinstalled), which means an install inside a copy changes those shared folders, just as it would in your working tree. |
 

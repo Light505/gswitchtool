@@ -69,6 +69,7 @@ class AppServerClientBase {
     this.notificationHandler = null;
     this.lineBuffer = "";
     this.transport = "unknown";
+    this.pendingFileChanges = new Map();
 
     this.exitPromise = new Promise((resolve) => {
       this.resolveExit = resolve;
@@ -155,12 +156,34 @@ class AppServerClientBase {
       return;
     }
 
+    // Track before forwarding: turn capture may buffer notifications while
+    // turn/start is still awaiting its response.
+    if (this.options.onFileChangeApproval && message.params?.item?.type === "fileChange") {
+      if (message.method === "item/started") this.pendingFileChanges.set(message.params.item.id, message.params);
+      if (message.method === "item/completed") this.pendingFileChanges.delete(message.params.item.id);
+    }
     if (message.method && this.notificationHandler) {
       this.notificationHandler(/** @type {AppServerNotification} */ (message));
     }
   }
 
   handleServerRequest(message) {
+    if (this.options.onFileChangeApproval) {
+      if (message.method === "item/fileChange/requestApproval") {
+        const pending = this.pendingFileChanges.get(message.params?.itemId);
+        const matches = pending && pending.threadId === message.params.threadId && pending.turnId === message.params.turnId;
+        // A missing or mismatched item cannot prove that this patch is in scope.
+        const decision = matches
+          ? this.options.onFileChangeApproval(pending.item.changes, message.params)
+          : "decline";
+        this.sendMessage({ id: message.id, result: { decision } });
+        return;
+      }
+      if (message.method === "item/commandExecution/requestApproval") {
+        this.sendMessage({ id: message.id, result: { decision: "accept" } });
+        return;
+      }
+    }
     this.sendMessage({
       id: message.id,
       error: buildJsonRpcError(-32601, `Unsupported server request: ${message.method}`)

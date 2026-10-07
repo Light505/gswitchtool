@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import type {
   ClientInfo,
   InitializeCapabilities,
@@ -54,6 +55,7 @@ export interface CodexAppServerClientOptions {
   brokerEndpoint?: string;
   disableBroker?: boolean;
   reuseExistingBroker?: boolean;
+  onFileChangeApproval?: (changes: Extract<ThreadItem, { type: "fileChange" }>["changes"], params: { itemId: string; threadId: string; turnId: string; reason?: string | null; grantRoot?: string | null }) => "accept" | "decline";
 }
 
 export interface AppServerMethodMap {

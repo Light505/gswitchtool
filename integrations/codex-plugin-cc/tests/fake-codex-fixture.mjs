@@ -17,6 +17,7 @@ const readline = require("node:readline");
 	const STATE_PATH = ${JSON.stringify(statePath)};
 	const BEHAVIOR = ${JSON.stringify(behavior)};
 	const interruptibleTurns = new Map();
+  const approvalTurns = new Map();
 
 	function loadState() {
 	  if (!fs.existsSync(STATE_PATH)) {
@@ -317,6 +318,23 @@ rl.on("line", (line) => {
   const message = JSON.parse(line);
   const state = loadState();
 
+  if (approvalTurns.has(message.id) && !message.method) {
+    const { threadId, turnId, changes, mode } = approvalTurns.get(message.id);
+    approvalTurns.delete(message.id);
+    state.approvalReplies = [...(state.approvalReplies || []), message];
+    saveState(state);
+    if (message.result?.decision === "accept" && mode === "file") {
+      for (const change of changes) {
+        const target = path.resolve(process.cwd(), change.kind?.move_path || change.path);
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.writeFileSync(target, "approved fixture change" + String.fromCharCode(10));
+      }
+    }
+    const finalText = process.env.GSWITCH_TEST_APPROVAL_ANSWER || "Changed: none";
+    emitTurnCompleted(threadId, turnId, [{ completed: { type: "agentMessage", id: "answer_" + turnId, phase: "final_answer", text: finalText } }]);
+    return;
+  }
+
   try {
     switch (message.method) {
       case "initialize":
@@ -347,7 +365,7 @@ rl.on("line", (line) => {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
-        state.lastThreadRequest = { method: "thread/start", threadId: thread.id, sandbox: message.params.sandbox ?? null };
+        state.lastThreadRequest = { method: "thread/start", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
         send({ method: "thread/started", params: { thread: { id: thread.id } } });
@@ -382,7 +400,7 @@ rl.on("line", (line) => {
         }
         const thread = ensureThread(state, message.params.threadId);
         thread.updatedAt = now();
-        state.lastThreadRequest = { method: "thread/resume", threadId: thread.id, sandbox: message.params.sandbox ?? null };
+        state.lastThreadRequest = { method: "thread/resume", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
         break;
@@ -492,6 +510,18 @@ rl.on("line", (line) => {
 	          prompt
 	        };
 	        saveState(state);
+        if (BEHAVIOR === "scope-approval") {
+          const mode = process.env.GSWITCH_TEST_APPROVAL_MODE || "file";
+          const changes = JSON.parse(process.env.GSWITCH_TEST_APPROVAL_CHANGES || "[]");
+          const itemId = "patch_" + turnId;
+          const requestId = "approval_" + turnId;
+          approvalTurns.set(requestId, { threadId: thread.id, turnId, changes, mode });
+          // Emit the item before turn/start responds to exercise capture buffering.
+          if (mode === "file") send({ method: "item/started", params: { threadId: thread.id, turnId, item: { id: itemId, type: "fileChange", status: "inProgress", changes } } });
+          send({ id: message.id, result: { turn: buildTurn(turnId) } });
+          send({ id: requestId, method: mode === "command" ? "item/commandExecution/requestApproval" : mode === "unknown" ? "item/tool/requestUserInput" : "item/fileChange/requestApproval", params: { itemId, threadId: thread.id, turnId, reason: "fixture reason" } });
+          break;
+        }
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
 
         const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict

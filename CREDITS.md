@@ -32,6 +32,11 @@ copy of codex-plugin-cc 1.0.6 (upstream commit `db52e28`). Each file changed
 or added for gswitchtool carries a notice at its top, and the changes are
 listed in this repository's history.
 
+## Router plugin
+
+`integrations/router-plugin` is original work by Light505 for gswitchtool
+(2026), not derived from GSwitch or codex-plugin-cc.
+
 ## Modifications
 
 Modifications for gswitchtool are by Light505.

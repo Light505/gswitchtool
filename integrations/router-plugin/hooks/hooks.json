@@ -1,0 +1,13 @@
+{
+  "description": "Added by Light505 for gswitchtool (2026).",
+  "hooks": {
+    "SessionStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SessionStart", "timeout": 15 }] }],
+    "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook UserPromptSubmit", "timeout": 15 }] }],
+    "PreToolUse": [
+      { "matcher": "^(Agent|Task)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] },
+      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] }
+    ],
+    "SubagentStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SubagentStart", "timeout": 15 }] }],
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SubagentStop", "timeout": 15 }] }]
+  }
+}

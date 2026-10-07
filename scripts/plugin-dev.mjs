@@ -27,7 +27,7 @@ function command(claude, args) {
   return run.stdout || "";
 }
 
-const revision = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" });
+const revision = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8", windowsHide: true });
 if (revision.status !== 0) throw new Error("Could not read the current Git commit.");
 const shortCommit = revision.stdout.trim();
 
@@ -81,6 +81,35 @@ for (const area of ["commands", "skills", "agents"]) {
 }
 
 const marketplaceDir = path.join(destination, ".claude-plugin");
+const routerDestination = path.join(destination, "plugins", "router-dev");
+// Both copies share the same suffix and are replaced independently on rerun.
+const relativeRouter = path.relative(destination, routerDestination);
+if (relativeRouter.startsWith("..") || path.isAbsolute(relativeRouter)) throw new Error("Invalid Dev router destination.");
+rmSync(routerDestination, { recursive: true, force: true });
+cpSync(path.join(root, "integrations", "router-plugin"), routerDestination, { recursive: true });
+// Copy generated agents, command skills and the shared template together.
+const generated = spawnSync(process.execPath, [path.join(routerDestination, "scripts", "gen-agents.mjs"), "--check"], {
+  encoding: "utf8", windowsHide: true
+});
+if (generated.status !== 0) throw new Error(generated.stderr || generated.error?.message || "Router agents are not generated.");
+const routerManifestPath = path.join(routerDestination, ".claude-plugin", "plugin.json");
+const routerManifest = JSON.parse(readFileSync(routerManifestPath, "utf8"));
+routerManifest.name = "router-dev";
+routerManifest.description = `[dev] ${routerManifest.description}`;
+routerManifest.version += manifest.version.slice(manifest.version.indexOf("-dev."));
+writeFileSync(routerManifestPath, `${JSON.stringify(routerManifest, null, 2)}\n`);
+writeFileSync(path.join(routerDestination, "router-target.json"), `${JSON.stringify({ dataDir: ".gswitchtool-router-dev" }, null, 2)}\n`);
+function rewriteRouterMarkdown(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const full = path.join(directory, entry.name);
+    if (entry.isDirectory()) rewriteRouterMarkdown(full);
+    else if (entry.isFile() && entry.name.endsWith(".md")) {
+      const text = readFileSync(full, "utf8").replaceAll("codex:", "codex-dev:").replaceAll("router:", "router-dev:");
+      writeFileSync(full, text);
+    }
+  }
+}
+rewriteRouterMarkdown(routerDestination);
 mkdirSync(marketplaceDir, { recursive: true });
 writeFileSync(
   path.join(marketplaceDir, "marketplace.json"),
@@ -94,11 +123,18 @@ writeFileSync(
       description: manifest.description,
       author: manifest.author,
       source: "./plugins/codex-dev"
+    }, {
+      name: "router-dev",
+      version: routerManifest.version,
+      description: routerManifest.description,
+      author: routerManifest.author,
+      source: "./plugins/router-dev"
     }]
   }, null, 2)}\n`
 );
 
 console.log(`Built Dev plugin at ${pluginDestination}`);
+console.log(`Built Dev plugin at ${routerDestination}`);
 if (noInstall) process.exit(0);
 
 const claude = findClaude();
@@ -115,4 +151,8 @@ if (marketplaces.includes("gswitchtool-dev")) {
   command(claude, ["plugin", "install", "codex-dev@gswitchtool-dev"]);
   console.log("Installed Claude Code plugin codex-dev@gswitchtool-dev.");
 }
-console.log("Start a new Claude Code session to use the updated codex-dev plugin.");
+const installedPlugins = command(claude, ["plugin", "list"]);
+const routerAction = installedPlugins.includes("router-dev") ? "update" : "install";
+command(claude, ["plugin", routerAction, "router-dev@gswitchtool-dev"]);
+console.log(`${routerAction === "update" ? "Updated" : "Installed"} Claude Code plugin router-dev@gswitchtool-dev.`);
+console.log("Start a new Claude Code session to use the updated codex-dev and router-dev plugins.");

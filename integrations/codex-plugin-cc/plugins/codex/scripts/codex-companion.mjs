@@ -12,6 +12,7 @@ import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
+    INVOKE_SCOPE_APPROVAL_POLICY,
     findLatestTaskThread,
     getCodexAuthStatus,
     getCodexAvailability,
@@ -510,6 +511,8 @@ async function executeTaskRun(request) {
     onProgress: request.onProgress,
     onAppServer: request.onAppServer,
     appServerEnv: request.appServerEnv,
+    approvalPolicy: request.onFileChangeApproval ? INVOKE_SCOPE_APPROVAL_POLICY : undefined,
+    onFileChangeApproval: request.onFileChangeApproval,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -1442,6 +1445,35 @@ function matchesScope(file, pattern) {
   return new RegExp(`${expression}$`).test(file);
 }
 
+function scopeApproval(root, patterns, declined) {
+  return (changes, params) => {
+    if (!Array.isArray(changes) || !changes.length) return "decline";
+    let allowed = true;
+    for (const change of changes) {
+      if (typeof change?.path !== "string" || !change.path) { allowed = false; continue; }
+      // A rename changes both its source and its destination.
+      for (const target of [change.path, change.kind?.move_path].filter((value) => value != null)) {
+        if (typeof target !== "string" || !target) { allowed = false; continue; }
+        const relative = path.relative(root, path.resolve(root, target)).replace(/\\/g, "/");
+        const inside = relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative);
+        if (inside && (patterns.some((pattern) => matchesScope(relative, pattern)) || git(root, ["check-ignore", "-q", "--", relative]).status === 0)) continue;
+        allowed = false;
+        declined.set(relative || target, params.reason ?? null);
+      }
+    }
+    return allowed ? "accept" : "decline";
+  };
+}
+
+function scopeRequests(declined, output) {
+  const lines = String(output ?? "").split(/\r?\n/);
+  return [...declined].map(([file, fallbackReason]) => {
+    const prefix = `SCOPE REQUEST: ${file}`;
+    const line = lines.find((line) => line === prefix || line.startsWith(`${prefix} — `));
+    return { path: file, reason: line?.slice(prefix.length).replace(/^ — /, "") || fallbackReason };
+  });
+}
+
 function getCodexChangedFiles(answer) {
   const lines = String(answer ?? "").split(/\r?\n/);
   const start = lines.findIndex((line) => /^Changed:\s*/i.test(line));
@@ -1489,7 +1521,11 @@ function runVerification(command, cwd) {
 
 function renderInvokeResult(result) {
   const lines = [];
-  const answer = compactInvokeAnswer(result.output);
+  // Report each declined path once, even if the model already requested it.
+  const output = result.scopeRequests ? String(result.output ?? "").split(/\r?\n/).filter((line) =>
+    !result.scopeRequests.some((request) => line === `SCOPE REQUEST: ${request.path}` || line.startsWith(`SCOPE REQUEST: ${request.path} — `))
+  ).join("\n") : result.output;
+  const answer = compactInvokeAnswer(output);
   if (answer.text) {
     lines.push(answer.text);
     if (answer.shortened && result.answerFile) lines.push(`Full answer: ${result.answerFile}`);
@@ -1504,6 +1540,10 @@ function renderInvokeResult(result) {
   if (result.write) facts.push("write");
   if (result.failovers) facts.push(`resumed after ${result.failovers} account switch${result.failovers === 1 ? "" : "es"}`);
   lines.push(`[codex invoke] ${facts.join(" · ")}`);
+  if (result.scopeRequests) {
+    for (const request of result.scopeRequests) lines.push(`SCOPE REQUEST: ${request.path}${request.reason ? ` — ${request.reason}` : ""}`);
+    lines.push(`Scope: ${result.scopeRequests.length} change(s) declined`);
+  }
   if (result.verify) {
     if (result.verify.passed && result.verify.retries) lines.push("Verify: passed after 1 retry");
     else if (result.verify.passed) lines.push(`Verify: passed (${result.verify.command}, ${result.verify.durationSeconds}s)`);
@@ -1561,9 +1601,14 @@ async function handleInvoke(argv) {
     throw new Error("Provide the task for Codex as the prompt, --prompt-file, or piped stdin.");
   }
   const write = Boolean(options.write);
+  const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
+    .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
+  const declined = new Map();
+  const scopedWrite = write && scopedPatterns.length > 0;
   const useWorktree = Boolean(options.worktree || options["worktree-dir"]);
   const base = { model, reasoningEffort: effort, write };
   const finish = (result) => {
+    if (scopedWrite && result.jobId) result.scopeRequests = scopeRequests(declined, result.output);
     const payload = options.json && result.answerFile
       ? { ...result, output: compactInvokeAnswer(result.output).text }
       : result;
@@ -1655,8 +1700,10 @@ async function handleInvoke(argv) {
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
     const gitBefore = snapshotGit(actualCwd);
     const protectedBefore = write && gitBefore ? protectedTextSnapshot(gitBefore.root) : null;
+    const onFileChangeApproval = scopedWrite ? scopeApproval(gitBefore?.root ?? runWorkspaceRoot, scopedPatterns, declined) : null;
     const result = await runInvokeWithFailover({
       base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
+      onFileChangeApproval, scopedPatterns,
       verifyCommand: options.verify ? String(options.verify) : null
     });
     if (result.jobId && result.output) {
@@ -1671,8 +1718,6 @@ async function handleInvoke(argv) {
       result.protected = { changed: protectedChanged };
       result.warnings.push(...protectedChanged.map((file) => `WARNING: protected text changed: ${file}`));
     }
-    const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
-      .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
     if (result.diff.repository) {
       if (scopedPatterns.length) {
         for (const file of result.diff.files) {
@@ -1717,6 +1762,7 @@ async function handleInvoke(argv) {
               const conflictPrompt = `The user's tree changed while you worked. Resolve the merge conflicts listed below, keeping both sides' intent. Do not touch other files.\n\nConflicting files:\n${files.map((file) => `- ${file}`).join("\n")}`;
               const resumed = await runInvokeWithFailover({
                 base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
+                onFileChangeApproval, scopedPatterns,
                 prompt: conflictPrompt, resumeThreadId: result.threadId
               });
               result.failovers += resumed.failovers;
@@ -1804,7 +1850,7 @@ async function handleInvoke(argv) {
  * exhausted, GSwitch alone switches accounts; this worker then resumes the same
  * thread with the same model, effort, sandbox, and working directory.
  */
-async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null }) {
+async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null, onFileChangeApproval = null, scopedPatterns = [] }) {
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
@@ -1846,12 +1892,15 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
             cwd,
             model: base.model,
             effort: base.reasoningEffort,
-            prompt: runPrompt,
+            prompt: onFileChangeApproval
+              ? `${runPrompt || DEFAULT_CONTINUE_PROMPT}\n\nEdits outside these paths are declined: ${scopedPatterns.join(", ")}. If you need a file outside them, do not work around it; stop and end your answer with: SCOPE REQUEST: <path> — <why> — <intended change>.`
+              : runPrompt,
             write: base.write,
             resumeLast: false,
             resumeThreadId: threadId,
             jobId: job.id,
             appServerEnv: codexHome ? { ...process.env, CODEX_HOME: codexHome } : undefined,
+            onFileChangeApproval,
             onAppServer: (pid) => (pid ? session.request("run_app_server", { lease_id: leaseId, pid }) : undefined),
             onProgress: (event) => {
               progress?.(event);

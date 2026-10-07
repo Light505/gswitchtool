@@ -46,6 +46,9 @@ import { loadBrokerSession } from "./broker-lifecycle.mjs";
 import { binaryAvailable } from "./process.mjs";
 
 const SERVICE_NAME = "claude_code_codex_plugin";
+// Codex 0.160.1 core/src/safety.rs: UnlessTrusted asks before checking writable
+// roots. The generated app-server schema serializes it as "untrusted".
+export const INVOKE_SCOPE_APPROVAL_POLICY = "untrusted";
 const TASK_THREAD_PREFIX = "Codex Companion Task";
 const DEFAULT_CONTINUE_PROMPT =
   "Continue from the current thread state. Pick the next highest-value step and follow through until the task is resolved.";
@@ -66,6 +69,8 @@ function buildThreadParams(cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
+    // Scope decisions must reach this client, even with auto-review configured.
+    ...(options.approvalPolicy === INVOKE_SCOPE_APPROVAL_POLICY ? { approvalsReviewer: "user" } : {}),
     sandbox: options.sandbox ?? "read-only",
     serviceName: SERVICE_NAME,
     ephemeral: options.ephemeral ?? true
@@ -79,6 +84,7 @@ function buildResumeParams(threadId, cwd, options = {}) {
     cwd,
     model: options.model ?? null,
     approvalPolicy: options.approvalPolicy ?? "never",
+    ...(options.approvalPolicy === INVOKE_SCOPE_APPROVAL_POLICY ? { approvalsReviewer: "user" } : {}),
     sandbox: options.sandbox ?? "read-only"
   };
 }
@@ -1117,6 +1123,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       emitProgress(options.onProgress, `Resuming thread ${options.resumeThreadId}.`, "starting");
       const response = await resumeThread(client, options.resumeThreadId, cwd, {
         model: options.model,
+        approvalPolicy: options.approvalPolicy,
         sandbox: options.sandbox,
         ephemeral: false
       });
@@ -1125,6 +1132,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       emitProgress(options.onProgress, "Starting Codex task thread.", "starting");
       const response = await startThread(client, cwd, {
         model: options.model,
+        approvalPolicy: options.approvalPolicy,
         sandbox: options.sandbox,
         ephemeral: options.persistThread ? false : true,
         threadName: options.persistThread ? options.threadName : options.threadName ?? null
@@ -1168,7 +1176,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions
     };
-  }, { env: options.appServerEnv });
+  }, { env: options.appServerEnv, onFileChangeApproval: options.onFileChangeApproval });
 }
 
 export async function findLatestTaskThread(cwd) {
