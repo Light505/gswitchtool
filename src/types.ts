@@ -65,7 +65,7 @@ export type LogItem =
   | { kind: "output"; text: string }
   | { kind: "done"; seconds?: number | null }
   | { kind: "stopped" }
-  | { kind: "tokens"; total: number };
+  | ({ kind: "tokens"; total: number } & TokenUsage);
 
 export interface LogChunk {
   found: boolean;
@@ -92,11 +92,11 @@ export type ActivityEntry = { at: number } & (
 );
 
 export interface TokenUsage {
-  input_tokens: number;
-  cached_input_tokens: number;
-  output_tokens: number;
-  reasoning_output_tokens: number;
-  total_tokens: number;
+  input_tokens?: number;
+  cached_input_tokens?: number;
+  output_tokens?: number;
+  reasoning_output_tokens?: number;
+  total_tokens?: number;
 }
 
 export interface SwitchAccounts {

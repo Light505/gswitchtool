@@ -121,6 +121,14 @@ type Dialog =
 type AddMethod = "start" | "oauth" | "json" | "api-key" | "migration";
 type AccountBusyAction = "refresh" | "wake" | "switch";
 
+interface WatchedLog {
+  id: string;
+  taskId?: string;
+  threadId: string | null;
+  title: string;
+  focus: number;
+}
+
 interface QuotaRefreshEntry {
   promise: Promise<QuotaView>;
   // A user's refresh, as opposed to an automatic read.
@@ -505,6 +513,7 @@ function Modal({
   t,
   wide = false,
   dismissible = true,
+  className = "",
 }: {
   title: string;
   children: ReactNode;
@@ -512,6 +521,7 @@ function Modal({
   t: Translator;
   wide?: boolean;
   dismissible?: boolean;
+  className?: string;
 }) {
   const dialogRef = useRef<HTMLElement>(null);
 
@@ -568,7 +578,7 @@ function Modal({
       <section
         aria-labelledby="modal-title"
         aria-modal="true"
-        className={"modal-card" + (wide ? " modal-wide" : "")}
+        className={"modal-card" + (wide ? " modal-wide" : "") + (className ? ` ${className}` : "")}
         role="dialog"
         tabIndex={-1}
         ref={dialogRef}
@@ -1215,14 +1225,29 @@ function elapsedText(ms: number) {
 }
 
 function compactTokens(tokens: number) {
-  return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10_000 ? 1 : 0).replace(/\.0$/, "")}k` : String(tokens);
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(1).replace(/\.0$/, "")}k` : String(tokens);
 }
 
-function usageText(usage: TokenUsage, t: Translator) {
-  return t("activity.usage", {
-    total: compactTokens(usage.total_tokens),
-    cached: compactTokens(usage.cached_input_tokens),
-  });
+function tokenBreakdown(usage: TokenUsage, t: Translator, formatLocale: string) {
+  const parts: string[] = [];
+  const { input_tokens: input, cached_input_tokens: cached, output_tokens: output } = usage;
+  if (input != null && cached != null) {
+    parts.push(t("log.input", { tokens: compactTokens(Math.max(0, input - cached)) }));
+  }
+  if (cached != null) {
+    const hit = input != null && input > 0
+      ? ` (${t("log.cacheHit", { percent: formatPercent(cached / input * 100, formatLocale) })})` : "";
+    parts.push(t("log.cached", { tokens: compactTokens(cached) }) + hit);
+  }
+  if (output != null) parts.push(t("log.output", { tokens: compactTokens(output) }));
+  return parts.join(" · ");
+}
+
+function usageText(usage: TokenUsage, t: Translator, formatLocale: string) {
+  return [
+    usage.total_tokens != null ? t("log.tokens", { tokens: compactTokens(usage.total_tokens) }) : "",
+    tokenBreakdown(usage, t, formatLocale),
+  ].filter(Boolean).join(" · ");
 }
 
 function activityText(entry: ActivityEntry, name: (id: string) => string, t: Translator, formatLocale: string) {
@@ -1266,19 +1291,26 @@ function activityText(entry: ActivityEntry, name: (id: string) => string, t: Tra
 }
 
 /** Codex's steps for one thread, followed live from its session log. */
-function TaskLogDialog({ threadId, title, live, onClose, t, formatLocale }: {
+function TaskLog({ threadId, title, live, onClose, focus, showHeader, t, formatLocale }: {
   threadId: string | null;
   title: string;
   live: boolean;
   onClose: () => void;
+  focus: number;
+  showHeader: boolean;
   t: Translator;
   formatLocale: string;
 }) {
   const [items, setItems] = useState<LogItem[]>([]);
   const [found, setFound] = useState(true);
-  const [tokens, setTokens] = useState<number | null>(null);
+  const [tokens, setTokens] = useState<Extract<LogItem, { kind: "tokens" }> | null>(null);
   const offset = useRef(0);
   const body = useRef<HTMLDivElement>(null);
+  const panel = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    panel.current?.focus();
+  }, [focus]);
 
   useEffect(() => {
     setItems([]);
@@ -1299,7 +1331,7 @@ function TaskLogDialog({ threadId, title, live, onClose, t, formatLocale }: {
         const counts = chunk.items.filter((item) => item.kind === "tokens");
         if (counts.length) {
           const last = counts[counts.length - 1];
-          if (last.kind === "tokens") setTokens(last.total);
+          if (last.kind === "tokens") setTokens(last);
         }
         const steps = chunk.items.filter((item) => item.kind !== "tokens");
         if (steps.length) {
@@ -1327,7 +1359,15 @@ function TaskLogDialog({ threadId, title, live, onClose, t, formatLocale }: {
   }, [threadId]);
 
   return (
-    <Modal onClose={onClose} t={t} title={title} wide>
+    <section aria-label={title} className="task-log-window" ref={panel} tabIndex={-1}>
+      {showHeader ? (
+        <div className="modal-header">
+          <h3>{title}</h3>
+          <button aria-label={t("common.closeDialog", { title })} className="icon-button" onClick={onClose} type="button">
+            <X size={18} strokeWidth={2} />
+          </button>
+        </div>
+      ) : null}
       <div className="task-log-panel">
         <div aria-live="polite" className="task-log" ref={body} role="log">
           {!threadId ? <p className="log-note">{t("log.waiting")}</p> : null}
@@ -1363,18 +1403,18 @@ function TaskLogDialog({ threadId, title, live, onClose, t, formatLocale }: {
         </div>
         <p className="task-log-footer">
           <span className={live ? "log-live" : undefined}>{t(live ? "log.live" : "log.ended")}</span>
-          {tokens != null ? <span>{t("log.tokens", { tokens: formatNumber(tokens, formatLocale) })}</span> : null}
+          {tokens ? <span>{tokenBreakdown(tokens, t, formatLocale) || t("log.tokens", { tokens: formatNumber(tokens.total, formatLocale) })}</span> : null}
           {threadId ? <span title={threadId}>{shortThread(threadId)}</span> : null}
         </p>
       </div>
-    </Modal>
+    </section>
   );
 }
 
 function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
   name: (id: string) => string;
   onClose: () => void;
-  onViewLog: (threadId: string) => void;
+  onViewLog: (threadId: string, threads: string[]) => void;
   t: Translator;
   formatLocale: string;
 }) {
@@ -1385,13 +1425,21 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
     if (!entries) return [];
     const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
     const starts = new Map(entries.filter((entry) => entry.kind === "task_started").map((entry) => [entry.task, entry]));
-    const groups = new Map<string, { model: string; effort: string; tasks: number; tokens: number }>();
+    const groups = new Map<string, { model: string; effort: string; tasks: number; tokens: number; usage: TokenUsage }>();
     for (const entry of entries) {
       if (entry.kind !== "task_ended" || entry.at < cutoff) continue;
       const start = starts.get(entry.task);
       const effort = start?.kind === "task_started" ? start.effort : "—";
       const key = `${entry.model}\0${effort}`;
-      const group = groups.get(key) ?? { model: entry.model, effort, tasks: 0, tokens: 0 };
+      const group = groups.get(key) ?? { model: entry.model, effort, tasks: 0, tokens: 0, usage: { ...entry.usage } };
+      if (group.tasks > 0) {
+        // Only report totals for fields known for every task in this group.
+        for (const field of ["input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"] as const) {
+          const previous = group.usage[field];
+          const next = entry.usage?.[field];
+          group.usage[field] = previous != null && next != null ? previous + next : undefined;
+        }
+      }
       group.tasks += 1;
       group.tokens += entry.usage?.total_tokens ?? 0;
       groups.set(key, group);
@@ -1436,6 +1484,7 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
               <li key={`${group.model}-${group.effort}`}>
                 <strong>{group.model}</strong><span className="badge">{group.effort}</span>
                 <span>{t("activity.summaryLine", { tasks: String(group.tasks), tokens: compactTokens(group.tokens) })}</span>
+                {tokenBreakdown(group.usage, t, formatLocale) ? <small className="activity-usage">{tokenBreakdown(group.usage, t, formatLocale)}</small> : null}
               </li>
             ))}</ul> : <p>{t("activity.summaryEmpty")}</p>}
           </section>
@@ -1448,10 +1497,12 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
                 <span>
                   {activityText(entry, name, t, formatLocale)}
                   {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.usage ? (
-                    <small className="activity-usage">{usageText(entry.usage, t)}</small>
+                    <small className="activity-usage">{usageText(entry.usage, t, formatLocale)}</small>
                   ) : null}
                   {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.thread_id ? (
-                    <button className="link-button" onClick={() => onViewLog(entry.thread_id!)} type="button">
+                    <button className="link-button" onClick={() => onViewLog(entry.thread_id!, entries.flatMap((item) =>
+                      (item.kind === "task_ended" || item.kind === "task_stopped") && item.thread_id ? [item.thread_id] : [],
+                    ))} type="button">
                       {t("activity.viewLog")}
                     </button>
                   ) : null}
@@ -1770,7 +1821,31 @@ export default function App() {
   const [pausedThreads, setPausedThreads] = useState<PausedThread[]>([]);
   const [tasks, setTasks] = useState<InvokeTask[]>([]);
   const [taskClock, setTaskClock] = useState(() => Date.now());
-  const [watching, setWatching] = useState<{ taskId?: string; threadId: string | null; title: string } | null>(null);
+  const [watching, setWatching] = useState<WatchedLog[]>([]);
+  const [historyThreads, setHistoryThreads] = useState<string[]>([]);
+  const watchLog = (log: Omit<WatchedLog, "focus">) => {
+    setWatching((current) => {
+      const held = current.find((item) => item.id === log.id || (log.threadId && item.threadId === log.threadId));
+      if (held) return current.map((item) => item === held ? { ...item, focus: item.focus + 1 } : item);
+      return [...current.slice(-3), { ...log, focus: 0 }];
+    });
+  };
+  const closeLog = (id: string) => setWatching((current) => current.filter((log) => log.id !== id)
+    .map((log, index) => index === 0 ? { ...log, focus: log.focus + 1 } : log));
+
+  useEffect(() => {
+    // Retain a thread assigned after Watch opened, including after its task ends.
+    setWatching((current) => {
+      let changed = false;
+      const next = current.map((log) => {
+        const threadId = tasks.find((task) => task.id === log.taskId)?.thread_id;
+        if (!threadId || threadId === log.threadId) return log;
+        changed = true;
+        return { ...log, threadId };
+      });
+      return changed ? next : current;
+    });
+  }, [tasks]);
   const [invokeResuming, setInvokeResuming] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
@@ -1812,6 +1887,19 @@ export default function App() {
   const [label, setLabel] = useState("");
   const locale = useMemo(() => resolveLocale(languagePreference), [languagePreference]);
   const t = useMemo(() => createTranslator(locale.language), [locale.language]);
+  const watchChoices = [
+    ...tasks.map((task) => ({
+      id: task.id,
+      taskId: task.id,
+      threadId: task.thread_id ?? null,
+      title: t("log.title", { model: task.model, folder: folderName(task.cwd) }),
+    })),
+    ...historyThreads.filter((thread) => !tasks.some((task) => task.thread_id === thread)).map((threadId) => ({
+      id: threadId,
+      threadId,
+      title: t("log.historyTitle", { thread: shortThread(threadId) }),
+    })),
+  ];
 
   useEffect(() => {
     if (!notice || notice.kind === "error") return;
@@ -3375,7 +3463,8 @@ export default function App() {
                     <button
                       aria-label={t("tasks.watchFor", { model: task.model, folder })}
                       className="button button-secondary"
-                      onClick={() => setWatching({
+                      onClick={() => watchLog({
+                        id: task.id,
                         taskId: task.id,
                         threadId: task.thread_id ?? null,
                         title: t("log.title", { model: task.model, folder }),
@@ -3580,24 +3669,38 @@ export default function App() {
         </section>
       </div>
 
-      {watching ? (() => {
-        const task = watching.taskId ? tasks.find((candidate) => candidate.id === watching.taskId) : undefined;
-        return (
-          <TaskLogDialog
-            formatLocale={locale.formatLocale}
-            live={Boolean(task)}
-            onClose={() => setWatching(null)}
-            t={t}
-            threadId={task?.thread_id ?? watching.threadId}
-            title={watching.title}
-          />
-        );
-      })() : null}
+      {watching.length ? (
+        <Modal className={watching.length > 1 ? "task-logs-modal" : ""} onClose={() => setWatching([])} t={t}
+          title={watching.length === 1 ? watching[0].title : t("log.watchTitle")} wide>
+          {watchChoices.length > 1 ? (
+            <div className="task-log-picker">
+              <select aria-label={t("log.watchAnother")} value="" onChange={(event) => {
+                const choice = watchChoices.find((log) => log.id === event.target.value);
+                if (choice) watchLog(choice);
+              }}>
+                <option value="" disabled>{t("log.watchAnother")}</option>
+                {watchChoices.map((log) => <option key={log.id} value={log.id}>{log.title}</option>)}
+              </select>
+            </div>
+          ) : null}
+          <div className={"task-log-grid" + (watching.length > 1 ? " task-log-grid-multiple" : "")}>
+            {watching.map((log) => {
+              const task = tasks.find((candidate) => candidate.id === log.taskId || (log.threadId && candidate.thread_id === log.threadId));
+              return <TaskLog key={log.id} formatLocale={locale.formatLocale} live={Boolean(task)}
+                onClose={() => closeLog(log.id)} focus={log.focus} showHeader={watching.length > 1} t={t}
+                threadId={task?.thread_id ?? log.threadId} title={log.title} />;
+            })}
+          </div>
+        </Modal>
+      ) : null}
 
-      {dialog === "activity" && !watching ? (
+      {dialog === "activity" && !watching.length ? (
         <ActivityDialog
           formatLocale={locale.formatLocale}
-          onViewLog={(threadId) => setWatching({ threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) })}
+          onViewLog={(threadId, threads) => {
+            setHistoryThreads([...new Set(threads)]);
+            watchLog({ id: threadId, threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) });
+          }}
           name={(id) => {
             const account = accounts.find((saved) => saved.id === id);
             return account ? accountPrimaryName(account) : t("common.unknown");

@@ -68,13 +68,13 @@ const displayOnly = {
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
   updateDelivery: async () => "installer_exits" as const,
-  appVersion: async () => ({ version: "1.8.0", dev: false }),
+  appVersion: async () => ({ version: "1.9.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
   stopInvokeTask: async () => undefined,
   invokeTasks: async () => [
     { id: "demo-task-1", started_at: Date.now() - 4 * 60_000 - 12_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "C:/work/studio-app", thread_id: "01a1f2c3-demo", running: true },
-    { id: "demo-task-2", started_at: Date.now() - 40_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "C:/work/studio-app", thread_id: null, running: false },
+    { id: "demo-task-2", started_at: Date.now() - 40_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "C:/work/studio-app", thread_id: "01a1f2c4-demo", running: true },
   ],
   pausedThreads: async () => [],
   readTaskLog: async (_threadId: string, offset: number) => offset > 0
@@ -90,7 +90,7 @@ const displayOnly = {
         { kind: "patch", files: ["cart.js", "cart.test.js"] },
         { kind: "command", text: "node --test" },
         { kind: "output", text: "✔ addItem and total keep working (1.9ms)\n✔ removeItem removes only the named item (0.4ms)\nℹ pass 6\nℹ fail 0" },
-        { kind: "tokens", total: 55245 },
+        { kind: "tokens", total: 55245, input_tokens: 51000, cached_input_tokens: 45000, output_tokens: 4245, reasoning_output_tokens: 400, total_tokens: 55245 },
       ],
     },
   activity: async () => [

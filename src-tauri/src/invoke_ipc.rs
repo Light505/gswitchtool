@@ -734,7 +734,7 @@ mod tests {
         worker.as_object_mut().expect("worker").remove("started_at");
         assert_eq!(
             worker,
-            json!({"model": "model-a", "reasoning_effort": "high", "write": true, "cwd": "/repo", "thread_id": "thr_1", "running": true})
+            json!({"model": "model-a", "reasoning_effort": "high", "write": true, "cwd": "/repo", "thread_id": "thr_1", "running": true, "stopping": false})
         );
         assert_eq!(
             ok("task_result", json!({"status": "completed"}))["result"],

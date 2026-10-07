@@ -45,7 +45,18 @@ pub enum LogItem {
     /// The turn was stopped before it finished.
     Stopped,
     /// Tokens used so far in this thread.
-    Tokens { total: u64 },
+    Tokens {
+        total: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        input_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cached_input_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        output_tokens: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        reasoning_output_tokens: Option<u64>,
+        total_tokens: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -389,9 +400,20 @@ pub fn parse_record(record: &Value) -> Vec<LogItem> {
         }],
         (Some("event_msg"), "turn_aborted") => vec![LogItem::Stopped],
         (Some("event_msg"), "token_count") => payload
-            .pointer("/info/total_token_usage/total_tokens")
-            .and_then(Value::as_u64)
-            .map(|total| vec![LogItem::Tokens { total }])
+            .pointer("/info/total_token_usage")
+            .and_then(|usage| {
+                let total = usage.get("total_tokens")?.as_u64()?;
+                Some(vec![LogItem::Tokens {
+                    total,
+                    input_tokens: usage.get("input_tokens").and_then(Value::as_u64),
+                    cached_input_tokens: usage.get("cached_input_tokens").and_then(Value::as_u64),
+                    output_tokens: usage.get("output_tokens").and_then(Value::as_u64),
+                    reasoning_output_tokens: usage
+                        .get("reasoning_output_tokens")
+                        .and_then(Value::as_u64),
+                    total_tokens: total,
+                }])
+            })
             .unwrap_or_default(),
         _ => Vec::new(),
     }
@@ -472,13 +494,42 @@ mod tests {
                 LogItem::Patch {
                     files: vec!["src/a.rs".into(), "src/b.rs".into()]
                 },
-                LogItem::Tokens { total: 15713 },
+                LogItem::Tokens {
+                    total: 15713,
+                    input_tokens: None,
+                    cached_input_tokens: None,
+                    output_tokens: None,
+                    reasoning_output_tokens: None,
+                    total_tokens: 15713,
+                },
                 LogItem::Done {
                     seconds: Some(14.3)
                 },
                 LogItem::Stopped,
             ]
         );
+    }
+
+    #[test]
+    fn token_items_carry_codex_totals_and_omit_unknown_fields() {
+        let record = |usage: Value| json!({ "type": "event_msg", "payload": { "type": "token_count", "info": { "total_token_usage": usage } } });
+        let totals = json!({
+            "input_tokens": 110400, "cached_input_tokens": 98100,
+            "output_tokens": 4200, "reasoning_output_tokens": 400, "total_tokens": 114600
+        });
+        let items = parse_record(&record(totals.clone()));
+        assert_eq!(items.len(), 1);
+        let mut expected = totals;
+        expected["kind"] = json!("tokens");
+        expected["total"] = json!(114600);
+        assert_eq!(serde_json::to_value(&items[0]).expect("tokens"), expected);
+
+        let legacy = parse_record(&record(json!({ "total_tokens": 1234 })));
+        assert_eq!(
+            serde_json::to_value(&legacy[0]).expect("legacy tokens"),
+            json!({ "kind": "tokens", "total": 1234, "total_tokens": 1234 })
+        );
+        assert!(parse_record(&record(Value::Null)).is_empty());
     }
 
     #[test]
@@ -557,7 +608,8 @@ mod tests {
         let home = std::env::temp_dir().join(format!("gswitch-usage-{}", uuid::Uuid::new_v4()));
         let day = home.join("sessions/2026/10/07");
         fs::create_dir_all(&day).expect("day");
-        let thread = "01a11137-1469-7d20-8b79-d05abe3f3539";
+        // Each fixture needs its own thread ID for the process-wide path cache.
+        let thread = uuid::Uuid::new_v4().to_string();
         let count = |at: &str, total: u64| {
             json!({ "timestamp": at, "type": "event_msg", "payload": { "type": "token_count", "info": { "total_token_usage": {
                 "input_tokens": total, "cached_input_tokens": total / 2, "output_tokens": 10,
@@ -577,14 +629,14 @@ mod tests {
             .expect("time")
             .timestamp_millis();
 
-        let resumed = usage(&home, thread, Some(since)).expect("usage");
+        let resumed = usage(&home, &thread, Some(since)).expect("usage");
         assert_eq!(
             (resumed.input_tokens, resumed.cached_input_tokens),
             (600, 300)
         );
         assert_eq!((resumed.output_tokens, resumed.total_tokens), (0, 600));
         assert_eq!(
-            usage(&home, thread, None).expect("usage").total_tokens,
+            usage(&home, &thread, None).expect("usage").total_tokens,
             1610
         );
         let _ = fs::remove_dir_all(home);

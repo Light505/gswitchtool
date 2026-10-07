@@ -2229,6 +2229,47 @@ textarea {
   word-break: break-all;
 }
 
+.task-logs-modal {
+  width: min(100%, 1200px);
+}
+
+.task-log-grid {
+  display: grid;
+}
+
+.task-log-grid-multiple {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.task-log-window {
+  min-width: 0;
+}
+
+.task-log-window:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.task-log-window h3 {
+  margin: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.task-log-picker {
+  padding: 10px 18px 0;
+}
+
+.task-log-picker select {
+  max-width: 100%;
+}
+
+@media (max-width: 760px) {
+  .task-log-grid-multiple {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 .task-log-panel {
   display: grid;
   gap: 8px;
@@ -2309,6 +2350,7 @@ textarea {
 
 .task-log-footer {
   display: flex;
+  flex-wrap: wrap;
   gap: 14px;
   margin: 0;
   color: var(--muted);

@@ -2664,6 +2664,95 @@ describe("Invoke Mode", () => {
     expect(mocks.readTaskLog).toHaveBeenCalledWith("01a1e9b8-0000", 0);
   });
 
+  it.each([
+    [{ input_tokens: 110400, cached_input_tokens: 98100, output_tokens: 4200, reasoning_output_tokens: 400 }, "Input 12.3k · Cached 98.1k (89% hit) · Output 4.2k"],
+    [{ cached_input_tokens: 25000, output_tokens: 4200 }, "Cached 25k · Output 4.2k"],
+    [{ input_tokens: 30000, output_tokens: 4200 }, "Output 4.2k"],
+    [{ input_tokens: 0, cached_input_tokens: 0, output_tokens: 0 }, "Input 0 · Cached 0 · Output 0"],
+    [{ input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100 }, "Input 1k · Cached 0 (0% hit) · Output 100"],
+    [{}, "1,234 tokens"],
+  ])("shows known Watch token fields without inventing missing counts (%j)", async (usage, expected) => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([
+      { id: "task-1", started_at: Date.now(), model: "m", reasoning_effort: "low", write: false, cwd: "/work", thread_id: "thread-1", running: true },
+    ]);
+    mocks.readTaskLog.mockResolvedValue({ found: true, offset: 1, items: [{ kind: "tokens", total: 1234, ...usage }] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Watch the m task in work" }));
+    const dialog = await screen.findByRole("dialog", { name: "m in work" });
+    expect(await within(dialog).findByText(expected)).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(/NaN|undefined|Infinity/);
+  });
+
+  it("opens two live logs, focuses an existing one, and closes each independently", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([1, 2].map((id) => ({
+      id: `task-${id}`, started_at: Date.now(), model: `m${id}`, reasoning_effort: "low", write: false,
+      cwd: `/work/project${id}`, thread_id: `thread-${id}`, running: true,
+    })));
+    mocks.readTaskLog.mockImplementation(async (threadId: string, offset: number) => ({
+      found: true, offset: 10, items: offset ? [] : [
+        { kind: "message", text: `Log for ${threadId}` },
+        { kind: "tokens", total: 1200, input_tokens: 1000, cached_input_tokens: threadId === "thread-1" ? 900 : 500, output_tokens: 200 },
+      ],
+    }));
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Watch the m1 task in project1" }));
+    const first = await screen.findByRole("dialog", { name: "m1 in project1" });
+    expect(await within(first).findByText("Log for thread-1")).toBeInTheDocument();
+    await userEvent.selectOptions(within(first).getByRole("combobox", { name: "Watch another task" }), "task-2");
+    const dialog = await screen.findByRole("dialog", { name: "Codex task logs" });
+    expect(within(dialog).getAllByRole("log")).toHaveLength(2);
+    expect(await within(dialog).findByText("Log for thread-2")).toBeInTheDocument();
+    expect(within(dialog).getAllByText("Live")).toHaveLength(2);
+    expect(within(dialog).getByText("Input 100 · Cached 900 (90% hit) · Output 200")).toBeInTheDocument();
+    expect(within(dialog).getByText("Input 500 · Cached 500 (50% hit) · Output 200")).toBeInTheDocument();
+    const secondLog = within(dialog).getByRole("region", { name: "m2 in project2" });
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Watch another task" }), "task-1");
+    expect(within(dialog).getAllByRole("log")).toHaveLength(2);
+    expect(within(dialog).getByRole("region", { name: "m1 in project1" })).toHaveFocus();
+    await userEvent.click(within(dialog).getByRole("button", { name: "Close m1 in project1" }));
+    expect(await screen.findByRole("dialog", { name: "m2 in project2" })).toBeInTheDocument();
+    expect(screen.queryByText("Log for thread-1")).not.toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "m2 in project2" })).toBe(secondLog);
+    expect(mocks.readTaskLog.mock.calls.filter(([thread, offset]) => thread === "thread-2" && offset === 0)).toHaveLength(1);
+    await userEvent.click(screen.getByRole("button", { name: "Close m2 in project2" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("replaces the oldest open log on the fifth task without reordering a focused log", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([1, 2, 3, 4, 5].map((id) => ({
+      id: `task-${id}`, started_at: Date.now(), model: `m${id}`, reasoning_effort: "low", write: false,
+      cwd: "/work", thread_id: `thread-${id}`, running: true,
+    })));
+    mocks.readTaskLog.mockResolvedValue({ found: true, offset: 1, items: [] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Watch the m1 task in work" }));
+    for (const id of [2, 3, 4, 1, 5]) {
+      await userEvent.selectOptions(screen.getByRole("combobox", { name: "Watch another task" }), `task-${id}`);
+    }
+    const dialog = screen.getByRole("dialog", { name: "Codex task logs" });
+    expect(within(dialog).getAllByRole("log")).toHaveLength(4);
+    expect(within(dialog).queryByRole("region", { name: "m1 in work" })).not.toBeInTheDocument();
+    expect(within(dialog).getByRole("region", { name: "m5 in work" })).toBeInTheDocument();
+  });
+
+  it("adds another Activity log from the log panel", async () => {
+    mocks.activity.mockResolvedValue([1, 2].map((id) => ({
+      at: Date.now(), kind: "task_ended", task: `t${id}`, model: "m", thread_id: `thread-${id}`, status: "completed",
+    })));
+    mocks.readTaskLog.mockResolvedValue({ found: true, offset: 1, items: [] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
+    const history = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await userEvent.click((await within(history).findAllByRole("button", { name: "View log" }))[0]);
+    await userEvent.selectOptions(screen.getByRole("combobox", { name: "Watch another task" }), "thread-2");
+    const dialog = screen.getByRole("dialog", { name: "Codex task logs" });
+    expect(within(dialog).getAllByRole("log")).toHaveLength(2);
+    expect(within(dialog).getAllByText("Ended")).toHaveLength(2);
+  });
+
   it("shows no task strip in Manual Mode", async () => {
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([
@@ -2696,7 +2785,8 @@ describe("Invoke Mode", () => {
       "Switched Codex from person@example.com to second@example.com: person@example.com ran out of usage.",
     )).toBeInTheDocument();
     expect(within(dialog).getByText("Codex task on gpt-6-luna did not finish (CODEX_FAILED), thread 01a1e9b8.")).toBeInTheDocument();
-    expect(within(dialog).getByText("41.2k tokens · 25k cached")).toBeInTheDocument();
+    expect(within(dialog).getByText("41.2k tokens · Input 5k · Cached 25k (83% hit) · Output 11.2k")).toBeInTheDocument();
+    expect(within(dialog).getByText("Input 5k · Cached 25k (83% hit) · Output 11.2k")).toBeInTheDocument();
     expect(within(dialog).getByText("Last 7 days by model and effort")).toBeInTheDocument();
     expect(within(dialog).getByText("Tasks 1 · 41.2k tokens")).toBeInTheDocument();
 
@@ -2705,6 +2795,23 @@ describe("Invoke Mode", () => {
     const history = dialog.querySelector(".activity-list") as HTMLElement;
     const items = within(history).getAllByRole("listitem");
     expect(items[0]).toHaveTextContent("Started the reset timer for second@example.com.");
+  });
+
+  it("aggregates Activity hit rate from full input totals and tolerates older usage", async () => {
+    mocks.activity.mockResolvedValue([
+      { at: Date.now(), kind: "task_ended", task: "a", model: "m", status: "completed", usage: { input_tokens: 10000, cached_input_tokens: 9000, output_tokens: 200, total_tokens: 10200 } },
+      { at: Date.now(), kind: "task_ended", task: "b", model: "m", status: "completed", usage: { input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100, total_tokens: 1100 } },
+      { at: Date.now(), kind: "task_ended", task: "old", model: "legacy", status: "completed", usage: { total_tokens: 1234 } },
+      { at: Date.now(), kind: "task_ended", task: "partial", model: "partial", status: "completed", usage: { input_tokens: 10000, output_tokens: 200, total_tokens: 10200 } },
+    ]);
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    expect(await within(dialog).findByText("Input 2k · Cached 9k (82% hit) · Output 300")).toBeInTheDocument();
+    expect(within(dialog).getByText("1.2k tokens")).toBeInTheDocument();
+    expect(within(dialog).getByText("10.2k tokens · Output 200")).toBeInTheDocument();
+    expect(within(dialog).getByText("Output 200")).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent(/NaN|undefined|Infinity/);
   });
 
   it("saves a weekly reserve for an account", async () => {

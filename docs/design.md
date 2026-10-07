@@ -21,6 +21,13 @@ wide desktop with enough card width, then collapse to two and one card without i
 Focused dialogs may handle add-account, explicit confirmation, progress/results,
 or recovery; they do not create a second navigation system.
 
+Watch opens up to four Codex task logs in one dialog, with two columns on wide
+windows and one on narrow windows. Each log scrolls and closes independently;
+opening a fifth replaces the oldest. The dialog's task selector adds another
+current task or a log from the Activity history it was opened from. Watch and
+Activity show uncached input, cached input with hit rate, and output when known.
+Codex's input total includes cached input; the hit rate uses that full total.
+
 The toolbar contains the vertically centered GSwitch mark and name, a compact
 Manual/Invoke segmented control, Refresh, Wake all, Add account, and a compact
 language menu. In Invoke Mode only, an icon button beside the segmented control
