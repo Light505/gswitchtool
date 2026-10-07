@@ -234,8 +234,22 @@ function structuredReviewPayload(prompt) {
 }
 
 function taskPayload(prompt, resume) {
-  const changedFile = BEHAVIOR === "invoke-write" ? "outside.ts" : null;
-  if (changedFile) fs.writeFileSync(path.join(process.cwd(), changedFile), "one" + String.fromCharCode(10) + "two" + String.fromCharCode(10), "utf8");
+  const worktreeBehavior = BEHAVIOR.startsWith("invoke-worktree-");
+  const changedFile = BEHAVIOR === "invoke-write" ? "outside.ts" : worktreeBehavior && !prompt.includes("Resolve the merge conflicts") ? (BEHAVIOR.includes("conflict") ? "README.md" : "task.txt") : null;
+  if (changedFile) fs.writeFileSync(path.join(process.cwd(), changedFile), BEHAVIOR === "invoke-write" ? "one" + String.fromCharCode(10) + "two" + String.fromCharCode(10) : "codex task change" + String.fromCharCode(10), "utf8");
+  if (worktreeBehavior && process.env.GSWITCH_TEST_USER_CHANGE_FILE && !prompt.includes("Resolve the merge conflicts")) {
+    fs.writeFileSync(process.env.GSWITCH_TEST_USER_CHANGE_FILE, "user tree change" + String.fromCharCode(10), "utf8");
+  }
+  if (BEHAVIOR.includes("conflict") && !BEHAVIOR.includes("unresolved")) {
+    const names = ["README.md"];
+    for (const name of names) {
+      const file = path.join(process.cwd(), name);
+      const content = fs.readFileSync(file, "utf8");
+      if (!content.includes("<<<<<<<")) continue;
+      const resolved = "codex task change" + String.fromCharCode(10) + "user tree change" + String.fromCharCode(10);
+      fs.writeFileSync(file, resolved, "utf8");
+    }
+  }
   if (prompt.includes("Reply format (end with at most 15 lines):")) {
     return "Changed: " + (changedFile ? changedFile + " — added fixture changes" : "none") + "\\nTests: fixture — passed\\nOpen questions: none";
   }
@@ -459,6 +473,9 @@ rl.on("line", (line) => {
 	          turnId,
 	          model: message.params.model ?? null,
 	          effort: message.params.effort ?? null,
+	          cwd: process.cwd(),
+	          nodeModulesLinked: fs.lstatSync(path.join(process.cwd(), "node_modules"), { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
+	          readme: fs.readFileSync(path.join(process.cwd(), "README.md"), "utf8"),
 	          prompt
 	        };
 	        saveState(state);

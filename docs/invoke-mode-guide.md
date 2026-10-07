@@ -177,9 +177,20 @@ stronger for complex work. Each Codex result ends with a line like:
 `write` means Codex could edit files; reviews never have it. To continue earlier
 work, ask Claude to continue that thread.
 
-OpenAI's stock commands (`/codex:review`, `/codex:rescue`, `/codex:status`, and
-others) still work when you type them, but they do not go through GSwitch: no
-model allowlist and no account switching.
+To keep Claude's usage low, the result is short, and the facts in it come from
+the tool rather than from Codex:
+
+| Line | Meaning |
+| --- | --- |
+| `Changed files (git): …` | What git shows changed during the run, with lines added and removed. |
+| `Verify: passed` / `Verify: FAILED` | The test command Claude named, run by the tool after Codex finished. On a failure Codex gets one automatic retry in the same thread; after that, Claude takes over. |
+| `WARNING: …` | Something does not add up, such as a file changed outside the expected paths, or a file Codex says it changed that git shows unchanged. Claude then reads the diff. |
+| `Full answer: …` | A long answer was shortened; the whole answer is in that file. |
+| `Worktree: applied …` / `Worktree kept: …` | When Claude runs two editing tasks at once, each works in its own copy of the repository, and the result is copied back into your working tree. A kept copy (a conflict that could not be resolved, or a failed test) is left for you with its reason; nothing in your working tree changes. |
+
+OpenAI's stock commands (`/codex:review`, `/codex:status`, and others) still work
+when you type them, but they do not go through GSwitch: no model allowlist and no
+account switching.
 
 ## 6. When an account runs out
 

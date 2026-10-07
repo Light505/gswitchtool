@@ -47,10 +47,11 @@ complex), use it unless the task clearly needs more or less.
 ## 4. Invoke
 
 ```
-invoke --model <model> --effort <effort> [--write] [--scope "src/**,tests/**"] [--verify "<test command>"] --cwd "<repository or worktree>" "<brief>"
+invoke --model <model> --effort <effort> [--write] [--worktree] [--scope "src/**,tests/**"] [--verify "<test command>"] [--resume-thread <thread> --worktree-dir <dir>] --cwd "<repository>" "<brief>"
 ```
 
 - Add `--write` when Codex should edit files; omit it for review or research.
+- Use `--worktree` only when two or more write tasks run at the same time on the same repository. A single task edits the working tree directly. Untracked files are not included in the worktree snapshot. If output says `Worktree kept`, tell the user its path and reason; do not delete it. Resume it with `--resume-thread <thread> --worktree-dir <dir>`.
 - Codex sees the repository, not this conversation. The brief states the goal and constraints.
   Pass `--scope` for expected paths and `--verify` when there is a known test command; do not
   rerun tests that `invoke` already verified. Use `--prompt-file <path>` for a long brief.

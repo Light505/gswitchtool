@@ -6,7 +6,7 @@ import process from "node:process";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
@@ -156,6 +156,10 @@ async function withGSwitch(options, behavior, body) {
 
 function readFakeState(statePath) {
   return JSON.parse(fs.readFileSync(statePath, "utf8"));
+}
+
+function readText(filePath) {
+  return fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
 }
 
 test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
@@ -331,6 +335,154 @@ test("invoke reports git diff facts and files outside repeatable scope globs", (
     assert.deepEqual([payload.diff.totalFiles, payload.diff.added, payload.diff.deleted], [1, 2, 0]);
     assert.equal(payload.output, "Changed: outside.ts — added fixture changes\nTests: fixture — passed\nOpen questions: none");
     assert.ok(payload.warnings.includes("WARNING: changed outside --scope: outside.ts"));
+  }));
+
+test("invoke --worktree applies a clean task patch and removes its worktree", () =>
+  withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.worktree, { applied: true, conflictsResolved: false, keptAt: null, reason: null });
+    assert.equal(readText(path.join(ctx.repo, "task.txt")), "codex task change\n");
+    assert.match(payload.diff.files.map((file) => file.path).join(","), /task\.txt/);
+    assert.equal(fs.existsSync(payload.worktree.keptAt ?? ""), false);
+  }));
+
+test("invoke --worktree waits for another git process's index lock", () =>
+  withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
+    const lock = path.join(ctx.repo, ".git", "index.lock");
+    fs.writeFileSync(lock, "");
+    setTimeout(() => fs.rmSync(lock, { force: true }), 1500);
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.equal(JSON.parse(result.stdout).worktree.applied, true);
+  }));
+
+test("a refused worktree invoke leaves no worktree behind", () =>
+  withGSwitch({ paused: { resumes_at: null } }, "invoke-worktree-apply", async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 2);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "INVOKE_PAUSED");
+    assert.equal(payload.worktree, undefined);
+    const dir = path.join(ctx.repo, ".git", "gswitch-worktrees");
+    assert.deepEqual(fs.existsSync(dir) ? fs.readdirSync(dir) : [], []);
+    const listed = spawnSync("git", ["worktree", "list", "--porcelain"], { cwd: ctx.repo, encoding: "utf8" }).stdout;
+    assert.equal(listed.split(/\r?\n/).filter((line) => line.startsWith("worktree ")).length, 1);
+  }));
+
+test("invoke --worktree starts from the tracked uncommitted working tree", () =>
+  withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
+    fs.writeFileSync(path.join(ctx.repo, "README.md"), "user uncommitted work\n");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFakeState(ctx.statePath).lastTurnStart.readme.replace(/\r\n/g, "\n"), "user uncommitted work\n");
+    assert.equal(readText(path.join(ctx.repo, "README.md")), "user uncommitted work\n");
+    assert.equal(readText(path.join(ctx.repo, "task.txt")), "codex task change\n");
+  }));
+
+test("invoke --worktree resolves one merge conflict by resuming its thread", () =>
+  withGSwitch({}, "invoke-worktree-conflict", async (ctx, gswitch) => {
+    const mainFile = path.join(ctx.repo, "README.md");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], {
+      ...ctx, env: { GSWITCH_TEST_USER_CHANGE_FILE: mainFile }
+    });
+    assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.worktree, { applied: true, conflictsResolved: true, keptAt: null, reason: null });
+    assert.equal(gswitch.methods().filter((method) => method === "run_begin").length, 2);
+    const turns = readFakeState(ctx.statePath).turns;
+    assert.equal(turns[0].threadId, turns[1].threadId);
+    assert.match(turns[1].prompt, /The user's tree changed while you worked/);
+    assert.match(fs.readFileSync(mainFile, "utf8"), /codex task change/);
+    assert.match(fs.readFileSync(mainFile, "utf8"), /user tree change/);
+  }));
+
+test("unresolved worktree conflict is kept and leaves the user's tree untouched", () =>
+  withGSwitch({}, "invoke-worktree-unresolved-conflict", async (ctx) => {
+    const mainFile = path.join(ctx.repo, "README.md");
+    const original = fs.readFileSync(mainFile, "utf8");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], {
+      ...ctx, env: { GSWITCH_TEST_USER_CHANGE_FILE: mainFile }
+    });
+    assert.equal(result.status, 4, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.worktree.applied, false);
+    assert.ok(payload.worktree.keptAt);
+    assert.match(payload.worktree.reason, /Unresolved merge conflicts/);
+    assert.match(payload.warnings.join("\n"), /WARNING: worktree changes were not applied/);
+    assert.equal(fs.readFileSync(mainFile, "utf8"), "user tree change\n");
+    assert.notEqual(fs.readFileSync(mainFile, "utf8"), original);
+    assert.equal(fs.existsSync(payload.worktree.keptAt), true);
+  }));
+
+test("a worktree with verification still failing is kept without applying changes", () =>
+  withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
+    const result = await companion([
+      "invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree",
+      "--verify", "node -e \"process.exit(1)\"", "do the work"
+    ], ctx);
+    assert.equal(result.status, 4, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.verify.passed, false);
+    assert.equal(readText(path.join(ctx.repo, "README.md")), "hello\n");
+    assert.equal(fs.existsSync(path.join(ctx.repo, "task.txt")), false);
+    assert.match(payload.worktree.reason, /verification failed/);
+    assert.match(payload.warnings.join("\n"), /WARNING: worktree kept: verification failed/);
+    assert.equal(fs.existsSync(payload.worktree.keptAt), true);
+  }));
+
+test("worktree links ignored node_modules and cleanup preserves the real dependency tree", () =>
+  withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
+    const dependencies = path.join(ctx.repo, "node_modules");
+    fs.mkdirSync(dependencies);
+    fs.writeFileSync(path.join(dependencies, "keep.txt"), "real dependencies");
+    fs.writeFileSync(path.join(ctx.repo, ".gitignore"), "node_modules/\n");
+    run("git", ["add", ".gitignore"], { cwd: ctx.repo });
+    run("git", ["commit", "-m", "ignore dependencies"], { cwd: ctx.repo });
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFakeState(ctx.statePath).lastTurnStart.nodeModulesLinked, true);
+    assert.equal(fs.readFileSync(path.join(dependencies, "keep.txt"), "utf8"), "real dependencies");
+    assert.equal(fs.existsSync(path.join(dependencies, "keep.txt")), true);
+    const worktrees = run("git", ["worktree", "list", "--porcelain"], { cwd: ctx.repo }).stdout;
+    assert.doesNotMatch(worktrees, /gswitch-worktrees/);
+  }));
+
+test("invoke --worktree requires --write and rejects before contacting GSwitch", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 2);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "rejected");
+    assert.equal(payload.code, "WORKTREE_UNAVAILABLE");
+    assert.match(payload.message, /requires --write/);
+    assert.equal(gswitch.requests.length, 0);
+  }));
+
+test("invoke --worktree requires a git repository before contacting GSwitch", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    ctx.repo = makeTempDir("invoke-no-git-");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 2);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "rejected");
+    assert.equal(payload.code, "WORKTREE_UNAVAILABLE");
+    assert.match(payload.message, /requires a git repository/);
+    assert.equal(gswitch.requests.length, 0);
+  }));
+
+test("a stopped worktree invoke keeps its directory for resuming", () =>
+  withGSwitch({ stopTask: true }, "invoke-worktree-apply", async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);
+    assert.equal(result.status, 1, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.worktree.applied, false);
+    assert.equal(payload.worktree.reason, "interrupted or stopped");
+    assert.equal(fs.existsSync(payload.worktree.keptAt), true);
+    assert.equal(payload.worktree.keptAt.startsWith(path.join(ctx.repo, ".git", "gswitch-worktrees")), true);
   }));
 
 test("invoke verifies a command after Codex completes", () =>

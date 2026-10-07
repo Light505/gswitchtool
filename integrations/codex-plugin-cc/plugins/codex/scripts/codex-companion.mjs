@@ -3,6 +3,7 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -86,7 +87,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs invoke-status [--json]",
-      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
+      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--worktree] [--worktree-dir <dir>] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -1161,6 +1162,178 @@ function snapshotGit(cwd) {
   return files;
 }
 
+function git(cwd, args, options = {}) {
+  return spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true, ...options });
+}
+
+function gitOutput(cwd, args) {
+  const result = git(cwd, args);
+  if (result.status !== 0) throw new Error((result.stderr || `git ${args.join(" ")} failed`).trim());
+  return result.stdout.trim();
+}
+
+function resolveGitLayout(cwd) {
+  const root = gitOutput(cwd, ["rev-parse", "--show-toplevel"]);
+  const common = gitOutput(root, ["rev-parse", "--git-common-dir"]);
+  return { root, commonDir: path.resolve(root, common) };
+}
+
+// Parallel invokes snapshot the same repository; git refuses while another
+// git process holds its index lock, so wait for it (up to about 15 s).
+function gitWaitingForLock(cwd, args) {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = git(cwd, args);
+    if (result.status === 0 || attempt >= 60 || !/index\.lock/.test(result.stderr ?? "")) return result;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+  }
+}
+
+function createWorktreeBase(root) {
+  const stash = gitWaitingForLock(root, ["stash", "create"]);
+  if (stash.status !== 0) throw new Error((stash.stderr || "git stash create failed").trim());
+  return stash.stdout.trim() || gitOutput(root, ["rev-parse", "HEAD"]);
+}
+
+function listDirectories(root, maxDepth, name) {
+  const found = [];
+  const visit = (directory, depth) => {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.name === ".git") continue;
+      const full = path.join(directory, entry.name);
+      const relative = path.relative(root, full).split(path.sep).join("/");
+      if (entry.name === name) found.push({ full, relative });
+      else visit(full, depth + 1);
+    }
+  };
+  visit(root, 1);
+  return found;
+}
+
+function findCargoTargetDir(mainRoot) {
+  const cargoManifests = [];
+  const visit = (directory, depth) => {
+    if (depth > 3) return;
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const full = path.join(directory, entry.name);
+      if (entry.isFile() && entry.name === "Cargo.toml" && fs.statSync(path.join(directory, "target"), { throwIfNoEntry: false })?.isDirectory()) {
+        cargoManifests.push(full);
+      } else if (entry.isDirectory()) visit(full, depth + 1);
+    }
+  };
+  visit(mainRoot, 1);
+  return cargoManifests.length === 1 ? path.join(path.dirname(cargoManifests[0]), "target") : null;
+}
+
+function linkSharedDependencies(mainRoot, worktree) {
+  const links = [];
+  for (const candidate of listDirectories(mainRoot, 3, "node_modules")) {
+    if (git(mainRoot, ["check-ignore", "-q", "--", candidate.relative]).status !== 0) continue;
+    const destination = path.join(worktree, candidate.relative);
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    fs.symlinkSync(candidate.full, destination, process.platform === "win32" ? "junction" : "dir");
+    links.push(destination);
+  }
+  return { links, cargoTargetDir: findCargoTargetDir(mainRoot) };
+}
+
+// Removes a worktree only after its dependency links are gone, so removal
+// can never follow a link into the user's real dependency folders.
+function discardWorktree(mainRoot, state) {
+  removeWorktreeLinks(state.links ?? []);
+  const remainingLinks = (state.links ?? []).filter((link) => {
+    try { return fs.lstatSync(link).isSymbolicLink(); } catch { return false; }
+  });
+  if (remainingLinks.length) return;
+  const removed = git(mainRoot, ["worktree", "remove", "--force", state.worktree]);
+  if (removed.status === 0) git(mainRoot, ["worktree", "prune"]);
+}
+
+function removeWorktreeLinks(links) {
+  for (const link of [...links].reverse()) {
+    try { if (fs.lstatSync(link).isSymbolicLink()) fs.unlinkSync(link); } catch {}
+  }
+}
+
+function findWorktreeDependencyLinks(worktree) {
+  const links = [];
+  const visit = (directory, depth) => {
+    if (depth > 3) return;
+    let entries;
+    try { entries = fs.readdirSync(directory, { withFileTypes: true }); } catch { return; }
+    for (const entry of entries) {
+      if (entry.name === ".git") continue;
+      const full = path.join(directory, entry.name);
+      if (entry.name === "node_modules" && entry.isSymbolicLink()) links.push(full);
+      else if (entry.isDirectory()) visit(full, depth + 1);
+    }
+  };
+  visit(worktree, 1);
+  return links;
+}
+
+function validWorktreeDirectory(mainRoot, requested) {
+  const layout = resolveGitLayout(mainRoot);
+  const expectedRoot = path.resolve(layout.commonDir, "gswitch-worktrees");
+  const candidate = path.resolve(requested);
+  const relative = path.relative(expectedRoot, candidate);
+  if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)) {
+    throw new Error("--worktree-dir must name a worktree under this repository's git common dir/gswitch-worktrees.");
+  }
+  const registered = gitOutput(mainRoot, ["worktree", "list", "--porcelain"])
+    .split(/\r?\n/).filter((line) => line.startsWith("worktree ")).map((line) => path.resolve(line.slice(9)));
+  if (!registered.some((entry) => entry === candidate) || !fs.existsSync(path.join(candidate, ".git"))) {
+    throw new Error("--worktree-dir is not a registered worktree for this repository.");
+  }
+  const mergeHead = git(candidate, ["rev-parse", "--verify", "MERGE_HEAD"]);
+  return {
+    ...layout,
+    worktree: candidate,
+    base: mergeHead.status === 0 ? mergeHead.stdout.trim() : gitOutput(candidate, ["rev-parse", "HEAD"]),
+    alreadyMerged: mergeHead.status === 0,
+    resumed: true,
+    links: findWorktreeDependencyLinks(candidate),
+    cargoTargetDir: findCargoTargetDir(layout.root)
+  };
+}
+
+function createInvokeWorktree(mainRoot, jobId) {
+  const layout = resolveGitLayout(mainRoot);
+  const base = createWorktreeBase(layout.root);
+  const directory = path.join(layout.commonDir, "gswitch-worktrees", jobId);
+  fs.mkdirSync(path.dirname(directory), { recursive: true });
+  const add = gitWaitingForLock(layout.root, ["worktree", "add", "--detach", directory, base]);
+  if (add.status !== 0) throw new Error((add.stderr || "Could not create the invoke worktree.").trim());
+  const shared = linkSharedDependencies(layout.root, directory);
+  return { ...layout, worktree: directory, base, resumed: false, ...shared };
+}
+
+function runGitApply(root, args, input, base) {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "gswitch-apply-index-"));
+  const indexFile = path.join(temporary, "index");
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  try {
+    const readTree = git(root, ["read-tree", base], { env });
+    if (readTree.status !== 0) return readTree;
+    return git(root, args, { input, env, maxBuffer: 64 * 1024 * 1024 });
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+}
+
+function stagedPatch(worktree, base) {
+  const add = git(worktree, ["add", "-A"]);
+  if (add.status !== 0) throw new Error((add.stderr || "Could not stage worktree changes for patch capture.").trim());
+  const diff = git(worktree, ["diff", "--cached", "--binary", base]);
+  if (diff.status !== 0) throw new Error((diff.stderr || "Could not capture worktree patch.").trim());
+  return diff.stdout;
+}
+
 function changedGitFacts(before, after) {
   const changed = [];
   const names = new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]);
@@ -1263,6 +1436,10 @@ function renderInvokeResult(result) {
     else lines.push(`Verify: FAILED${result.verify.retries ? " after 1 retry" : ""} (exit ${result.verify.exitCode})`, ...result.verify.output.trimEnd().split(/\r?\n/).slice(-20));
   }
   if (result.warnings?.length) lines.push(...result.warnings);
+  if (result.worktree) {
+    if (result.worktree.applied) lines.push(`Worktree: applied ${result.worktree.conflictsResolved ? "after resolving conflicts" : "to working tree"}`);
+    else if (result.worktree.keptAt) lines.push(`Worktree kept: ${result.worktree.keptAt} (${result.worktree.reason})`);
+  }
   if (result.diff?.repository) {
     const files = result.diff.files.slice(0, 20).map((file) => `${file.path} (+${file.added} −${file.deleted})`);
     const shownFiles = files.length ? files.join(", ") : "none";
@@ -1286,9 +1463,9 @@ const SIMULATE_USAGE_LIMIT_ENV = "GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT";
 
 async function handleInvoke(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify", "worktree-dir"],
     repeatableOptions: ["scope"],
-    booleanOptions: ["json", "write"],
+    booleanOptions: ["json", "write", "worktree"],
     aliasMap: {
       m: "model"
     }
@@ -1310,14 +1487,55 @@ async function handleInvoke(argv) {
     throw new Error("Provide the task for Codex as the prompt, --prompt-file, or piped stdin.");
   }
   const write = Boolean(options.write);
+  const useWorktree = Boolean(options.worktree || options["worktree-dir"]);
   const base = { model, reasoningEffort: effort, write };
   const finish = (result) => {
     const payload = options.json && result.answerFile
       ? { ...result, output: compactInvokeAnswer(result.output).text }
       : result;
     outputCommandResult(payload, renderInvokeResult(result), options.json);
-    process.exitCode = result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
+    process.exitCode = result.status === "completed" && result.worktree?.reason ? 4 : result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
   };
+
+  if (useWorktree && !write) {
+    finish({ ...base, status: "rejected", code: "WORKTREE_UNAVAILABLE", message: "--worktree requires --write." });
+    return;
+  }
+  let mainRoot = cwd;
+  if (useWorktree) {
+    try { mainRoot = resolveGitLayout(cwd).root; }
+    catch {
+      finish({ ...base, status: "rejected", code: "WORKTREE_UNAVAILABLE", message: "--worktree requires a git repository." });
+      return;
+    }
+  }
+  if (options["worktree-dir"] && !options["resume-thread"]) {
+    finish({ ...base, status: "rejected", code: "WORKTREE_UNAVAILABLE", message: "--worktree-dir requires --resume-thread." });
+    return;
+  }
+
+  let worktreeState = null;
+  let actualCwd = cwd;
+  let cargoTargetPrevious;
+  let cargoTargetSet = false;
+  let invokeInterrupted = false;
+  // Ctrl+C still stops invoke; the worktree stays so the thread can resume there.
+  const onInvokeInterrupt = () => {
+    invokeInterrupted = true;
+    if (worktreeState?.worktree) process.stderr.write(`Worktree kept: ${worktreeState.worktree} (interrupted)\n`);
+    process.exit(130);
+  };
+  if (useWorktree) {
+    try {
+      worktreeState = options["worktree-dir"]
+        ? validWorktreeDirectory(mainRoot, options["worktree-dir"])
+        : createInvokeWorktree(mainRoot, generateJobId("invoke"));
+      actualCwd = worktreeState.worktree;
+    } catch (error) {
+      finish({ ...base, status: "rejected", code: "WORKTREE_UNAVAILABLE", message: error.message });
+      return;
+    }
+  }
 
   // GSwitch validates the request and tracks this worker for as long as the
   // connection stays open.
@@ -1326,14 +1544,22 @@ async function handleInvoke(argv) {
   try {
     session = await GSwitchSession.open();
     leaseId = (
-      await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: workspaceRoot })
+      await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: useWorktree ? actualCwd : workspaceRoot })
     ).lease_id;
   } catch (error) {
     session?.close();
+    // Nothing ran: a worktree made for this call is removed, and one being
+    // resumed stays as it was.
+    let kept = null;
+    if (worktreeState?.resumed) kept = worktreeState.worktree;
+    else if (worktreeState) discardWorktree(mainRoot, worktreeState);
+    const worktree = kept ? { worktree: { applied: false, conflictsResolved: false, keptAt: kept, reason: "nothing ran" } } : {};
     if (!(error instanceof GSwitchError)) {
-      throw error;
+      if (!worktreeState) throw error;
+      finish({ ...base, status: "failed", code: "GSWITCH_UNAVAILABLE", message: error.message, ...worktree });
+      return;
     }
-    finish({ ...base, status: "rejected", code: error.code, message: error.message });
+    finish({ ...base, status: "rejected", code: error.code, message: error.message, ...worktree });
     return;
   }
 
@@ -1341,21 +1567,28 @@ async function handleInvoke(argv) {
     // Each Invoke worker owns its app server, so it can be stopped and started
     // again under another account without touching other workers.
     process.env[DISABLE_BROKER_ENV] = "1";
+    process.on("SIGINT", onInvokeInterrupt);
+    if (worktreeState?.cargoTargetDir) {
+      cargoTargetPrevious = process.env.CARGO_TARGET_DIR;
+      process.env.CARGO_TARGET_DIR = worktreeState.cargoTargetDir;
+      cargoTargetSet = true;
+    }
     // The invoking model reads stderr too; Node's warning about the Windows
     // shell launch of Codex would cost it tokens on every run.
     process.noDeprecation = true;
-    ensureCodexAvailable(cwd);
-    const gitBefore = snapshotGit(cwd);
+    ensureCodexAvailable(actualCwd);
+    const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
+    const gitBefore = useWorktree ? new Map() : snapshotGit(actualCwd);
     const result = await runInvokeWithFailover({
-      base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId,
+      base, session, leaseId, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
       verifyCommand: options.verify ? String(options.verify) : null
     });
     if (result.jobId && result.output) {
-      const answerFile = path.join(resolveJobsDir(workspaceRoot), `${result.jobId}.answer.txt`);
+      const answerFile = path.join(resolveJobsDir(runWorkspaceRoot), `${result.jobId}.answer.txt`);
       fs.writeFileSync(answerFile, result.output, "utf8");
       result.answerFile = answerFile;
     }
-    const gitAfter = snapshotGit(cwd);
+    const gitAfter = snapshotGit(actualCwd);
     result.diff = gitBefore && gitAfter ? changedGitFacts(gitBefore, gitAfter) : { repository: false, files: [] };
     result.warnings = [];
     const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
@@ -1372,13 +1605,117 @@ async function handleInvoke(argv) {
       if (write && !result.diff.files.length) result.warnings.push("WARNING: write run changed nothing");
       if (!write && result.diff.files.length) result.warnings.push("WARNING: read-only run changed files");
     }
+    if (worktreeState) {
+      const statusAllowsApply = result.status === "completed" && (!result.verify || result.verify.passed) && !invokeInterrupted;
+      if (!statusAllowsApply) {
+        const reason = invokeInterrupted || result.code === "STOPPED_BY_USER" ? "interrupted or stopped" : result.verify?.passed === false ? "verification failed" : "run did not complete";
+        result.worktree = { applied: false, conflictsResolved: false, keptAt: worktreeState.worktree, reason };
+        result.warnings.push(`WARNING: worktree kept: ${reason}`);
+      } else {
+        try {
+          const patch = stagedPatch(actualCwd, worktreeState.base);
+          if (worktreeState.alreadyMerged) {
+            const threeWayCheck = runGitApply(mainRoot, ["apply", "--3way", "--check", "-"], patch, worktreeState.base);
+            const cleanCheck = threeWayCheck.status === 0 ? threeWayCheck : git(mainRoot, ["apply", "--check", "-"], { input: patch });
+            if (cleanCheck.status !== 0) throw new Error((cleanCheck.stderr || "The resumed merge patch does not apply cleanly.").trim());
+            const applied = git(mainRoot, ["apply", "-"], { input: patch, maxBuffer: 64 * 1024 * 1024 });
+            if (applied.status !== 0) throw new Error((applied.stderr || "The resumed merge patch could not be applied.").trim());
+            result.worktree = { applied: true, conflictsResolved: true, keptAt: null, reason: null };
+            worktreeState.completed = true;
+          } else {
+          let check = runGitApply(mainRoot, ["apply", "--3way", "--check", "-"], patch, worktreeState.base);
+          let conflictsResolved = false;
+          let applyBase = worktreeState.base;
+          if (check.status !== 0) {
+            const newSnapshot = createWorktreeBase(mainRoot);
+            const commit = git(actualCwd, ["-c", "user.name=gswitch", "-c", "user.email=gswitch@localhost", "commit", "-m", "gswitch invoke worktree result"]);
+            if (commit.status !== 0) throw new Error((commit.stderr || "Could not prepare worktree conflict merge.").trim());
+            const merge = git(actualCwd, ["merge", "--no-commit", "--no-ff", newSnapshot]);
+            const unresolved = git(actualCwd, ["diff", "--name-only", "--diff-filter=U"]);
+            const files = unresolved.stdout.trim().split(/\r?\n/).filter(Boolean);
+            if (merge.status !== 0 && files.length) {
+              const conflictPrompt = `The user's tree changed while you worked. Resolve the merge conflicts listed below, keeping both sides' intent. Do not touch other files.\n\nConflicting files:\n${files.map((file) => `- ${file}`).join("\n")}`;
+              const resumed = await runInvokeWithFailover({
+                base, session, leaseId, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
+                prompt: conflictPrompt, resumeThreadId: result.threadId
+              });
+              result.failovers += resumed.failovers;
+              result.threadId = resumed.threadId ?? result.threadId;
+              if (resumed.status !== "completed") throw new Error(resumed.message || "Conflict resolution run failed.");
+              const markerFiles = files.filter((file) => {
+                try { return /^(<<<<<<<|=======|>>>>>>>)( |$)/m.test(fs.readFileSync(path.join(actualCwd, file), "utf8")); }
+                catch { return false; }
+              });
+              if (markerFiles.length) throw new Error(`Unresolved merge conflicts: ${markerFiles.join(", ")}`);
+              const resolvedStage = git(actualCwd, ["add", "--", ...files]);
+              if (resolvedStage.status !== 0) throw new Error(`Could not stage conflict resolution: ${(resolvedStage.stderr || "git add failed").trim()}`);
+              const unresolvedAfterResume = git(actualCwd, ["diff", "--name-only", "--diff-filter=U"]);
+              if (unresolvedAfterResume.status !== 0) throw new Error(`Could not inspect resolved conflicts: ${(unresolvedAfterResume.stderr || "git diff failed").trim()}`);
+              const stillUnresolved = unresolvedAfterResume.stdout.trim();
+              if (stillUnresolved) throw new Error(`Unresolved merge conflicts: ${stillUnresolved.split(/\r?\n/).join(", ")}`);
+              conflictsResolved = true;
+            } else if (merge.status !== 0) {
+              throw new Error((merge.stderr || "Could not merge the updated user tree.").trim());
+            }
+            applyBase = newSnapshot;
+            const mergePatch = git(actualCwd, ["diff", "--cached", "--binary", applyBase]);
+            if (mergePatch.status !== 0) throw new Error((mergePatch.stderr || "Could not capture resolved worktree patch.").trim());
+            check = runGitApply(mainRoot, ["apply", "--3way", "--check", "-"], mergePatch.stdout, applyBase);
+            let applyArgs = ["apply", "--3way", "-"];
+            if (check.status !== 0) {
+              // The user's real index remains at HEAD while the working tree
+              // includes its snapshot. The resolved merge already proved both
+              // sides combine; check the resulting patch directly against that
+              // working tree, then apply without consulting the stale index.
+              const cleanCheck = git(mainRoot, ["apply", "--check", "-"], { input: mergePatch.stdout });
+              if (cleanCheck.status !== 0) throw new Error(`Resolved patch check failed: ${(cleanCheck.stderr || check.stderr || "The resolved patch still does not apply cleanly.").trim()}`);
+              applyArgs = ["apply", "-"];
+            }
+            const applied = applyArgs.includes("--3way")
+              ? runGitApply(mainRoot, applyArgs, mergePatch.stdout, applyBase)
+              : git(mainRoot, applyArgs, { input: mergePatch.stdout, maxBuffer: 64 * 1024 * 1024 });
+            if (applied.status !== 0) throw new Error((applied.stderr || "The resolved patch could not be applied.").trim());
+          } else {
+            const applied = runGitApply(mainRoot, ["apply", "--3way", "-"], patch, worktreeState.base);
+            if (applied.status !== 0) throw new Error((applied.stderr || "The worktree patch could not be applied.").trim());
+          }
+          result.worktree = { applied: true, conflictsResolved, keptAt: null, reason: null };
+          worktreeState.completed = true;
+          }
+        } catch (error) {
+          result.worktree = { applied: false, conflictsResolved: false, keptAt: worktreeState.worktree, reason: error.message };
+          result.warnings.push(`WARNING: worktree changes were not applied: ${error.message}`);
+        }
+      }
+    }
     // GSwitch keeps the result in its activity history; older versions do not.
     await session
       .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null })
       .catch(() => {});
     finish(result);
+  } catch (error) {
+    if (!worktreeState) throw error;
+    await session
+      .request("task_result", { lease_id: leaseId, status: "failed", code: "WORKTREE_RUN_FAILED" })
+      .catch(() => {});
+    finish({
+      ...base,
+      status: "failed",
+      code: "WORKTREE_RUN_FAILED",
+      message: error instanceof Error ? error.message : String(error),
+      worktree: { applied: false, conflictsResolved: false, keptAt: worktreeState.worktree, reason: error instanceof Error ? error.message : String(error) },
+      warnings: [`WARNING: worktree kept because invoke failed: ${error instanceof Error ? error.message : String(error)}`]
+    });
   } finally {
+    process.off("SIGINT", onInvokeInterrupt);
     session.close();
+    if (worktreeState?.worktree && worktreeState.completed) {
+      discardWorktree(mainRoot, worktreeState);
+    }
+    if (cargoTargetSet) {
+      if (cargoTargetPrevious === undefined) delete process.env.CARGO_TARGET_DIR;
+      else process.env.CARGO_TARGET_DIR = cargoTargetPrevious;
+    }
   }
 }
 
