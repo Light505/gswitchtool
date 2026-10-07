@@ -73,12 +73,12 @@ test("mode and review resolve session > project > global, task words ignored", (
 
 test("allow shows, replaces, orders, enables all, disables and resets globally", (t) => {
   const f = fixture(t);
-  const defaults = "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n";
+  const defaults = "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n";
   assert.equal(f.run(["allow"]), defaults);
   assert.equal(fs.existsSync(path.join(f.data, "config.json")), false);
   f.write("config.json", { default: "claude", projects: { [projectKey(f.project)]: { claudeAllowed: { sonnet: ["max"] } } }, extra: "keep" });
   assert.equal(f.run(["allow"]), defaults);
-  assert.equal(f.run(["allow", "sonnet", "high,low,high"]), "Claude workers allowed: haiku low, medium · sonnet low, high\n");
+  assert.equal(f.run(["allow", "sonnet", "high,low,high"]), "Claude workers allowed: haiku low, medium · sonnet low, high · opus low, medium, high, xhigh, max\n");
   assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["low", "high"]);
   f.run(["allow", "sonnet", "medium"]);
   assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["medium"]);
@@ -119,14 +119,14 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   const f = fixture(t); f.mode("claude");
   for (const claudeAllowed of [undefined, null, [], "all", 5, { haiku: "low" }, { opus: null }, { sonnet: ["high", 42] }]) {
     f.write("config.json", { claudeAllowed });
-    assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n");
+    assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
     assert.deepEqual(f.agent(), {});
     assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
-    assert.equal(f.decision(f.agent({ subagent_type: "router:opus-low" })), "deny");
+    assert.deepEqual(f.agent({ subagent_type: "router:opus-low" }), {});
   }
   f.write("config.json", "{broken");
   assert.deepEqual(f.agent(), {});
-  assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n");
+  assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
   f.write("config.json", { claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
   assert.equal(f.run(["allow"]), "Claude workers allowed: sonnet low, max\n");
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
@@ -140,6 +140,7 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
 
 test("allow-list denies before low usage, after model override and codex mode", (t) => {
   const f = fixture(t); f.mode("claude");
+  f.run(["allow", "opus", "none"]);
   assert.equal(f.agent({ subagent_type: "router:opus-low" }).hookSpecificOutput.permissionDecisionReason,
     "router:opus-low is not allowed. Allowed: haiku low, medium · sonnet low, medium, high, xhigh, max. Pick an allowed worker or send the task to Codex.");
   f.run(["allow", "sonnet", "medium"]);
@@ -258,11 +259,11 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (session) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (session) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max$/);
   f.run(["allow", "sonnet", "max,low"]);
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max$/);
   f.write("config.json", { claudeAllowed: {} });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none$/);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});

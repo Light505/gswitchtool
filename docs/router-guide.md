@@ -80,8 +80,9 @@ More models can be added by extending the model list in `scripts/workers.mjs`
 and regenerating the agents.
 
 The global `claudeAllowed` setting in `config.json` chooses which workers may
-start. The default is `{ "haiku": ["low", "medium"], "sonnet": ["low",
-"medium", "high", "xhigh", "max"] }`: the workers on the cost ladders below.
+start. The default allows Haiku low and medium, every Sonnet effort and every
+Opus effort. Opus is on no cost ladder below; the orchestrator uses it only when
+the owner asks.
 Missing or corrupt settings
 use this default; unknown models and efforts are ignored. An empty object
 allows no Claude workers. Project and session settings do not override it.

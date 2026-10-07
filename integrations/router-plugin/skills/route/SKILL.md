@@ -65,8 +65,8 @@ Start at the cheapest rung that can do the task; escalation does the rest.
   security).
 
 Not on any ladder: Haiku high/xhigh/max, Sol high/max, and every Opus worker.
-Each costs more than a rung above that scores higher. Use Opus only when the
-owner allows it with `/router:allow opus ...` and asks for it.
+Each costs more than a rung above that scores higher. Opus is allowed by
+default but is on no ladder: use it only when the owner asks for it.
 
 Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
 model or effort `invoke-status` does not allow. Worker type:
