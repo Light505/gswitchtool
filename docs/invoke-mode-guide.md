@@ -315,8 +315,14 @@ read that file until the change reaches `main` and is installed.
 the plugin instead of the installed one. In the repository folder:
 
 ```bash
-claude --plugin-dir integrations/codex-plugin-cc/plugins/codex --settings scripts/claude-dev-settings.json
+corepack pnpm run claude:dev
 ```
+
+You do not need the Claude Code CLI: without `claude` on PATH, this uses the
+newest Claude Code bundled with Claude's desktop app (on Windows it lives in the
+app's private package folder, whose path changes with each update). It runs
+`claude --plugin-dir integrations/codex-plugin-cc/plugins/codex --settings
+scripts/claude-dev-settings.json`.
 
 `--plugin-dir` loads the plugin from your checkout for that session only, and
 the settings file turns off the installed `codex@gswitchtool` for that session so

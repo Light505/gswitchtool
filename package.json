@@ -16,7 +16,8 @@
     "build:installer": "node scripts/build-installer.mjs",
     "app:dev": "tauri dev --release",
     "release": "node scripts/release.mjs",
-    "test:dev": "node scripts/test-dev.mjs"
+    "test:dev": "node scripts/test-dev.mjs",
+    "claude:dev": "node scripts/claude-dev.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
