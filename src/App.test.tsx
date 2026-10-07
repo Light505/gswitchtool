@@ -70,6 +70,7 @@ const mocks = vi.hoisted(() => ({
   onInvokeActivity: vi.fn(),
   onInvokeResumed: vi.fn(),
   setInvokeWeeklyReserve: vi.fn(),
+  readTaskLog: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
@@ -236,6 +237,7 @@ function prepareDefaults() {
   mocks.invokeTasks.mockResolvedValue([]);
   mocks.stopInvokeTask.mockResolvedValue(undefined);
   mocks.pausedThreads.mockResolvedValue([]);
+  mocks.readTaskLog.mockImplementation(async (_threadId: string, offset: number) => ({ found: true, items: [], offset }));
   mocks.activity.mockResolvedValue([]);
   mocks.onInvokeActivity.mockResolvedValue(() => undefined);
   mocks.onInvokeResumed.mockResolvedValue(() => undefined);
@@ -2569,6 +2571,59 @@ describe("Invoke Mode", () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
     await userEvent.click(within(strip).getByRole("button", { name: "Stop task?" }));
     await waitFor(() => expect(mocks.stopInvokeTask).toHaveBeenCalledWith("task-1"));
+  });
+
+  it("follows a running task's Codex log like a terminal", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([
+      { id: "task-1", started_at: Date.now() - 30_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "/work/studio-app", thread_id: "01a1f2c3-4455", running: true },
+    ]);
+    mocks.readTaskLog
+      .mockResolvedValueOnce({
+        found: true,
+        offset: 100,
+        items: [
+          { kind: "task", text: "Add removeItem" },
+          { kind: "command", text: "git status --short" },
+          { kind: "output", text: " M cart.js" },
+          { kind: "tokens", total: 1234 },
+        ],
+      })
+      .mockResolvedValueOnce({
+        found: true,
+        offset: 180,
+        items: [{ kind: "patch", files: ["cart.js"] }, { kind: "done", seconds: 12.3 }],
+      });
+    render(<App />);
+
+    const strip = await screen.findByRole("region", { name: "Codex tasks" });
+    await userEvent.click(within(strip).getByRole("button", { name: "Watch the gpt-6.1-sol task in studio-app" }));
+    const dialog = await screen.findByRole("dialog", { name: "gpt-6.1-sol in studio-app" });
+    const log = within(dialog).getByRole("log");
+    expect(await within(log).findByText("$ git status --short")).toBeInTheDocument();
+    expect(within(log).getByText("Add removeItem")).toBeInTheDocument();
+    expect(within(dialog).getByText("1,234 tokens")).toBeInTheDocument();
+    expect(within(dialog).getByText("Live")).toBeInTheDocument();
+    expect(await within(log).findByText("Edited cart.js", {}, { timeout: 3000 })).toBeInTheDocument();
+    expect(within(log).getByText("Finished in 12.3 s")).toBeInTheDocument();
+    expect(mocks.readTaskLog).toHaveBeenNthCalledWith(1, "01a1f2c3-4455", 0);
+    expect(mocks.readTaskLog).toHaveBeenNthCalledWith(2, "01a1f2c3-4455", 100);
+  });
+
+  it("opens a finished task's log from the activity history", async () => {
+    mocks.activity.mockResolvedValue([
+      { at: Date.now() - 60_000, kind: "task_ended", task: "t", model: "gpt-6-luna", thread_id: "01a1e9b8-0000", status: "completed" },
+    ]);
+    mocks.readTaskLog.mockResolvedValue({ found: true, offset: 10, items: [{ kind: "message", text: "All tests pass." }] });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
+    const history = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await userEvent.click(await within(history).findByRole("button", { name: "View log" }));
+    const dialog = await screen.findByRole("dialog", { name: "Codex thread 01a1e9b8" });
+    expect((await within(dialog).findAllByText("All tests pass."))[0]).toBeInTheDocument();
+    expect(within(dialog).getByText("Ended")).toBeInTheDocument();
+    expect(mocks.readTaskLog).toHaveBeenCalledWith("01a1e9b8-0000", 0);
   });
 
   it("shows no task strip in Manual Mode", async () => {

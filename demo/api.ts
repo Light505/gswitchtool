@@ -63,7 +63,7 @@ const displayOnly = {
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
-  appVersion: async () => ({ version: "1.6.0", dev: false }),
+  appVersion: async () => ({ version: "1.7.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
   invokeTasks: async () => [
@@ -71,6 +71,22 @@ const displayOnly = {
     { id: "demo-task-2", started_at: Date.now() - 40_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "C:/work/studio-app", thread_id: null, running: false },
   ],
   pausedThreads: async () => [],
+  readTaskLog: async (_threadId: string, offset: number) => offset > 0
+    ? { found: true, items: [], offset }
+    : {
+      found: true,
+      offset: 1,
+      items: [
+        { kind: "task", text: "Add removeItem(cart, name) to cart.js with tests, matching the existing style." },
+        { kind: "message", text: "I'll read the module and its tests first, then add removeItem and focused tests." },
+        { kind: "command", text: "Get-Content -Raw cart.js; Get-Content -Raw cart.test.js; git status --short" },
+        { kind: "output", text: "// A tiny shopping cart.\nfunction addItem(cart, name, price, quantity) {\n  ...\n}" },
+        { kind: "patch", files: ["cart.js", "cart.test.js"] },
+        { kind: "command", text: "node --test" },
+        { kind: "output", text: "✔ addItem and total keep working (1.9ms)\n✔ removeItem removes only the named item (0.4ms)\nℹ pass 6\nℹ fail 0" },
+        { kind: "tokens", total: 55245 },
+      ],
+    },
   activity: async () => [
     { at: Date.now() - 4 * 60_000, kind: "task_started", task: "demo-task-1", model: "gpt-6.1-sol", effort: "medium", write: true, cwd: "C:/work/studio-app" },
     { at: Date.now() - 9 * 60_000, kind: "switched", from: "demo-3", to: "demo-1", reason: "priority" },

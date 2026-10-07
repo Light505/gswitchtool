@@ -22,6 +22,7 @@ import type {
   AppVersion,
   ActivityEntry,
   InvokeTask,
+  LogChunk,
   PausedThread,
   SwitchOutcome,
   WakeOperationView,
@@ -121,6 +122,7 @@ export const api = {
   invokeTasks: () => invoke<InvokeTask[]>("get_invoke_tasks"),
   stopInvokeTask: (id: string) => invoke<void>("stop_invoke_task", { id }),
   pausedThreads: () => invoke<PausedThread[]>("get_paused_threads"),
+  readTaskLog: (threadId: string, offset: number) => invoke<LogChunk>("read_task_log", { threadId, offset }),
   activity: (limit = 200) => invoke<ActivityEntry[]>("get_activity", { limit }),
   onInvokeActivity: (handler: (entry: ActivityEntry) => void) =>
     listen<ActivityEntry>("invoke-activity", (event) => handler(event.payload)),

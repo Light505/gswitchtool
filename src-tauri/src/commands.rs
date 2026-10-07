@@ -213,6 +213,20 @@ pub fn get_paused_threads(
     coordinator.paused_threads()
 }
 
+/// The new steps of a delegated Codex task's thread, read from Codex's own
+/// session file from `offset`, for the live view.
+#[tauri::command]
+pub fn read_task_log(thread_id: String, offset: u64) -> crate::task_log::LogChunk {
+    match crate::codex::codex_home() {
+        Ok(home) => crate::task_log::read(&home, &thread_id, offset),
+        Err(_) => crate::task_log::LogChunk {
+            found: false,
+            items: Vec::new(),
+            offset,
+        },
+    }
+}
+
 /// The newest Invoke Mode activity, newest first.
 #[tauri::command]
 pub fn get_activity(

@@ -45,6 +45,24 @@ export interface InvokeTask {
   running: boolean;
 }
 
+/** One step of a Codex task, read from Codex's own session log. */
+export type LogItem =
+  | { kind: "task"; text: string }
+  | { kind: "message"; text: string }
+  | { kind: "thinking"; text: string }
+  | { kind: "command"; text: string }
+  | { kind: "patch"; files: string[] }
+  | { kind: "output"; text: string }
+  | { kind: "done"; seconds?: number | null }
+  | { kind: "stopped" }
+  | { kind: "tokens"; total: number };
+
+export interface LogChunk {
+  found: boolean;
+  items: LogItem[];
+  offset: number;
+}
+
 export interface PausedThread {
   thread_id: string;
   model: string;

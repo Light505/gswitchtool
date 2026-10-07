@@ -509,6 +509,13 @@ seconds notices the reset time passing; GSwitch then announces the resume in the
 window and with a Windows notification, and a resume by the user is announced in
 the window. Both list the paused threads.
 
+The live view follows the task's thread in Codex's own session file,
+`sessions/YYYY/MM/DD/rollout-*-<thread>.jsonl` in the Codex home, read-only
+and from a byte offset once a second, whole lines only. It shows the request
+as given (not Codex's own instructions), Codex's messages and reasoning
+summaries, each command and its output (shortened when long), patched files,
+and the end of the turn, with the running token total. Nothing read is stored.
+
 ### Stock plugin brokers
 
 OpenAI's stock `/codex` commands in the Claude Code plugin share one App Server

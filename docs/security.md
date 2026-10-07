@@ -158,6 +158,9 @@ way only when it reports itself idle, through its own `broker/shutdown`; a busy
 broker is treated as an open Codex. Stopping a delegated task from the window
 terminates only that task's registered App Server.
 
+The live task view reads Codex's local session file for the chosen thread,
+whose thread ID must be a UUID, and only displays it; nothing is stored or sent.
+
 The activity history records account IDs, models, folders, thread IDs, and
 result codes. It never holds credentials, prompts, or Codex output.
 

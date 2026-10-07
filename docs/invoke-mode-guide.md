@@ -216,10 +216,14 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
   above your accounts lists each delegated task: running or waiting its turn,
   model and effort, whether it can edit files, its project folder, thread, and
   how long it has run. **Stop** (click twice to confirm) ends a task at once;
-  Claude is told you stopped it and does not restart it.
+  Claude is told you stopped it and does not restart it. **Watch** opens a
+  terminal-style view of what Codex is doing, live: the task, Codex's messages,
+  each command and its output, the files it edits, and when it finishes, with
+  the tokens used so far.
 - **History:** the **Activity** button (the clock icon in the toolbar) lists what
   Invoke Mode did: tasks started and how they ended, account switches and why,
-  pauses and resumes, and automatic Wakes. It keeps the latest 1,000 entries in
+  pauses and resumes, and automatic Wakes. **View log** on a finished task
+  replays what Codex did. It keeps the latest 1,000 entries in
   `~/.gswitchtool/activity.jsonl`, with no credentials, prompts, or Codex output.
 - **After a pause:** when Codex usage comes back, GSwitch shows a Windows
   notification and a notice listing the paused threads; tell Claude to continue

@@ -18,6 +18,7 @@ mod quota;
 mod runtime;
 mod storage;
 mod switching;
+mod task_log;
 mod types;
 mod vault;
 mod wake;
@@ -301,6 +302,7 @@ pub fn run() {
             commands::stop_invoke_task,
             commands::get_paused_threads,
             commands::get_activity,
+            commands::read_task_log,
             commands::get_invoke_pause,
             commands::resume_invoke
         ])

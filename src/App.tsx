@@ -74,6 +74,7 @@ import type {
   AppVersion,
   InvokePause,
   InvokeTask,
+  LogItem,
   PausedThread,
   InvokeSettings,
   LiveAccountView,
@@ -1244,9 +1245,116 @@ function activityText(entry: ActivityEntry, name: (id: string) => string, t: Tra
   }
 }
 
-function ActivityDialog({ name, onClose, t, formatLocale }: {
+/** Codex's steps for one thread, followed live from its session log. */
+function TaskLogDialog({ threadId, title, live, onClose, t, formatLocale }: {
+  threadId: string | null;
+  title: string;
+  live: boolean;
+  onClose: () => void;
+  t: Translator;
+  formatLocale: string;
+}) {
+  const [items, setItems] = useState<LogItem[]>([]);
+  const [found, setFound] = useState(true);
+  const [tokens, setTokens] = useState<number | null>(null);
+  const offset = useRef(0);
+  const body = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setItems([]);
+    setTokens(null);
+    setFound(true);
+    offset.current = 0;
+    if (!threadId) return;
+    let disposed = false;
+    let reading = false;
+    const read = async () => {
+      if (reading) return;
+      reading = true;
+      try {
+        const chunk = await api.readTaskLog(threadId, offset.current);
+        if (disposed) return;
+        setFound(chunk.found);
+        offset.current = chunk.offset;
+        const counts = chunk.items.filter((item) => item.kind === "tokens");
+        if (counts.length) {
+          const last = counts[counts.length - 1];
+          if (last.kind === "tokens") setTokens(last.total);
+        }
+        const steps = chunk.items.filter((item) => item.kind !== "tokens");
+        if (steps.length) {
+          const view = body.current;
+          const following = !view || view.scrollHeight - view.scrollTop - view.clientHeight < 48;
+          setItems((current) => [...current, ...steps]);
+          if (following) {
+            window.requestAnimationFrame(() => {
+              if (body.current) body.current.scrollTop = body.current.scrollHeight;
+            });
+          }
+        }
+      } catch {
+        // The next read tries again.
+      } finally {
+        reading = false;
+      }
+    };
+    void read();
+    const interval = window.setInterval(() => void read(), 1000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [threadId]);
+
+  return (
+    <Modal onClose={onClose} t={t} title={title} wide>
+      <div className="task-log-panel">
+        <div aria-live="polite" className="task-log" ref={body} role="log">
+          {!threadId ? <p className="log-note">{t("log.waiting")}</p> : null}
+          {threadId && !found ? <p className="log-note">{t("log.notFound")}</p> : null}
+          {items.map((item, index) => {
+            switch (item.kind) {
+              case "task":
+                return <div className="log-task" key={index}><span>{t("log.task")}</span>{item.text}</div>;
+              case "message":
+                return <div className="log-message" key={index}>{item.text}</div>;
+              case "thinking":
+                return <div className="log-thinking" key={index}>{item.text}</div>;
+              case "command":
+                return <div className="log-command" key={index}>{"$ " + item.text}</div>;
+              case "output":
+                return <pre className="log-output" key={index}>{item.text}</pre>;
+              case "patch":
+                return <div className="log-patch" key={index}>{t("log.edited", { files: item.files.join(", ") })}</div>;
+              case "done":
+                return (
+                  <div className="log-done" key={index}>
+                    {item.seconds != null
+                      ? t("log.done", { seconds: formatNumber(item.seconds, formatLocale) })
+                      : t("log.doneNoTime")}
+                  </div>
+                );
+              case "stopped":
+                return <div className="log-stopped" key={index}>{t("log.stopped")}</div>;
+              default:
+                return null;
+            }
+          })}
+        </div>
+        <p className="task-log-footer">
+          <span className={live ? "log-live" : undefined}>{t(live ? "log.live" : "log.ended")}</span>
+          {tokens != null ? <span>{t("log.tokens", { tokens: formatNumber(tokens, formatLocale) })}</span> : null}
+          {threadId ? <span title={threadId}>{shortThread(threadId)}</span> : null}
+        </p>
+      </div>
+    </Modal>
+  );
+}
+
+function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
   name: (id: string) => string;
   onClose: () => void;
+  onViewLog: (threadId: string) => void;
   t: Translator;
   formatLocale: string;
 }) {
@@ -1289,7 +1397,14 @@ function ActivityDialog({ name, onClose, t, formatLocale }: {
                 <time dateTime={new Date(entry.at).toISOString()} title={formatDateTime(entry.at / 1000, formatLocale)}>
                   {formatDateTimeWithRelative(entry.at / 1000, formatLocale)}
                 </time>
-                <span>{activityText(entry, name, t, formatLocale)}</span>
+                <span>
+                  {activityText(entry, name, t, formatLocale)}
+                  {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.thread_id ? (
+                    <button className="link-button" onClick={() => onViewLog(entry.thread_id!)} type="button">
+                      {t("activity.viewLog")}
+                    </button>
+                  ) : null}
+                </span>
               </li>
             ))}
           </ol>
@@ -1550,6 +1665,7 @@ export default function App() {
   const [pausedThreads, setPausedThreads] = useState<PausedThread[]>([]);
   const [tasks, setTasks] = useState<InvokeTask[]>([]);
   const [taskClock, setTaskClock] = useState(() => Date.now());
+  const [watching, setWatching] = useState<{ taskId?: string; threadId: string | null; title: string } | null>(null);
   const [invokeResuming, setInvokeResuming] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
@@ -3119,6 +3235,19 @@ export default function App() {
                     {task.thread_id ? <span className="task-thread" title={task.thread_id}>{t("tasks.thread", { thread: shortThread(task.thread_id) })}</span> : null}
                     <span className="task-elapsed">{elapsedText(taskClock - task.started_at)}</span>
                     <button
+                      aria-label={t("tasks.watchFor", { model: task.model, folder })}
+                      className="button button-secondary"
+                      onClick={() => setWatching({
+                        taskId: task.id,
+                        threadId: task.thread_id ?? null,
+                        title: t("log.title", { model: task.model, folder }),
+                      })}
+                      type="button"
+                    >
+                      <Terminal size={13} />
+                      {t("tasks.watch")}
+                    </button>
+                    <button
                       aria-label={armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
                       className={"button " + (armed ? "button-danger" : "button-secondary")}
                       data-confirm={`task-${task.id}`}
@@ -3312,9 +3441,24 @@ export default function App() {
         </section>
       </div>
 
-      {dialog === "activity" ? (
+      {watching ? (() => {
+        const task = watching.taskId ? tasks.find((candidate) => candidate.id === watching.taskId) : undefined;
+        return (
+          <TaskLogDialog
+            formatLocale={locale.formatLocale}
+            live={Boolean(task)}
+            onClose={() => setWatching(null)}
+            t={t}
+            threadId={task?.thread_id ?? watching.threadId}
+            title={watching.title}
+          />
+        );
+      })() : null}
+
+      {dialog === "activity" && !watching ? (
         <ActivityDialog
           formatLocale={locale.formatLocale}
+          onViewLog={(threadId) => setWatching({ threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) })}
           name={(id) => {
             const account = accounts.find((saved) => saved.id === id);
             return account ? accountPrimaryName(account) : t("common.unknown");

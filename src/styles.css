@@ -2221,6 +2221,114 @@ textarea {
   word-break: break-all;
 }
 
+.task-log-panel {
+  display: grid;
+  gap: 8px;
+  padding: 14px 18px 18px;
+}
+
+.task-log {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  height: min(62vh, 640px);
+  padding: 14px 16px;
+  overflow-y: auto;
+  border-radius: 10px;
+  color: #e9e6dc;
+  background: #161513;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.task-log .log-note {
+  margin: 0;
+  color: #a8a399;
+}
+
+.log-task {
+  padding-left: 10px;
+  border-left: 2px solid #d97757;
+}
+
+.log-task > span {
+  display: block;
+  color: #d97757;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.log-thinking {
+  color: #8f8a80;
+  font-style: italic;
+}
+
+.log-command {
+  color: #e08b6d;
+}
+
+.log-output {
+  margin: 0;
+  max-height: 280px;
+  padding: 8px 10px;
+  overflow: auto;
+  border-radius: 6px;
+  color: #b9b4a8;
+  background: #1f1e1b;
+  font: inherit;
+  white-space: pre-wrap;
+}
+
+.log-patch {
+  color: #e7b45f;
+}
+
+.log-done {
+  color: #6cc08b;
+}
+
+.log-stopped {
+  color: #ef8a7f;
+}
+
+.task-log-footer {
+  display: flex;
+  gap: 14px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.log-live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--success);
+}
+
+.log-live::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  content: "";
+}
+
+.link-button {
+  margin-left: 8px;
+  padding: 0;
+  border: 0;
+  color: var(--accent);
+  background: none;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .activity-panel {
   padding: 16px 20px 20px;
 }
