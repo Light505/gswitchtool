@@ -2325,6 +2325,33 @@ describe("GSwitch account workspace", () => {
     expect(mocks.switchAccount).not.toHaveBeenCalled();
   });
 
+  it("switches palette and mode from the appearance menu and remembers them", async () => {
+    window.localStorage.clear();
+    delete document.documentElement.dataset.palette;
+    delete document.documentElement.dataset.scheme;
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Appearance" }));
+    const menu = screen.getByLabelText("Appearance", { selector: "div" });
+    expect(within(menu).getByRole("button", { name: /Claude Code/ })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(within(menu).getByRole("button", { name: /Codex/ }));
+    expect(document.documentElement.dataset.palette).toBe("codex");
+    expect(window.localStorage.getItem("gswitch.palette")).toBe("codex");
+
+    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    await userEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(document.documentElement.dataset.scheme).toBe("dark");
+
+    // The default palette and following the system leave no attribute.
+    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    await userEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
+    await userEvent.click(screen.getByRole("button", { name: "System" }));
+    expect(document.documentElement.dataset.palette).toBeUndefined();
+    expect(document.documentElement.dataset.scheme).toBeUndefined();
+    expect(window.localStorage.getItem("gswitch.scheme")).toBe("system");
+  });
+
   it("checks for updates when asked and always answers", async () => {
     Object.defineProperty(window, "__TAURI_INTERNALS__", { configurable: true, value: {} });
     updaterMocks.check.mockResolvedValue(null);

@@ -11,6 +11,7 @@ import {
   ChevronDown,
   ChevronUp,
   CircleArrowUp,
+  Palette as PaletteIcon,
   Download,
   FileJson,
   FolderOpen,
@@ -58,6 +59,7 @@ import {
   type LanguagePreference,
   type Translator,
 } from "./i18n";
+import { PALETTES, PALETTE_SWATCHES, SCHEMES, readAppearance, saveAppearance, type Appearance } from "./appearance";
 import { RefreshLanes } from "./refreshLanes";
 import { quotaRefreshDue } from "./refreshPolicy";
 import type {
@@ -641,7 +643,7 @@ function PopoverMenu({
       {open ? (
         <div
           aria-label={popoverLabel}
-          className={className + "-popover"}
+          className={className.split(" ").map((name) => name + "-popover").join(" ")}
           id={popoverId}
           onClick={(event) => {
             if (!(event.target instanceof Element) || !event.target.closest("button")) return;
@@ -1868,6 +1870,12 @@ export default function App() {
   }, [loading, requestQuotaRefresh]);
 
   const [updateChecking, setUpdateChecking] = useState(false);
+  const [appearance, setAppearance] = useState<Appearance>(() => readAppearance());
+  const changeAppearance = (change: Partial<Appearance>) => {
+    const next = { ...appearance, ...change };
+    saveAppearance(next);
+    setAppearance(next);
+  };
   const [appVersion, setAppVersion] = useState<AppVersion | null>(null);
 
   useEffect(() => {
@@ -2686,6 +2694,7 @@ export default function App() {
               {([false, true] as const).map((enabled) => (
                 <button
                   aria-pressed={invokeSettings.invoke_mode === enabled}
+                  className={enabled ? "mode-invoke" : undefined}
                   disabled={invokeChanging || storageRecovery}
                   key={String(enabled)}
                   onClick={() => {
@@ -2753,6 +2762,44 @@ export default function App() {
           >
             {updateChecking ? <LoaderCircle className="spin" size={17} /> : <CircleArrowUp size={17} />}
           </button>
+          <PopoverMenu
+            className="language-menu appearance-menu"
+            icon={<PaletteIcon aria-hidden="true" className="appearance-menu-icon" />}
+            label={t("toolbar.appearance")}
+            popoverLabel={t("toolbar.appearance")}
+            title={t("toolbar.appearance")}
+          >
+            <h3>{t("appearance.palette")}</h3>
+            {PALETTES.map((palette) => (
+              <button
+                aria-pressed={appearance.palette === palette}
+                className="appearance-option"
+                key={palette}
+                onClick={() => changeAppearance({ palette })}
+                type="button"
+              >
+                <span>
+                  <span aria-hidden="true" className="appearance-swatch">
+                    {PALETTE_SWATCHES[palette].map((color) => <i key={color} style={{ background: color }} />)}
+                  </span>
+                  {t(`palette.${palette}`)}
+                </span>
+                {appearance.palette === palette ? <Check size={15} /> : null}
+              </button>
+            ))}
+            <h3>{t("appearance.mode")}</h3>
+            {SCHEMES.map((scheme) => (
+              <button
+                aria-pressed={appearance.scheme === scheme}
+                key={scheme}
+                onClick={() => changeAppearance({ scheme })}
+                type="button"
+              >
+                <span>{t(`scheme.${scheme}`)}</span>
+                {appearance.scheme === scheme ? <Check size={15} /> : null}
+              </button>
+            ))}
+          </PopoverMenu>
           <PopoverMenu
             className="language-menu"
             icon={<span aria-hidden="true" className="language-menu-icon" />}

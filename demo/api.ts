@@ -63,7 +63,7 @@ const displayOnly = {
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
-  appVersion: async () => ({ version: "1.4.0", dev: false }),
+  appVersion: async () => ({ version: "1.5.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
   modelCatalog: async () => [

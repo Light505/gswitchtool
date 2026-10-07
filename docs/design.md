@@ -225,13 +225,23 @@ account operations; never capture the installed app or a personal account list
 for README. Keep the screenshot source and command alongside the image.
 
 Use Segoe UI Variable or the system UI font, natural information density, clear
-light/dark behavior, restrained purple action color, quiet status color, simple
+light/dark behavior, one restrained action color, quiet status color, simple
 borders, and an eight-pixel spacing rhythm. Surfaces use modest 10 to 15 pixel
 corner radii and short response transitions. Controls should look native to a
 desktop utility without imitating macOS chrome on every platform. The canonical
 GSwitch mark is the compact white switching loop on a flat indigo rounded
 square in `assets/gswitch-icon.svg`; it is the source for the toolbar and native
 or installer icon assets.
+
+GSwitch Claude Tool has three palettes, each with light and dark tokens at the
+top of `src/styles.css`, chosen in the toolbar's appearance menu
+(`src/appearance.ts`) with a System, Light, or Dark mode. **Claude Code**, the
+default, uses warm cream or charcoal surfaces and Claude's clay accent; its
+Codex touch is the graphite (light) or near-white (dark) **Invoke** side of the
+mode switch, through the `--codex` token. **Codex** is monochrome, and
+**Classic** is upstream GSwitch's indigo. Every color comes from these tokens;
+text on an accent surface uses `--on-accent`. The choice is a per-computer
+preference in browser storage.
 
 ## Anti-overdesign
 

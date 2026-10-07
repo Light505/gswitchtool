@@ -1,12 +1,76 @@
+/* Palettes (gswitchtool): Claude Code is the default, Codex and Classic are
+ * chosen in the appearance menu. Each has light and dark tokens; the mode
+ * follows the system unless the user picks one (data-scheme). */
 :root {
-  color: #202633;
-  background: #f4f6f9;
-  color-scheme: light dark;
   font-family: "Segoe UI Variable", "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+:root {
+  color-scheme: light;
+  color: #29261f;
+  background: #f4f2ec;
+  --bg: #f4f2ec;
+  --surface: #fdfcf9;
+  --surface-soft: #f8f6f1;
+  --surface-hover: #f0ede5;
+  --text: #29261f;
+  --muted: #6f6a5f;
+  --soft-muted: #9a9486;
+  --border: #e5e1d6;
+  --border-strong: #d5cfc1;
+  --accent: #c96442;
+  --accent-hover: #b4532f;
+  --accent-soft: #f7e8e0;
+  --on-accent: #ffffff;
+  --codex: #1c1c1c;
+  --on-codex: #fafafa;
+  --success: #2f7d4f;
+  --success-soft: #e5f2e8;
+  --warning: #9c5d07;
+  --warning-soft: #faefd8;
+  --danger: #b83c35;
+  --danger-soft: #fae8e4;
+  --shadow: 0 10px 28px rgba(41, 38, 31, 0.08);
+  --shadow-soft: 0 2px 8px rgba(41, 38, 31, 0.05);
+}
+
+:root[data-palette="codex"] {
+  color-scheme: light;
+  color: #0d0d0d;
+  background: #f7f7f8;
+  --bg: #f7f7f8;
+  --surface: #ffffff;
+  --surface-soft: #f9f9fa;
+  --surface-hover: #f0f0f2;
+  --text: #0d0d0d;
+  --muted: #5d5d66;
+  --soft-muted: #8e8e98;
+  --border: #e5e5e7;
+  --border-strong: #d4d4d8;
+  --accent: #0d0d0d;
+  --accent-hover: #2e2e30;
+  --accent-soft: #ececee;
+  --on-accent: #ffffff;
+  --codex: #0d0d0d;
+  --on-codex: #ffffff;
+  --success: #14804a;
+  --success-soft: #e6f4ec;
+  --warning: #a15c00;
+  --warning-soft: #fdf1dc;
+  --danger: #c2323d;
+  --danger-soft: #fdeaec;
+  --shadow: 0 10px 28px rgba(0, 0, 0, 0.07);
+  --shadow-soft: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+:root[data-palette="classic"] {
+  color-scheme: light;
+  color: #202633;
+  background: #f4f6f9;
   --bg: #f4f6f9;
   --surface: #ffffff;
   --surface-soft: #f8f9fb;
@@ -19,6 +83,9 @@
   --accent: #535fe7;
   --accent-hover: #434ed6;
   --accent-soft: #eef0ff;
+  --on-accent: #ffffff;
+  --codex: #535fe7;
+  --on-codex: #ffffff;
   --success: #16845a;
   --success-soft: #e7f7ef;
   --warning: #a86200;
@@ -30,7 +97,66 @@
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-scheme="light"]) {
+    color-scheme: dark;
+    color: #f2efe6;
+    background: #1f1e1b;
+    --bg: #1f1e1b;
+    --surface: #2a2925;
+    --surface-soft: #302f2a;
+    --surface-hover: #38362f;
+    --text: #f2efe6;
+    --muted: #b3ad9f;
+    --soft-muted: #857f72;
+    --border: #3d3a33;
+    --border-strong: #514d43;
+    --accent: #d97757;
+    --accent-hover: #e58c6e;
+    --accent-soft: #4a2f24;
+    --on-accent: #1f1410;
+    --codex: #ececec;
+    --on-codex: #141414;
+    --success: #6cc08b;
+    --success-soft: #1f3a2a;
+    --warning: #e7b45f;
+    --warning-soft: #43361c;
+    --danger: #ef8a7f;
+    --danger-soft: #4a2523;
+    --shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+    --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.2);
+  }
+
+  :root:not([data-scheme="light"])[data-palette="codex"] {
+    color-scheme: dark;
+    color: #ececec;
+    background: #0d0d0d;
+    --bg: #0d0d0d;
+    --surface: #171717;
+    --surface-soft: #1c1c1c;
+    --surface-hover: #252525;
+    --text: #ececec;
+    --muted: #a1a1aa;
+    --soft-muted: #71717a;
+    --border: #2a2a2a;
+    --border-strong: #3b3b3b;
+    --accent: #ececec;
+    --accent-hover: #ffffff;
+    --accent-soft: #2a2a2a;
+    --on-accent: #0d0d0d;
+    --codex: #ececec;
+    --on-codex: #0d0d0d;
+    --success: #5ccf8f;
+    --success-soft: #16352a;
+    --warning: #efb75a;
+    --warning-soft: #3f3218;
+    --danger: #ff8790;
+    --danger-soft: #46212a;
+    --shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+    --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.25);
+  }
+
+  :root:not([data-scheme="light"])[data-palette="classic"] {
+    color-scheme: dark;
     color: #f3f5f9;
     background: #111318;
     --bg: #111318;
@@ -45,6 +171,9 @@
     --accent: #8992ff;
     --accent-hover: #a0a7ff;
     --accent-soft: #282d57;
+    --on-accent: #111318;
+    --codex: #8992ff;
+    --on-codex: #111318;
     --success: #55c48f;
     --success-soft: #173a2b;
     --warning: #f2b95c;
@@ -54,6 +183,93 @@
     --shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
     --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.18);
   }
+}
+
+:root[data-scheme="dark"] {
+  color-scheme: dark;
+  color: #f2efe6;
+  background: #1f1e1b;
+  --bg: #1f1e1b;
+  --surface: #2a2925;
+  --surface-soft: #302f2a;
+  --surface-hover: #38362f;
+  --text: #f2efe6;
+  --muted: #b3ad9f;
+  --soft-muted: #857f72;
+  --border: #3d3a33;
+  --border-strong: #514d43;
+  --accent: #d97757;
+  --accent-hover: #e58c6e;
+  --accent-soft: #4a2f24;
+  --on-accent: #1f1410;
+  --codex: #ececec;
+  --on-codex: #141414;
+  --success: #6cc08b;
+  --success-soft: #1f3a2a;
+  --warning: #e7b45f;
+  --warning-soft: #43361c;
+  --danger: #ef8a7f;
+  --danger-soft: #4a2523;
+  --shadow: 0 14px 34px rgba(0, 0, 0, 0.3);
+  --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.2);
+}
+
+:root[data-scheme="dark"][data-palette="codex"] {
+  color-scheme: dark;
+  color: #ececec;
+  background: #0d0d0d;
+  --bg: #0d0d0d;
+  --surface: #171717;
+  --surface-soft: #1c1c1c;
+  --surface-hover: #252525;
+  --text: #ececec;
+  --muted: #a1a1aa;
+  --soft-muted: #71717a;
+  --border: #2a2a2a;
+  --border-strong: #3b3b3b;
+  --accent: #ececec;
+  --accent-hover: #ffffff;
+  --accent-soft: #2a2a2a;
+  --on-accent: #0d0d0d;
+  --codex: #ececec;
+  --on-codex: #0d0d0d;
+  --success: #5ccf8f;
+  --success-soft: #16352a;
+  --warning: #efb75a;
+  --warning-soft: #3f3218;
+  --danger: #ff8790;
+  --danger-soft: #46212a;
+  --shadow: 0 14px 34px rgba(0, 0, 0, 0.4);
+  --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.25);
+}
+
+:root[data-scheme="dark"][data-palette="classic"] {
+  color-scheme: dark;
+  color: #f3f5f9;
+  background: #111318;
+  --bg: #111318;
+  --surface: #1b1e25;
+  --surface-soft: #20242d;
+  --surface-hover: #272c37;
+  --text: #f3f5f9;
+  --muted: #abb2c0;
+  --soft-muted: #7f8797;
+  --border: #333946;
+  --border-strong: #474e5d;
+  --accent: #8992ff;
+  --accent-hover: #a0a7ff;
+  --accent-soft: #282d57;
+  --on-accent: #111318;
+  --codex: #8992ff;
+  --on-codex: #111318;
+  --success: #55c48f;
+  --success-soft: #173a2b;
+  --warning: #f2b95c;
+  --warning-soft: #463719;
+  --danger: #ff8790;
+  --danger-soft: #4b2229;
+  --shadow: 0 14px 34px rgba(0, 0, 0, 0.26);
+  --shadow-soft: 0 3px 10px rgba(0, 0, 0, 0.18);
 }
 
 * {
@@ -225,6 +441,48 @@ summary:focus-visible {
 .language-menu-popover button:hover { background: var(--surface-hover); }
 .language-menu-popover button[aria-pressed="true"] { color: var(--accent); font-weight: 700; }
 
+.appearance-menu-icon {
+  width: 17px;
+  height: 17px;
+}
+
+.appearance-menu-popover {
+  width: 190px;
+}
+
+.appearance-menu-popover h3 {
+  margin: 6px 8px 4px;
+  color: var(--soft-muted);
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.appearance-option {
+  gap: 8px;
+}
+
+.appearance-option > span:first-child {
+  display: inline-flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+}
+
+.appearance-swatch {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+}
+
+.appearance-swatch i {
+  display: block;
+  width: 7px;
+  height: 14px;
+}
+
 .button,
 .icon-button {
   display: inline-flex;
@@ -250,7 +508,7 @@ summary:focus-visible {
 }
 
 .button-primary {
-  color: #ffffff;
+  color: var(--on-accent);
   background: var(--accent);
   box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 24%, transparent);
 }
@@ -1273,10 +1531,8 @@ summary:focus-visible {
 }
 
 .add-method-sign-in {
-  --accent: #535fe7;
-  --accent-hover: #434ed6;
   border-color: var(--accent);
-  color: white;
+  color: var(--on-accent);
   background: var(--accent);
 }
 
@@ -1287,12 +1543,12 @@ summary:focus-visible {
 
 .add-method-sign-in small,
 .add-method-sign-in > svg {
-  color: white;
+  color: var(--on-accent);
 }
 
 .add-method-sign-in .method-icon {
-  color: white;
-  background: rgba(255, 255, 255, 0.16);
+  color: var(--on-accent);
+  background: color-mix(in srgb, var(--on-accent) 16%, transparent);
 }
 
 .dialog-footnote {
@@ -1799,6 +2055,11 @@ textarea {
   box-shadow: var(--shadow-soft);
 }
 
+.mode-toggle button.mode-invoke[aria-pressed="true"] {
+  color: var(--on-codex);
+  background: var(--codex);
+}
+
 .mode-toggle button:hover:not(:disabled):not([aria-pressed="true"]) {
   color: var(--text);
 }
@@ -1840,6 +2101,10 @@ textarea {
   background: #ffffff;
   content: "";
   transition: transform 130ms ease;
+}
+
+.switch-input:checked::after {
+  background: var(--on-accent);
 }
 
 .switch-input:checked {
