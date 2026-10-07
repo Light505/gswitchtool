@@ -265,7 +265,18 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 Changes are made on the `dev` branch and reach the installed app only through
 `main` and `pnpm run build:installer`. To try them before that:
 
-**The app.** Close GSwitch Claude Tool, then run this on `dev`:
+**Test before a release (Windows).** On `dev`, run:
+
+```bash
+pnpm run test:dev
+```
+
+It builds **GSwitch Claude Tool (Dev)**, closes the installed app (never while
+Claude's delegated Codex tasks run through it), and opens the dev build the way
+the Start menu would, with your accounts. When you are done testing,
+`pnpm run test:dev -- --done` closes it and reopens the installed app.
+
+**The app, while changing code.** Close GSwitch Claude Tool, then run this on `dev`:
 
 ```bash
 pnpm run app:dev

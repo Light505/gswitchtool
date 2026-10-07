@@ -15,7 +15,8 @@
     "version:check": "node scripts/sync-version.mjs --check",
     "build:installer": "node scripts/build-installer.mjs",
     "app:dev": "tauri dev --release",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "test:dev": "node scripts/test-dev.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
