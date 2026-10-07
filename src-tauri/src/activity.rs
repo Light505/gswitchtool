@@ -39,11 +39,15 @@ pub enum Activity {
         status: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         code: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<crate::task_log::TokenUsage>,
     },
     TaskStopped {
         task: String,
         model: String,
         thread_id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        usage: Option<crate::task_log::TokenUsage>,
     },
     Switched {
         from: String,
@@ -92,6 +96,40 @@ impl ActivityLog {
     /// Appends an entry. A log that cannot be written never stops the work it
     /// describes.
     pub fn record(&self, activity: Activity) {
+        let codex_home = match &activity {
+            Activity::TaskEnded {
+                thread_id: Some(_), ..
+            }
+            | Activity::TaskStopped {
+                thread_id: Some(_), ..
+            } => crate::codex::codex_home().ok(),
+            _ => None,
+        };
+        self.record_with_codex_home(activity, codex_home.as_deref());
+    }
+
+    fn record_with_codex_home(&self, mut activity: Activity, codex_home: Option<&std::path::Path>) {
+        match &mut activity {
+            Activity::TaskEnded {
+                task,
+                thread_id: Some(thread_id),
+                usage,
+                ..
+            }
+            | Activity::TaskStopped {
+                task,
+                thread_id: Some(thread_id),
+                usage,
+                ..
+            } => {
+                // A resumed thread's totals include earlier tasks; count only
+                // what this task used since it started.
+                let started_at = codex_home.and_then(|_| self.started_at(task));
+                *usage =
+                    codex_home.and_then(|home| crate::task_log::usage(home, thread_id, started_at));
+            }
+            _ => {}
+        }
         let entry = ActivityEntry {
             at: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -117,6 +155,16 @@ impl ActivityLog {
     }
 
     /// The newest entries, newest first. Unreadable lines are skipped.
+    /// When the task with this ID started, from its `TaskStarted` entry.
+    fn started_at(&self, task: &str) -> Option<i64> {
+        self.recent(KEEP)
+            .into_iter()
+            .find_map(|entry| match entry.activity {
+                Activity::TaskStarted { task: started, .. } if started == task => Some(entry.at),
+                _ => None,
+            })
+    }
+
     pub fn recent(&self, limit: usize) -> Vec<ActivityEntry> {
         let _guard = self.lock.lock();
         let content = fs::read_to_string(&self.path).unwrap_or_default();
@@ -211,11 +259,56 @@ mod tests {
                 thread_id: None,
                 status: "completed".into(),
                 code: None,
+                usage: None,
             },
         };
         assert_eq!(
             serde_json::to_value(&entry).expect("json"),
             serde_json::json!({ "at": 5, "kind": "task_ended", "task": "t", "model": "m", "thread_id": null, "status": "completed" })
         );
+    }
+
+    #[test]
+    fn old_activity_lines_without_usage_still_parse_and_task_end_stores_rollout_usage() {
+        let dir = std::env::temp_dir().join(format!("gswitch-activity-{}", uuid::Uuid::new_v4()));
+        let home = dir.join("codex");
+        let day = home.join("sessions/2026/10/07");
+        fs::create_dir_all(&day).expect("day");
+        let thread = "01a11137-1469-7d20-8b79-d05abe3f3539";
+        fs::write(
+            day.join(format!("rollout-2026-10-07T01-02-03-{thread}.jsonl")),
+            r#"{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30000,"cached_input_tokens":25000,"output_tokens":11000,"reasoning_output_tokens":200,"total_tokens":41200}}}}"#,
+        ).expect("rollout");
+        let old = r#"{"at":5,"kind":"task_ended","task":"old","model":"m","thread_id":null,"status":"completed"}"#;
+        let parsed: ActivityEntry = serde_json::from_str(old).expect("old activity line");
+        assert!(matches!(
+            parsed.activity,
+            Activity::TaskEnded { usage: None, .. }
+        ));
+
+        let log = ActivityLog::new(dir.join("activity.jsonl"), None);
+        log.record_with_codex_home(
+            Activity::TaskEnded {
+                task: "task".into(),
+                model: "m".into(),
+                thread_id: Some(thread.into()),
+                status: "completed".into(),
+                code: None,
+                usage: None,
+            },
+            Some(&home),
+        );
+        assert!(matches!(
+            log.recent(1)[0].activity,
+            Activity::TaskEnded {
+                usage: Some(crate::task_log::TokenUsage {
+                    total_tokens: 41200,
+                    cached_input_tokens: 25000,
+                    ..
+                }),
+                ..
+            }
+        ));
+        let _ = fs::remove_dir_all(dir);
     }
 }

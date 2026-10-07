@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
@@ -986,7 +987,6 @@ test("review rejects focus text because it is native-review only", () => {
 
   assert.equal(result.status > 0, true);
   assert.match(result.stderr, /does not support custom focus text/i);
-  assert.match(result.stderr, /\/codex:adversarial-review focus on auth/i);
 });
 
 test("review rejects staged-only scope because it is native-review only", () => {

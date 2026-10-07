@@ -8,11 +8,12 @@
 use std::{
     collections::HashMap,
     fs,
-    io::{Read, Seek, SeekFrom},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
 
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 
@@ -54,6 +55,76 @@ pub struct LogChunk {
     pub items: Vec<LogItem>,
     /// Where the next read continues.
     pub offset: u64,
+}
+
+/// The latest token totals recorded by Codex for a thread.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenUsage {
+    pub input_tokens: u64,
+    pub cached_input_tokens: u64,
+    pub output_tokens: u64,
+    pub reasoning_output_tokens: u64,
+    pub total_tokens: u64,
+}
+
+/// Reads the tokens a thread used, without retaining rollout text. With
+/// `since_ms` (Unix milliseconds), totals recorded before then are
+/// subtracted, so a resumed thread counts only the newer work.
+pub fn usage(codex_home: &Path, thread_id: &str, since_ms: Option<i64>) -> Option<TokenUsage> {
+    if !valid_thread_id(thread_id) {
+        return None;
+    }
+    let path = rollout_path(codex_home, thread_id)?;
+    let file = fs::File::open(path).ok()?;
+    let mut latest = None;
+    let mut before = None;
+    for line in BufReader::new(file).lines().map_while(Result::ok) {
+        let Some(record) = serde_json::from_str::<Value>(&line).ok() else {
+            continue;
+        };
+        if record.get("type").and_then(Value::as_str) != Some("event_msg") {
+            continue;
+        }
+        if record.pointer("/payload/type").and_then(Value::as_str) != Some("token_count") {
+            continue;
+        }
+        let Some(totals) = record.pointer("/payload/info/total_token_usage") else {
+            continue;
+        };
+        let usage = (|| {
+            Some(TokenUsage {
+                input_tokens: totals.get("input_tokens")?.as_u64()?,
+                cached_input_tokens: totals.get("cached_input_tokens")?.as_u64()?,
+                output_tokens: totals.get("output_tokens")?.as_u64()?,
+                reasoning_output_tokens: totals.get("reasoning_output_tokens")?.as_u64()?,
+                total_tokens: totals.get("total_tokens")?.as_u64()?,
+            })
+        })();
+        if usage.is_none() {
+            continue;
+        }
+        let at = record
+            .get("timestamp")
+            .and_then(Value::as_str)
+            .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+            .map(|time| time.timestamp_millis());
+        if since_ms.is_some_and(|since| at.is_some_and(|at| at < since)) {
+            before = usage;
+        }
+        latest = usage;
+    }
+    let (latest, before) = (latest?, before.unwrap_or_default());
+    Some(TokenUsage {
+        input_tokens: latest.input_tokens.saturating_sub(before.input_tokens),
+        cached_input_tokens: latest
+            .cached_input_tokens
+            .saturating_sub(before.cached_input_tokens),
+        output_tokens: latest.output_tokens.saturating_sub(before.output_tokens),
+        reasoning_output_tokens: latest
+            .reasoning_output_tokens
+            .saturating_sub(before.reasoning_output_tokens),
+        total_tokens: latest.total_tokens.saturating_sub(before.total_tokens),
+    })
 }
 
 /// Reads the thread's new steps from `offset`. Only complete lines are read.
@@ -478,6 +549,44 @@ mod tests {
         assert!(!read(&home, "01a11137-0000-0000-0000-000000000000", 0).found);
         assert!(!read(&home, "../../etc/passwd", 0).found);
         assert!(!read(&home, "", 0).found);
+        let _ = fs::remove_dir_all(home);
+    }
+
+    #[test]
+    fn a_resumed_thread_counts_only_the_tokens_used_since_the_task_started() {
+        let home = std::env::temp_dir().join(format!("gswitch-usage-{}", uuid::Uuid::new_v4()));
+        let day = home.join("sessions/2026/10/07");
+        fs::create_dir_all(&day).expect("day");
+        let thread = "01a11137-1469-7d20-8b79-d05abe3f3539";
+        let count = |at: &str, total: u64| {
+            json!({ "timestamp": at, "type": "event_msg", "payload": { "type": "token_count", "info": { "total_token_usage": {
+                "input_tokens": total, "cached_input_tokens": total / 2, "output_tokens": 10,
+                "reasoning_output_tokens": 0, "total_tokens": total + 10 } } } })
+            .to_string()
+        };
+        fs::write(
+            day.join(format!("rollout-2026-10-07T01-02-03-{thread}.jsonl")),
+            [
+                count("2026-10-07T01:00:00Z", 1000),
+                count("2026-10-07T02:00:00Z", 1600),
+            ]
+            .join("\n"),
+        )
+        .expect("rollout");
+        let since = chrono::DateTime::parse_from_rfc3339("2026-10-07T01:30:00Z")
+            .expect("time")
+            .timestamp_millis();
+
+        let resumed = usage(&home, thread, Some(since)).expect("usage");
+        assert_eq!(
+            (resumed.input_tokens, resumed.cached_input_tokens),
+            (600, 300)
+        );
+        assert_eq!((resumed.output_tokens, resumed.total_tokens), (0, 600));
+        assert_eq!(
+            usage(&home, thread, None).expect("usage").total_tokens,
+            1610
+        );
         let _ = fs::remove_dir_all(home);
     }
 }

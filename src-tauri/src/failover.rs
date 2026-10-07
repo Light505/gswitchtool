@@ -412,6 +412,7 @@ impl Coordinator {
             task: lease_id.to_string(),
             model: lease.request.model.clone(),
             thread_id: lease.thread_id.clone(),
+            usage: None,
         };
         drop(inner);
         if let Some(pid) = pid {
@@ -897,6 +898,7 @@ impl Coordinator {
                     thread_id: lease.thread_id.clone(),
                     status,
                     code,
+                    usage: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -2431,6 +2433,7 @@ mod tests {
                 thread_id: Some("thread-1101".into()),
                 status: "completed".into(),
                 code: None,
+                usage: None,
             })
         );
     }

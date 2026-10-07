@@ -38,14 +38,31 @@ const SHARED_DATA_IDENTIFIER: &str = "com.light505.gswitchtool";
 /// copy of AppData, which split the accounts between launches.
 const DATA_DIR_NAME: &str = ".gswitchtool";
 
-/// Records each startup step with its time in `startup.log`, replaced on
-/// every start. It holds no account data; it shows where a start stopped.
+/// Records each startup step with its time in `startup.log`. Earlier starts
+/// are kept (the last `STARTUP_LOG_KEEP` lines), so a start that stalled is
+/// still visible after the app is opened again. It holds no account data.
 struct StartupTrace(Option<std::fs::File>);
+
+const STARTUP_LOG_KEEP: usize = 200;
 
 impl StartupTrace {
     fn create(dir: &std::path::Path) -> Self {
         let _ = std::fs::create_dir_all(dir);
-        Self(std::fs::File::create(dir.join("startup.log")).ok())
+        let path = dir.join("startup.log");
+        if let Ok(previous) = std::fs::read_to_string(&path) {
+            let lines: Vec<&str> = previous.lines().collect();
+            if lines.len() > STARTUP_LOG_KEEP {
+                let kept = lines[lines.len() - STARTUP_LOG_KEEP..].join("\n");
+                let _ = std::fs::write(&path, kept + "\n");
+            }
+        }
+        Self(
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .ok(),
+        )
     }
 
     fn step(&mut self, step: &str) {
@@ -298,6 +315,7 @@ pub fn run() {
             commands::get_invoke_failover,
             commands::cancel_invoke_failover,
             commands::set_invoke_weekly_reserve,
+            commands::set_invoke_task_defaults,
             commands::get_invoke_tasks,
             commands::stop_invoke_task,
             commands::get_paused_threads,

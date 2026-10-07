@@ -186,6 +186,15 @@ pub fn set_invoke_weekly_reserve(
     invoke.set_weekly_reserve(reserve)
 }
 
+/// Saves per-kind task suggestions inside the current model/effort whitelist.
+#[tauri::command]
+pub fn set_invoke_task_defaults(
+    invoke: State<'_, InvokeState>,
+    task_defaults: std::collections::BTreeMap<String, crate::types::InvocationDefault>,
+) -> Result<InvokeSettings, String> {
+    invoke.set_task_defaults(task_defaults)
+}
+
 /// Codex tasks Claude delegated that are running or waiting their turn.
 #[tauri::command]
 pub fn get_invoke_tasks(

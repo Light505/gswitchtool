@@ -19,9 +19,17 @@ export interface InvocationProfile {
   reasoning_efforts: string[];
 }
 
+export type InvokeTaskKind = "review" | "research" | "mechanical" | "complex";
+
+export interface InvocationDefault {
+  model: string;
+  effort: string;
+}
+
 export interface InvokeSettings {
   invoke_mode: boolean;
   allowed_invocation_profiles: InvocationProfile[];
+  task_defaults?: Partial<Record<InvokeTaskKind, InvocationDefault>>;
   /** Saved-account IDs, most preferred first. */
   account_priority?: string[];
   /** Percent of each usage window a preferred account must have left. */
@@ -73,13 +81,21 @@ export interface PausedThread {
 /** One entry of the Invoke Mode activity history. */
 export type ActivityEntry = { at: number } & (
   | { kind: "task_started"; task: string; model: string; effort: string; write: boolean; cwd: string }
-  | { kind: "task_ended"; task: string; model: string; thread_id?: string | null; status: string; code?: string | null }
-  | { kind: "task_stopped"; task: string; model: string; thread_id?: string | null }
+  | { kind: "task_ended"; task: string; model: string; thread_id?: string | null; status: string; code?: string | null; usage?: TokenUsage }
+  | { kind: "task_stopped"; task: string; model: string; thread_id?: string | null; usage?: TokenUsage }
   | { kind: "switched"; from: string; to: string; reason: "usage_limit" | "priority" | "model" }
   | { kind: "paused"; resumes_at?: number | null; threads: string[] }
   | { kind: "resumed"; by_user: boolean; threads: string[] }
   | { kind: "woke"; accounts: string[] }
 );
+
+export interface TokenUsage {
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+}
 
 export interface SwitchAccounts {
   from: string;

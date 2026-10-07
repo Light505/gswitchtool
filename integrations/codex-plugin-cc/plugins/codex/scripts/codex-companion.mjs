@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -33,6 +33,7 @@ import {
   generateJobId,
   getConfig,
   listJobs,
+  resolveJobsDir,
   setConfig,
   upsertJob,
   writeJobFile
@@ -85,7 +86,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs invoke-status [--json]",
-      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
+      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -288,14 +289,12 @@ function buildNativeReviewTarget(target) {
 
 function validateNativeReviewRequest(target, focusText) {
   if (focusText.trim()) {
-    throw new Error(
-      `\`/codex:review\` now maps directly to the built-in reviewer and does not support custom focus text. Retry with \`/codex:adversarial-review ${focusText.trim()}\` for focused review instructions.`
-    );
+    throw new Error("/codex:review maps to the built-in reviewer and does not support custom focus text.");
   }
 
   const nativeTarget = buildNativeReviewTarget(target);
   if (!nativeTarget) {
-    throw new Error("This `/codex:review` target is not supported by the built-in reviewer. Retry with `/codex:adversarial-review` for custom targeting.");
+    throw new Error("This review target is not supported by /codex:review.");
   }
 
   return nativeTarget;
@@ -1079,6 +1078,13 @@ function renderInvokeStatus(report) {
       }`
     );
   }
+  const defaults = Object.entries(report.task_defaults ?? {});
+  if (defaults.length) {
+    lines.push("The user's default per kind of task:");
+    for (const [kind, choice] of defaults) {
+      lines.push(`- ${kind}: ${choice.model} ${choice.effort}`);
+    }
+  }
   lines.push(`Codex workers running: ${report.workers_running ?? 0}`);
   if (report.max_concurrent_tasks) {
     lines.push(
@@ -1109,28 +1115,162 @@ async function handleInvokeStatus(argv) {
   outputCommandResult(report, renderInvokeStatus(report), options.json);
 }
 
-// Keeps the result compact for the invoking model: Codex's final answer plus
-// one line naming what is needed to resume or inspect the run.
+const INVOKE_REPLY_FORMAT = [
+  "Reply format (end with at most 15 lines):",
+  "Changed: one line per file, what changed",
+  "Tests: commands run + pass/fail",
+  "Open questions: none, or list them"
+].join("\n");
+
+const VERIFY_RETRY_PROMPT = (command, output) =>
+  `The verification command failed. Fix the cause, do not weaken tests or checks.\n\nVerification command: ${command}\n\nLast output:\n${output}\n\n${INVOKE_REPLY_FORMAT}`;
+
+function appendReplyFormat(prompt) {
+  return `${prompt.trimEnd()}\n${INVOKE_REPLY_FORMAT}`;
+}
+
+function snapshotGit(cwd) {
+  const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", windowsHide: true });
+  if (probe.status !== 0 || !probe.stdout.trim()) return null;
+  const statusResult = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, encoding: "utf8", windowsHide: true });
+  const numstatResult = spawnSync("git", ["diff", "--numstat"], { cwd, encoding: "utf8", windowsHide: true });
+  if (statusResult.status !== 0 || numstatResult.status !== 0) return null;
+  const files = new Map();
+  for (const line of statusResult.stdout.split(/\r?\n/).filter(Boolean)) {
+    const status = line.slice(0, 2);
+    const file = line.slice(3).replace(/^.* -> /, "").replace(/\\/g, "/");
+    files.set(file, { status, added: 0, deleted: 0 });
+  }
+  for (const line of numstatResult.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [addedText, deletedText, ...nameParts] = line.split("\t");
+    const file = nameParts.join("\t").replace(/\\/g, "/");
+    const current = files.get(file) ?? { status: "", added: 0, deleted: 0 };
+    current.added = Number(addedText) || 0;
+    current.deleted = Number(deletedText) || 0;
+    files.set(file, current);
+  }
+  for (const [file, entry] of files) {
+    if (entry.status !== "??") continue;
+    try {
+      const content = fs.readFileSync(path.resolve(cwd, file), "utf8");
+      entry.added = content.length ? content.split(/\r?\n/).filter((line, index, lines) => line.length || index < lines.length - 1).length : 0;
+    } catch {
+      entry.added = 0;
+    }
+  }
+  return files;
+}
+
+function changedGitFacts(before, after) {
+  const changed = [];
+  const names = new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]);
+  for (const file of names) {
+    const previous = before.get(file) ?? { status: "", added: 0, deleted: 0 };
+    const current = after.get(file) ?? { status: "", added: 0, deleted: 0 };
+    if (previous.status === current.status && previous.added === current.added && previous.deleted === current.deleted) continue;
+    changed.push({ path: file, added: current.added, deleted: current.deleted });
+  }
+  changed.sort((a, b) => a.path.localeCompare(b.path));
+  return {
+    repository: true,
+    files: changed,
+    totalFiles: changed.length,
+    added: changed.reduce((sum, file) => sum + file.added, 0),
+    deleted: changed.reduce((sum, file) => sum + file.deleted, 0)
+  };
+}
+
+function matchesScope(file, pattern) {
+  const normalized = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
+  let expression = "^";
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    if (char === "*" && normalized[index + 1] === "*") {
+      expression += ".*";
+      index += 1;
+    } else if (char === "*") expression += "[^/]*";
+    else if (char === "?") expression += "[^/]";
+    else expression += char.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+  }
+  return new RegExp(`${expression}$`).test(file);
+}
+
+function getCodexChangedFiles(answer) {
+  const lines = String(answer ?? "").split(/\r?\n/);
+  const start = lines.findIndex((line) => /^Changed:\s*/i.test(line));
+  if (start < 0) return [];
+  const output = [];
+  for (let index = start; index < lines.length; index += 1) {
+    if (index > start && /^(Tests|Open questions):/i.test(lines[index])) break;
+    const line = lines[index].replace(/^Changed:\s*/i, "").trim();
+    const match = line.match(/(?:^|`)([^`]+\.[A-Za-z0-9._-]+)(?:`|\s|$)/);
+    if (match) output.push(match[1]);
+  }
+  return output;
+}
+
+function extractReplySection(answer) {
+  const lines = String(answer ?? "").trimEnd().split(/\r?\n/);
+  const start = lines.findIndex((line) => /^Changed:/i.test(line));
+  const end = lines.findIndex((line, index) => index >= start && /^Open questions:/i.test(line));
+  return start >= 0 && end >= start ? lines.slice(start, end + 1).join("\n") : "";
+}
+
+// A short answer is shown whole, so read-only findings are never hidden; a
+// long one is cut to its reply section, or its first lines.
+function compactInvokeAnswer(answer) {
+  const normalized = String(answer ?? "").trimEnd();
+  const answerLines = normalized ? normalized.split(/\r?\n/) : [];
+  if (answerLines.length <= 40) {
+    return { text: normalized, shortened: false };
+  }
+  const reply = extractReplySection(normalized);
+  return { text: reply || answerLines.slice(0, 40).join("\n"), shortened: true };
+}
+
+function runVerification(command, cwd) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const child = spawn(command, [], { cwd, shell: true, windowsHide: true });
+    let output = "";
+    child.stdout?.on("data", (chunk) => (output += chunk));
+    child.stderr?.on("data", (chunk) => (output += chunk));
+    child.on("error", (error) => resolve({ passed: false, exitCode: 127, output: `${output}${error.message}`, durationSeconds: Math.round((Date.now() - started) / 1000) }));
+    child.on("close", (exitCode) => resolve({ passed: exitCode === 0, exitCode: exitCode ?? 1, output, durationSeconds: Math.round((Date.now() - started) / 1000) }));
+  });
+}
+
 function renderInvokeResult(result) {
   const lines = [];
-  if (result.output) {
-    lines.push(result.output.trimEnd(), "");
+  const answer = compactInvokeAnswer(result.output);
+  if (answer.text) {
+    lines.push(answer.text);
+    if (answer.shortened && result.answerFile) lines.push(`Full answer: ${result.answerFile}`);
   } else if (result.message) {
-    lines.push(result.message, "");
+    lines.push(result.message);
   }
+  lines.push("");
   const facts = [result.code ? `${result.status} (${result.code})` : result.status];
   if (result.threadId) facts.push(`thread ${result.threadId}`);
   if (result.jobId) facts.push(`job ${result.jobId}`);
   facts.push(`${result.model}/${result.reasoningEffort}`);
   if (result.write) facts.push("write");
-  if (result.failovers) {
-    facts.push(`resumed after ${result.failovers} account switch${result.failovers === 1 ? "" : "es"}`);
-  }
+  if (result.failovers) facts.push(`resumed after ${result.failovers} account switch${result.failovers === 1 ? "" : "es"}`);
   lines.push(`[codex invoke] ${facts.join(" · ")}`);
-  const files = result.touchedFiles ?? [];
-  if (files.length) {
-    const shown = files.slice(0, 20).join(", ");
-    lines.push(`Changed files: ${shown}${files.length > 20 ? `, and ${files.length - 20} more` : ""}`);
+  if (result.verify) {
+    if (result.verify.passed && result.verify.retries) lines.push("Verify: passed after 1 retry");
+    else if (result.verify.passed) lines.push(`Verify: passed (${result.verify.command}, ${result.verify.durationSeconds}s)`);
+    else lines.push(`Verify: FAILED${result.verify.retries ? " after 1 retry" : ""} (exit ${result.verify.exitCode})`, ...result.verify.output.trimEnd().split(/\r?\n/).slice(-20));
+  }
+  if (result.warnings?.length) lines.push(...result.warnings);
+  if (result.diff?.repository) {
+    const files = result.diff.files.slice(0, 20).map((file) => `${file.path} (+${file.added} −${file.deleted})`);
+    const shownFiles = files.length ? files.join(", ") : "none";
+    lines.push(`Changed files (git): ${shownFiles}${result.diff.files.length > 20 ? `, and ${result.diff.files.length - 20} more` : ""}; ${result.diff.totalFiles} files, +${result.diff.added} −${result.diff.deleted}`);
+  } else if (result.diff && !result.diff.repository) {
+    lines.push("git: not a repository");
+    const files = result.touchedFiles ?? [];
+    if (files.length) lines.push(`Changed files: ${files.slice(0, 20).join(", ")}${files.length > 20 ? `, and ${files.length - 20} more` : ""}`);
   }
   return `${lines.join("\n")}\n`;
 }
@@ -1146,7 +1286,8 @@ const SIMULATE_USAGE_LIMIT_ENV = "GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT";
 
 async function handleInvoke(argv) {
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify"],
+    repeatableOptions: ["scope"],
     booleanOptions: ["json", "write"],
     aliasMap: {
       m: "model"
@@ -1162,15 +1303,20 @@ async function handleInvoke(argv) {
     throw new Error("invoke requires --model and --effort chosen from invoke-status.");
   }
   const resumeThreadId = normalizeResumeThreadId(options["resume-thread"]);
-  const prompt = readTaskPrompt(cwd, options, positionals);
+  const brief = readTaskPrompt(cwd, options, positionals);
+  // The reply format fits edits; a review or investigation answers in its own shape.
+  const prompt = brief && options.write ? appendReplyFormat(brief) : brief;
   if (!prompt && !resumeThreadId) {
     throw new Error("Provide the task for Codex as the prompt, --prompt-file, or piped stdin.");
   }
   const write = Boolean(options.write);
   const base = { model, reasoningEffort: effort, write };
   const finish = (result) => {
-    outputCommandResult(result, renderInvokeResult(result), options.json);
-    process.exitCode = result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
+    const payload = options.json && result.answerFile
+      ? { ...result, output: compactInvokeAnswer(result.output).text }
+      : result;
+    outputCommandResult(payload, renderInvokeResult(result), options.json);
+    process.exitCode = result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
   };
 
   // GSwitch validates the request and tracks this worker for as long as the
@@ -1199,7 +1345,33 @@ async function handleInvoke(argv) {
     // shell launch of Codex would cost it tokens on every run.
     process.noDeprecation = true;
     ensureCodexAvailable(cwd);
-    const result = await runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId });
+    const gitBefore = snapshotGit(cwd);
+    const result = await runInvokeWithFailover({
+      base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId,
+      verifyCommand: options.verify ? String(options.verify) : null
+    });
+    if (result.jobId && result.output) {
+      const answerFile = path.join(resolveJobsDir(workspaceRoot), `${result.jobId}.answer.txt`);
+      fs.writeFileSync(answerFile, result.output, "utf8");
+      result.answerFile = answerFile;
+    }
+    const gitAfter = snapshotGit(cwd);
+    result.diff = gitBefore && gitAfter ? changedGitFacts(gitBefore, gitAfter) : { repository: false, files: [] };
+    result.warnings = [];
+    const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
+      .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
+    if (result.diff.repository) {
+      if (scopedPatterns.length) {
+        for (const file of result.diff.files) {
+          if (!scopedPatterns.some((pattern) => matchesScope(file.path, pattern))) result.warnings.push(`WARNING: changed outside --scope: ${file.path}`);
+        }
+      }
+      for (const file of getCodexChangedFiles(result.output)) {
+        if (!result.diff.files.some((changed) => changed.path === file)) result.warnings.push(`WARNING: Codex says changed but git shows unchanged: ${file}`);
+      }
+      if (write && !result.diff.files.length) result.warnings.push("WARNING: write run changed nothing");
+      if (!write && result.diff.files.length) result.warnings.push("WARNING: read-only run changed files");
+    }
     // GSwitch keeps the result in its activity history; older versions do not.
     await session
       .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null })
@@ -1215,12 +1387,14 @@ async function handleInvoke(argv) {
  * exhausted, GSwitch alone switches accounts; this worker then resumes the same
  * thread with the same model, effort, sandbox, and working directory.
  */
-async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId }) {
+async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null }) {
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
   let runPrompt = prompt;
   let failovers = 0;
+  let verifyRetries = 0;
+  let verifyResult = null;
   const touched = new Set();
   const failed = (code, message, detail = null) => ({
     ...base,
@@ -1231,6 +1405,7 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
     jobId: job.id,
     threadId,
     failovers,
+    verify: verifyResult ? { ...verifyResult, command: verifyCommand, retries: verifyRetries } : null,
     output: "",
     touchedFiles: [...touched]
   });
@@ -1292,6 +1467,14 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
     const simulatedLimit =
       process.env[SIMULATE_USAGE_LIMIT_ENV] === "1" && failovers === 0 && execution?.exitStatus === 0;
     if (execution?.exitStatus === 0 && !simulatedLimit) {
+      if (verifyCommand) {
+        verifyResult = await runVerification(verifyCommand, cwd);
+        if (!verifyResult.passed && verifyRetries === 0) {
+          verifyRetries = 1;
+          runPrompt = VERIFY_RETRY_PROMPT(verifyCommand, verifyResult.output.split(/\r?\n/).slice(-60).join("\n"));
+          continue;
+        }
+      }
       return {
         ...base,
         status: "completed",
@@ -1300,6 +1483,7 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
         jobId: job.id,
         threadId,
         failovers,
+        verify: verifyResult ? { ...verifyResult, command: verifyCommand, retries: verifyRetries } : null,
         output: execution.payload.rawOutput,
         touchedFiles: [...touched]
       };

@@ -5,7 +5,7 @@ argument-hint: "[task for Codex, or nothing to delegate suitable work for the re
 disable-model-invocation: true
 ---
 
-<!-- Added by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
+<!-- Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
 
 # Delegate to Codex with GSwitch Invoke Mode
 
@@ -32,25 +32,28 @@ Suitable work is self-contained work you can state in a brief: implementing a sp
 refactors, writing or fixing tests, debugging a failing test or error, investigating how
 code works, reviews, and mechanical multi-file edits.
 
-Keep for yourself: conversation and decisions that need the user, judgment that depends on
-context you would have to transfer at length, and edits smaller than their brief.
+Keep for yourself: conversation and decisions that need the user, tasks that depend on
+conversation context you would have to transfer at length, and edits where the brief would be
+about as long as the edit.
 
 ## 3. Choose a model and effort
 
 Use only a model and effort listed by `invoke-status`, with the exact names shown. Choose a
 lighter model or lower effort for bounded, mechanical work and a stronger model or higher
-effort for complex debugging, ambiguous problems, or architecture-sensitive changes.
+effort for complex debugging, ambiguous problems, or architecture-sensitive changes. If
+`invoke-status` lists the user's default for the kind of task (review, research, mechanical,
+complex), use it unless the task clearly needs more or less.
 
 ## 4. Invoke
 
 ```
-invoke --model <model> --effort <effort> [--write] --cwd "<repository or worktree>" "<brief>"
+invoke --model <model> --effort <effort> [--write] [--scope "src/**,tests/**"] [--verify "<test command>"] --cwd "<repository or worktree>" "<brief>"
 ```
 
 - Add `--write` when Codex should edit files; omit it for review or research.
-- Codex sees the repository, not this conversation. The brief states the goal, relevant
-  paths, constraints, how to check the result (for example which tests to run), and asks
-  for a short summary of what changed. Use `--prompt-file <path>` for a long brief.
+- Codex sees the repository, not this conversation. The brief states the goal and constraints.
+  Pass `--scope` for expected paths and `--verify` when there is a known test command; do not
+  rerun tests that `invoke` already verified. Use `--prompt-file <path>` for a long brief.
 - Run long tasks with the Bash tool's `run_in_background`; you are notified when each
   finishes.
 - Run several tasks at once only when they are independent and each is substantial enough
@@ -61,10 +64,12 @@ invoke --model <model> --effort <effort> [--write] --cwd "<repository or worktre
 
 ## 5. Use the result
 
-The output is Codex's answer followed by one `[codex invoke] ...` line naming the thread.
-Check the result in proportion to the risk (for example run the tests or look at the diff)
-instead of redoing the work. To continue the same work, add `--resume-thread <thread>` with
-the same model and effort.
+Trust tool facts only: git diff stats, Verify, and WARNING lines. Codex's text is a claim.
+Read the diff only after a warning, failed verify, or changes touching security, money,
+concurrency, or data deletion. On `Verify: FAILED after 1 retry`, do not invoke again for the
+same fix; take over or ask the user. Git facts cover every change in the working tree during
+the run, including other tasks' and your own. Continue the same work with
+`--resume-thread <thread>` and the same model and effort.
 
 If a Codex account runs out, GSwitch switches to another allowed account and `invoke`
 resumes the same thread by itself; the last line then says it resumed after an account

@@ -70,6 +70,7 @@ const mocks = vi.hoisted(() => ({
   onInvokeActivity: vi.fn(),
   onInvokeResumed: vi.fn(),
   setInvokeWeeklyReserve: vi.fn(),
+  setInvokeTaskDefaults: vi.fn(),
   readTaskLog: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
@@ -245,6 +246,11 @@ function prepareDefaults() {
     invoke_mode: true,
     allowed_invocation_profiles: [],
     weekly_reserve: reserve,
+  }));
+  mocks.setInvokeTaskDefaults.mockImplementation(async (task_defaults: unknown) => ({
+    invoke_mode: true,
+    allowed_invocation_profiles: [],
+    task_defaults,
   }));
   mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number, autoWake: boolean) => ({
     auto_wake: autoWake,
@@ -2486,11 +2492,13 @@ describe("Invoke Mode", () => {
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "max reasoning for Model A" }));
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "low reasoning for Model A" }));
     await userEvent.click(within(dialog).getByRole("checkbox", { name: "medium reasoning for Model B" }));
+    await userEvent.selectOptions(within(dialog).getByRole("combobox", { name: "Default model for Review" }), "model-a");
     await userEvent.click(within(dialog).getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(mocks.setInvokeProfiles).toHaveBeenCalledWith([
       { model: "model-a", reasoning_efforts: ["low", "max"] },
     ]));
+    expect(mocks.setInvokeTaskDefaults).toHaveBeenCalledWith({ review: { model: "model-a", effort: "low" } });
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
   });
@@ -2641,8 +2649,9 @@ describe("Invoke Mode", () => {
     const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
     mocks.listAccounts.mockResolvedValue([chatAccount, second]);
     mocks.activity.mockResolvedValue([
+      { at: Date.now() - 180_000, kind: "task_started", task: "t", model: "gpt-6-luna", effort: "low", write: false, cwd: "/work" },
       { at: Date.now() - 60_000, kind: "switched", from: "account-1", to: "account-2", reason: "usage_limit" },
-      { at: Date.now() - 120_000, kind: "task_ended", task: "t", model: "gpt-6-luna", thread_id: "01a1e9b8-0000", status: "failed", code: "CODEX_FAILED" },
+      { at: Date.now() - 120_000, kind: "task_ended", task: "t", model: "gpt-6-luna", thread_id: "01a1e9b8-0000", status: "failed", code: "CODEX_FAILED", usage: { input_tokens: 30000, cached_input_tokens: 25000, output_tokens: 11200, reasoning_output_tokens: 400, total_tokens: 41200 } },
     ]);
     let push: ((entry: unknown) => void) | undefined;
     mocks.onInvokeActivity.mockImplementation(async (handler: typeof push) => {
@@ -2657,10 +2666,14 @@ describe("Invoke Mode", () => {
       "Switched Codex from person@example.com to second@example.com: person@example.com ran out of usage.",
     )).toBeInTheDocument();
     expect(within(dialog).getByText("Codex task on gpt-6-luna did not finish (CODEX_FAILED), thread 01a1e9b8.")).toBeInTheDocument();
+    expect(within(dialog).getByText("41.2k tokens · 25k cached")).toBeInTheDocument();
+    expect(within(dialog).getByText("Last 7 days by model and effort")).toBeInTheDocument();
+    expect(within(dialog).getByText("Tasks 1 · 41.2k tokens")).toBeInTheDocument();
 
     await waitFor(() => expect(push).toBeDefined());
     act(() => push!({ at: Date.now(), kind: "woke", accounts: ["account-2"] }));
-    const items = within(dialog).getAllByRole("listitem");
+    const history = dialog.querySelector(".activity-list") as HTMLElement;
+    const items = within(history).getAllByRole("listitem");
     expect(items[0]).toHaveTextContent("Started the reset timer for second@example.com.");
   });
 

@@ -112,6 +112,11 @@ Credentials stay encrypted on your computer. Claude never sees them.
    tasks to other accounts and never fails over to it; if no other account has
    usage left, Invoke Mode pauses instead of using the reserve.
 
+In **Default model per task**, you can suggest a model and effort for reviews,
+research, mechanical edits, and complex work. Each choice must be one of the
+allowed model/effort pairs above. These are recommendations Claude can follow;
+they do not restrict the requests it can make.
+
 **Start reset timers automatically** (off until you turn it on): a usage window
 starts counting at the first request after it resets. With this on, GSwitch
 checks your allowed accounts every ten minutes and sends any account whose window
@@ -225,6 +230,10 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
   pauses and resumes, and automatic Wakes. **View log** on a finished task
   replays what Codex did. It keeps the latest 1,000 entries in
   `~/.gswitchtool/activity.jsonl`, with no credentials, prompts, or Codex output.
+  Ended task rows include Codex's latest token totals when its rollout is
+  available. The top summary groups task counts and total tokens from the last
+  seven days by model and effort. Running-task token totals are not shown in the
+  strip; they are available in **Watch** while its live log is open.
 - **After a pause:** when Codex usage comes back, GSwitch shows a Windows
   notification and a notice listing the paused threads; tell Claude to continue
   them. While paused, the pause notice lists them too.

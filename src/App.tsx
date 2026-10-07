@@ -70,6 +70,8 @@ import type {
   CodexCliInfo,
   CodexCliUpdateFailure,
   InvocationProfile,
+  InvocationDefault,
+  InvokeTaskKind,
   ActivityEntry,
   AppVersion,
   InvokePause,
@@ -95,6 +97,7 @@ import type {
   SwitchAccounts,
   SwitchFailure,
   SwitchFailureCode,
+  TokenUsage,
   WakeOperationView,
 } from "./types";
 import { updater, type AvailableUpdate } from "./updater";
@@ -1205,6 +1208,17 @@ function elapsedText(ms: number) {
   return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 
+function compactTokens(tokens: number) {
+  return tokens >= 1000 ? `${(tokens / 1000).toFixed(tokens >= 10_000 ? 1 : 0).replace(/\.0$/, "")}k` : String(tokens);
+}
+
+function usageText(usage: TokenUsage, t: Translator) {
+  return t("activity.usage", {
+    total: compactTokens(usage.total_tokens),
+    cached: compactTokens(usage.cached_input_tokens),
+  });
+}
+
 function activityText(entry: ActivityEntry, name: (id: string) => string, t: Translator, formatLocale: string) {
   const thread = (id?: string | null) => (id ? t("activity.thread", { thread: shortThread(id) }) : "");
   switch (entry.kind) {
@@ -1361,6 +1375,24 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
   const [entries, setEntries] = useState<ActivityEntry[] | null>(null);
   const [failed, setFailed] = useState(false);
 
+  const summary = useMemo(() => {
+    if (!entries) return [];
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    const starts = new Map(entries.filter((entry) => entry.kind === "task_started").map((entry) => [entry.task, entry]));
+    const groups = new Map<string, { model: string; effort: string; tasks: number; tokens: number }>();
+    for (const entry of entries) {
+      if (entry.kind !== "task_ended" || entry.at < cutoff) continue;
+      const start = starts.get(entry.task);
+      const effort = start?.kind === "task_started" ? start.effort : "—";
+      const key = `${entry.model}\0${effort}`;
+      const group = groups.get(key) ?? { model: entry.model, effort, tasks: 0, tokens: 0 };
+      group.tasks += 1;
+      group.tokens += entry.usage?.total_tokens ?? 0;
+      groups.set(key, group);
+    }
+    return [...groups.values()].sort((left, right) => right.tokens - left.tokens);
+  }, [entries]);
+
   useEffect(() => {
     let stop: (() => void) | undefined;
     let disposed = false;
@@ -1373,7 +1405,7 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
         // The list still loads; it just does not grow while open.
       }
       try {
-        const loaded = await api.activity(200);
+        const loaded = await api.activity(1000);
         if (!disposed) setEntries((current) => [...(current ?? []), ...loaded]);
       } catch {
         if (!disposed) setFailed(true);
@@ -1391,6 +1423,16 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
         {failed ? <p className="remove-error" role="alert">{t("activity.loadFailed")}</p> : null}
         {entries && entries.length === 0 ? <p>{t("activity.empty")}</p> : null}
         {entries?.length ? (
+          <>
+          <section className="activity-summary" aria-label={t("activity.summaryTitle")}>
+            <h3>{t("activity.summaryTitle")}</h3>
+            {summary.length ? <ul>{summary.map((group) => (
+              <li key={`${group.model}-${group.effort}`}>
+                <strong>{group.model}</strong><span className="badge">{group.effort}</span>
+                <span>{t("activity.summaryLine", { tasks: String(group.tasks), tokens: compactTokens(group.tokens) })}</span>
+              </li>
+            ))}</ul> : <p>{t("activity.summaryEmpty")}</p>}
+          </section>
           <ol className="activity-list">
             {entries.map((entry, index) => (
               <li key={`${entry.at}-${index}`}>
@@ -1399,6 +1441,9 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
                 </time>
                 <span>
                   {activityText(entry, name, t, formatLocale)}
+                  {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.usage ? (
+                    <small className="activity-usage">{usageText(entry.usage, t)}</small>
+                  ) : null}
                   {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.thread_id ? (
                     <button className="link-button" onClick={() => onViewLog(entry.thread_id!)} type="button">
                       {t("activity.viewLog")}
@@ -1408,6 +1453,7 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
               </li>
             ))}
           </ol>
+          </>
         ) : null}
       </div>
     </Modal>
@@ -1459,6 +1505,8 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   const [draft, setDraft] = useState<Record<string, string[]>>(() =>
     Object.fromEntries(settings.allowed_invocation_profiles.map((profile) => [profile.model, profile.reasoning_efforts])),
   );
+  const [taskDefaults, setTaskDefaults] = useState<Partial<Record<InvokeTaskKind, InvocationDefault>>>(() => settings.task_defaults ?? {});
+  const taskKinds: InvokeTaskKind[] = ["review", "research", "mechanical", "complex"];
 
   const loadModels = useCallback(async (refresh: boolean) => {
     setLoadingModels(true);
@@ -1501,11 +1549,16 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
         clamp(maxTasks, 1, 6, 2),
         autoWake,
       );
-      onSaved(await api.setInvokeWeeklyReserve(Object.fromEntries(
+      await api.setInvokeWeeklyReserve(Object.fromEntries(
         Object.entries(reserve)
           .map(([id, percent]) => [id, clamp(percent, 0, 90, 0)] as const)
           .filter(([, percent]) => percent > 0),
-      )));
+      ));
+      const allowedDefaults = Object.fromEntries(taskKinds.flatMap((kind) => {
+        const selected = taskDefaults[kind];
+        return selected && draft[selected.model]?.includes(selected.effort) ? [[kind, selected]] : [];
+      })) as Partial<Record<InvokeTaskKind, InvocationDefault>>;
+      onSaved(await api.setInvokeTaskDefaults(allowedDefaults));
     } catch {
       setSaveError(t("error.invokeSave"));
     } finally {
@@ -1558,6 +1611,52 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
             ))}
           </ul>
         ) : null}
+        <h3>{t("invoke.taskDefaultsTitle")}</h3>
+        <p>{t("invoke.taskDefaultsIntro")}</p>
+        <ul className="invoke-task-defaults">
+          {taskKinds.map((kind) => {
+            const allowedModels = (catalog ?? []).filter((model) => draft[model.model]?.length);
+            const selected = taskDefaults[kind];
+            const selectedModel = allowedModels.find((model) => model.model === selected?.model);
+            const efforts = selectedModel ? selectedModel.supported_reasoning_efforts.filter((effort) => draft[selectedModel.model]?.includes(effort)) : [];
+            return (
+              <li key={kind}>
+                <strong>{t(`invoke.taskKind.${kind}`)}</strong>
+                <label>
+                  <span className="sr-only">{t("invoke.defaultModelFor", { kind: t(`invoke.taskKind.${kind}`) })}</span>
+                  <select
+                    aria-label={t("invoke.defaultModelFor", { kind: t(`invoke.taskKind.${kind}`) })}
+                    disabled={saving || loadingModels}
+                    onChange={(event) => {
+                      const model = allowedModels.find((item) => item.model === event.target.value);
+                      setTaskDefaults((current) => {
+                        const next = { ...current };
+                        if (!model) delete next[kind];
+                        else next[kind] = { model: model.model, effort: model.supported_reasoning_efforts.find((effort) => draft[model.model]?.includes(effort)) ?? "" };
+                        return next;
+                      });
+                    }}
+                    value={selectedModel?.model ?? ""}
+                  >
+                    <option value="">{t("invoke.noDefault")}</option>
+                    {allowedModels.map((model) => <option key={model.model} value={model.model}>{model.display_name}</option>)}
+                  </select>
+                </label>
+                <label>
+                  <span className="sr-only">{t("invoke.defaultEffortFor", { kind: t(`invoke.taskKind.${kind}`) })}</span>
+                  <select
+                    aria-label={t("invoke.defaultEffortFor", { kind: t(`invoke.taskKind.${kind}`) })}
+                    disabled={saving || !selectedModel}
+                    onChange={(event) => setTaskDefaults((current) => ({ ...current, [kind]: { model: selectedModel!.model, effort: event.target.value } }))}
+                    value={efforts.includes(selected?.effort ?? "") ? selected?.effort : ""}
+                  >
+                    {efforts.length ? efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>) : <option value="">—</option>}
+                  </select>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
         <h3>{t("invoke.accountsTitle")}</h3>
         <p>{t("invoke.orderIntro")}</p>
         {order.length ? (

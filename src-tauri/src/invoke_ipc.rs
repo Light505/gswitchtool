@@ -168,6 +168,7 @@ async fn dispatch(
             Ok(json!({
                 "invoke_mode": settings.invoke_mode,
                 "allowed_invocation_profiles": profiles,
+                "task_defaults": settings.task_defaults,
                 "workers_running": running,
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
@@ -558,6 +559,16 @@ mod tests {
     fn status_reports_policy_only_while_invoke_mode_is_on() {
         let dir = temp_dir("status");
         let endpoint = endpoint(&dir, true);
+        endpoint
+            .invoke
+            .set_task_defaults(std::collections::BTreeMap::from([(
+                "review".into(),
+                crate::types::InvocationDefault {
+                    model: "model-a".into(),
+                    effort: "high".into(),
+                },
+            )]))
+            .expect("task defaults");
         let response = call(&request("status", Value::Null), &endpoint);
         assert_eq!(response["id"], 7);
         assert_eq!(
@@ -565,6 +576,7 @@ mod tests {
             json!({
                 "invoke_mode": true,
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
+                "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
                 "workers_running": 0,
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
@@ -578,6 +590,10 @@ mod tests {
         let manual = call(&request("status", Value::Null), &endpoint);
         assert_eq!(manual["result"]["invoke_mode"], false);
         assert_eq!(manual["result"]["allowed_invocation_profiles"], json!([]));
+        assert_eq!(
+            manual["result"]["task_defaults"]["review"]["model"],
+            "model-a"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 

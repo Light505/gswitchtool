@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 function severityRank(severity) {
   switch (severity) {
     case "critical":
@@ -153,7 +154,7 @@ function pushJobDetails(lines, job, options = {}) {
   }
   if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
     lines.push("  Review changes: /codex:review --wait");
-    lines.push("  Stricter review: /codex:adversarial-review --wait");
+    lines.push("  Read-only Codex review: /codex:gswitch-review");
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");

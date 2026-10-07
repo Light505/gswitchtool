@@ -1,4 +1,4 @@
-// Added by Light505 for gswitchtool (2026): tests for the invoke and invoke-status commands. See CREDITS.md in gswitchtool.
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
@@ -22,6 +22,7 @@ const PROFILES = [
 ];
 const FAILOVER_RESUME_PROMPT =
   "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
+const REPLY_FORMAT = "\nReply format (end with at most 15 lines):\nChanged: one line per file, what changed\nTests: commands run + pass/fail\nOpen questions: none, or list them";
 
 // Answers like GSwitch's Invoke endpoint from an in-memory policy. A failover
 // "succeeds" unless failoverError is set; the fake does not switch accounts.
@@ -33,6 +34,7 @@ async function startFakeGSwitch({
   failoverDetail = null,
   paused = null,
   maxTasks = null,
+  taskDefaults = null,
   exclusiveModel = null,
   stopTask = false
 } = {}) {
@@ -58,7 +60,8 @@ async function startFakeGSwitch({
           failover_in_progress: waitingForCodex,
           ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
           ...(paused ? { paused } : {}),
-          ...(maxTasks ? { max_concurrent_tasks: maxTasks } : {})
+          ...(maxTasks ? { max_concurrent_tasks: maxTasks } : {}),
+          ...(taskDefaults ? { task_defaults: taskDefaults } : {})
         });
       case "lease_open": {
         if (!policy.invokeMode) return fail("INVOKE_MODE_DISABLED");
@@ -131,7 +134,7 @@ function companion(args, { repo, binDir, configDir, env = {} }) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [SCRIPT, ...args], {
       cwd: repo,
-      env: { ...buildEnv(binDir), GSWITCH_CONFIG_DIR: configDir, ...env },
+      env: { ...buildEnv(binDir), GSWITCH_CONFIG_DIR: configDir, CLAUDE_PLUGIN_DATA: path.join(configDir, "plugin-data"), ...env },
       windowsHide: true
     });
     let stdout = "";
@@ -285,18 +288,93 @@ test("invoke registers its run with GSwitch and runs with the chosen settings", 
     const fakeState = readFakeState(ctx.statePath);
     assert.equal(fakeState.lastTurnStart.model, "model-a");
     assert.equal(fakeState.lastTurnStart.effort, "xhigh");
-    assert.equal(fakeState.lastTurnStart.prompt, "implement the feature");
+    assert.equal(fakeState.lastTurnStart.prompt, `implement the feature${REPLY_FORMAT}`);
     assert.equal(fakeState.lastThreadRequest.sandbox, "workspace-write");
     assert.equal(loadBrokerSession(ctx.repo), null, "invoke workers do not use the shared broker");
   }));
 
-test("invoke output is Codex's answer plus one resume line", () =>
+test("a read-only invoke shows a short answer whole and adds no reply format", () =>
   withGSwitch({}, undefined, async (ctx) => {
     const result = await companion(["invoke", "--model", "model-b", "--effort", "medium", "review the change"], ctx);
     assert.equal(result.status, 0, result.stderr);
-    const lines = result.stdout.trimEnd().split("\n");
-    assert.match(lines.at(-1), /^\[codex invoke\] completed · thread \S+ · job task-\S+ · model-b\/medium$/);
+    assert.match(result.stdout, /^Handled the requested task\.\nTask prompt accepted\.\n/);
+    assert.doesNotMatch(result.stdout, /Full answer:/, "a short answer is not cut");
+    assert.match(result.stdout, /\[codex invoke\] completed · thread \S+ · job task-\S+ · model-b\/medium/);
+    assert.doesNotMatch(readFakeState(ctx.statePath).lastTurnStart.prompt, /Reply format/);
     assert.equal(readFakeState(ctx.statePath).lastThreadRequest.sandbox, "read-only");
+  }));
+
+test("invoke-status lists the user's default model per kind of task", () =>
+  withGSwitch({ taskDefaults: { review: { model: "model-b", effort: "medium" } } }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /The user's default per kind of task:\r?\n- review: model-b medium/);
+  }));
+
+test("a refused invoke shows GSwitch's message and code in text output", () =>
+  withGSwitch({ paused: { resumes_at: null } }, undefined, async (ctx) => {
+    const result = await companion(["invoke", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 2);
+    assert.match(result.stdout, /PAUSE ALL WORK/);
+    assert.match(result.stdout, /\[codex invoke\] rejected \(INVOKE_PAUSED\)/);
+  }));
+
+test("invoke reports git diff facts and files outside repeatable scope globs", () =>
+  withGSwitch({}, "invoke-write", async (ctx) => {
+    const result = await companion([
+      "invoke", "--json", "--model", "model-a", "--effort", "high", "--write",
+      "--scope", "src/**", "--scope", "tests/**,docs/**", "change a file"
+    ], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.diff.files, [{ path: "outside.ts", added: 2, deleted: 0 }]);
+    assert.deepEqual([payload.diff.totalFiles, payload.diff.added, payload.diff.deleted], [1, 2, 0]);
+    assert.equal(payload.output, "Changed: outside.ts — added fixture changes\nTests: fixture — passed\nOpen questions: none");
+    assert.ok(payload.warnings.includes("WARNING: changed outside --scope: outside.ts"));
+  }));
+
+test("invoke verifies a command after Codex completes", () =>
+  withGSwitch({}, undefined, async (ctx) => {
+    const result = await companion(["invoke", "--model", "model-a", "--effort", "high", "--verify", "node --version", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Verify: passed \(node --version, \d+s\)/);
+  }));
+
+test("failed verification retries the same Codex thread once and can pass", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    const counter = path.join(path.dirname(ctx.statePath), "verify-count");
+    const verifyFile = path.join(ctx.repo, "verify.mjs");
+    fs.writeFileSync(verifyFile, `import fs from "node:fs";\nconst file = ${JSON.stringify(counter)};\nconst count = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : 0) + 1;\nfs.writeFileSync(file, String(count));\nconsole.log(count === 1 ? "first failure" : "passed");\nprocess.exit(count === 1 ? 1 : 0);\n`);
+    const result = await companion(["invoke", "--model", "model-a", "--effort", "high", "--verify", "node verify.mjs", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /Verify: passed after 1 retry/);
+    assert.match(result.stderr, /^$/);
+    const turns = readFakeState(ctx.statePath).turns;
+    assert.equal(turns.length, 2);
+    assert.equal(turns[1].threadId, turns[0].threadId);
+    assert.match(turns[1].prompt, /The verification command failed\. Fix the cause, do not weaken tests or checks\./);
+    assert.match(turns[1].prompt, /first failure/);
+    assert.equal(gswitch.methods().filter((method) => method === "run_begin").length, 2);
+  }));
+
+test("verification still failing after one retry returns exit code 3", () =>
+  withGSwitch({}, undefined, async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--verify", "node -e \"console.log('still failing'); process.exit(1)\"", "do the work"], ctx);
+    assert.equal(result.status, 3, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.status, "completed");
+    assert.equal(payload.verify.passed, false);
+    assert.equal(payload.verify.retries, 1);
+    assert.match(payload.verify.output, /still failing/);
+    assert.equal(readFakeState(ctx.statePath).turns.length, 2);
+  }));
+
+test("read-only invoke warns when git shows file changes", () =>
+  withGSwitch({}, "invoke-write", async (ctx) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.ok(payload.warnings.includes("WARNING: read-only run changed files"));
   }));
 
 test("invoke --resume-thread continues the named thread", () =>
@@ -346,7 +424,7 @@ test("after GSwitch switches accounts, invoke resumes the same thread with the s
     assert.equal(fakeState.threads.length, 1, "the failover must not create a new Codex thread");
     assert.equal(fakeState.turns.length, 2);
     const [first, second] = fakeState.turns;
-    assert.equal(first.prompt, "implement the feature");
+    assert.equal(first.prompt, `implement the feature${REPLY_FORMAT}`);
     assert.equal(second.prompt, FAILOVER_RESUME_PROMPT);
     assert.equal(second.threadId, first.threadId);
     assert.equal(payload.threadId, first.threadId);
@@ -427,7 +505,7 @@ test("the acceptance switch reports one usage limit after a finished turn", () =
     assert.equal(gswitch.methods().filter((method) => method === "limit_reached").length, 1);
     const fakeState = readFakeState(ctx.statePath);
     assert.equal(fakeState.threads.length, 1);
-    assert.deepEqual(fakeState.turns.map((turn) => turn.prompt), ["do the work", FAILOVER_RESUME_PROMPT]);
+    assert.deepEqual(fakeState.turns.map((turn) => turn.prompt), [`do the work${REPLY_FORMAT}`, FAILOVER_RESUME_PROMPT]);
   }));
 
 test("a refused switch reports GSwitch's reason and does not resume", () =>
@@ -456,7 +534,7 @@ test("Codex delegation is explicit while GSwitch reviews may be chosen by Claude
   const review = skill("gswitch-review");
   assert.match(review, /Never add `--write`/);
   assert.doesNotMatch(review.replace("Never add `--write`", ""), /--write/);
-  for (const command of ["rescue.md", "review.md", "adversarial-review.md"]) {
+  for (const command of ["review.md"]) {
     const source = fs.readFileSync(path.join(ROOT, "plugins", "codex", "commands", command), "utf8");
     assert.match(frontmatter(source), /disable-model-invocation:\s*true/, command);
   }

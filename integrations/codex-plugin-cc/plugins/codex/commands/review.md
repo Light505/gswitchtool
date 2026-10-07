@@ -5,6 +5,8 @@ disable-model-invocation: true
 allowed-tools: Read, Glob, Grep, Bash(node:*), Bash(git:*), AskUserQuestion
 ---
 
+<!-- Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
+
 Run a Codex review through the shared built-in reviewer.
 
 Raw slash-command arguments:
@@ -37,7 +39,7 @@ Argument handling:
 - Do not add extra review instructions or rewrite the user's intent.
 - The companion script parses `--wait` and `--background`, but Claude Code's `Bash(..., run_in_background: true)` is what actually detaches the run.
 - `/codex:review` is native-review only. It does not support staged-only review, unstaged-only review, or extra focus text.
-- If the user needs custom review instructions or more adversarial framing, they should use `/codex:adversarial-review`.
+- Use this command for read-only review of supported git targets.
 
 Foreground flow:
 - Run:

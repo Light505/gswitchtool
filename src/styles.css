@@ -2339,6 +2339,54 @@ textarea {
   font-size: 13px;
 }
 
+.activity-summary {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.activity-summary h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.activity-summary p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity-summary ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-summary li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.activity-summary li strong {
+  color: var(--text);
+}
+
+.activity-usage {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+}
+
 .activity-list {
   display: grid;
   max-height: 60vh;
@@ -2408,6 +2456,37 @@ textarea {
   margin: 4px 0 0;
   font-size: 13px;
   font-weight: 650;
+}
+
+.invoke-task-defaults {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.invoke-task-defaults li {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(120px, 1fr) minmax(90px, 0.6fr);
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.invoke-task-defaults select {
+  width: 100%;
+  min-height: 34px;
+}
+
+@media (max-width: 560px) {
+  .invoke-task-defaults li {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .invoke-task-defaults li > strong {
+    grid-column: 1 / -1;
+  }
 }
 
 .invoke-order {
@@ -2697,4 +2776,17 @@ textarea {
   .modal-actions .button {
     flex: 1;
   }
+}
+
+/* Read by screen readers, not shown. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
 }

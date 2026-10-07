@@ -38,7 +38,8 @@ serialized error code, not a Rust display string or raw provider error.
 | Quota and reset-credit facts | Codex/OpenAI response | Normalize and cache them without inventing missing values |
 | External Codex process state | Operating system | Detect known or uninspectable runtimes before sensitive operations |
 | Pending switch/reset recovery | GSwitch account store | Persist enough intent to resume safely and idempotently |
-| Invoke Mode policy (mode, allowed model/effort pairs) | Rust-owned `invoke.json` | Change it only from WebView commands; keep only pairs the installed Codex `model/list` reports |
+| Invoke Mode policy (mode, allowed model/effort pairs, optional task defaults) | Rust-owned `invoke.json` | Change it only from WebView commands; keep task defaults inside the allowed model/effort pairs |
+| Invoke Mode activity and delegated-task token totals | Rust-owned `activity.jsonl` | Store task metadata and aggregate token counts only; read token totals from Codex rollouts without retaining prompts or output |
 | Per-account Invoke eligibility | `accounts.json` (`invoke_allowed`) | Default to not allowed; keep the choice across a new sign-in for the same identity |
 | Screen and dialog state | React component tree | Keep it transient, derived, and free of stored secrets; selected saved-account IDs are permitted, credentials and export paths are not |
 

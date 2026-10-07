@@ -17,7 +17,10 @@ use crate::{
     app_server::{AppServer, TempCodexHome},
     model_access::ModelAccess,
     storage,
-    types::{CatalogModel, InvocationProfile, InvokeSettings, MAX_CONCURRENT_TASKS_LIMIT},
+    types::{
+        CatalogModel, InvocationDefault, InvocationProfile, InvokeSettings,
+        MAX_CONCURRENT_TASKS_LIMIT,
+    },
 };
 
 const SETTINGS_LABEL: &str = "Invoke Mode settings";
@@ -46,11 +49,15 @@ impl InvokeState {
     /// A missing or unreadable policy file starts with Invoke Mode off. The
     /// file holds no credentials, so the next human change rewrites it.
     pub fn load(path: PathBuf) -> Self {
-        let settings = match fs::read_to_string(&path) {
+        let mut settings = match fs::read_to_string(&path) {
             Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
             Err(error) if error.kind() == ErrorKind::NotFound => InvokeSettings::default(),
             Err(_) => InvokeSettings::default(),
         };
+        settings.task_defaults = normalize_task_defaults(
+            &settings.task_defaults,
+            &settings.allowed_invocation_profiles,
+        );
         Self {
             path: Arc::new(path),
             settings: Arc::new(Mutex::new(settings)),
@@ -78,7 +85,24 @@ impl InvokeState {
         catalog: &[CatalogModel],
     ) -> Result<InvokeSettings, String> {
         let profiles = normalize_profiles(requested, catalog)?;
-        self.update(|settings| settings.allowed_invocation_profiles = profiles)
+        self.update(|settings| {
+            settings.allowed_invocation_profiles = profiles;
+            settings.task_defaults = normalize_task_defaults(
+                &settings.task_defaults,
+                &settings.allowed_invocation_profiles,
+            );
+        })
+    }
+
+    /// Stores only task suggestions that remain inside the allowed model/effort whitelist.
+    pub fn set_task_defaults(
+        &self,
+        requested: std::collections::BTreeMap<String, InvocationDefault>,
+    ) -> Result<InvokeSettings, String> {
+        self.update(|settings| {
+            settings.task_defaults =
+                normalize_task_defaults(&requested, &settings.allowed_invocation_profiles);
+        })
     }
 
     /// Sets the account order, the usage a preferred account must have left,
@@ -177,6 +201,24 @@ impl InvokeState {
         *settings = candidate.clone();
         Ok(candidate)
     }
+}
+
+fn normalize_task_defaults(
+    requested: &std::collections::BTreeMap<String, InvocationDefault>,
+    profiles: &[InvocationProfile],
+) -> std::collections::BTreeMap<String, InvocationDefault> {
+    const KINDS: [&str; 4] = ["review", "research", "mechanical", "complex"];
+    requested
+        .iter()
+        .filter(|(kind, default)| {
+            KINDS.contains(&kind.as_str())
+                && profiles.iter().any(|profile| {
+                    profile.model == default.model
+                        && profile.reasoning_efforts.contains(&default.effort)
+                })
+        })
+        .map(|(kind, default)| (kind.clone(), default.clone()))
+        .collect()
 }
 
 fn validate_request(
@@ -551,6 +593,56 @@ mod tests {
             normalized,
             vec![profile("model-a", &["low", "medium", "xhigh"])]
         );
+    }
+
+    #[test]
+    fn task_defaults_drop_models_efforts_and_kinds_outside_the_whitelist() {
+        let path = temp_path("task-defaults");
+        let state = InvokeState::load(path.clone());
+        state
+            .set_profiles(&[profile("model-a", &["high"])], &catalog())
+            .expect("profiles");
+        let saved = state
+            .set_task_defaults(std::collections::BTreeMap::from([
+                (
+                    "review".into(),
+                    InvocationDefault {
+                        model: "model-a".into(),
+                        effort: "high".into(),
+                    },
+                ),
+                (
+                    "research".into(),
+                    InvocationDefault {
+                        model: "model-a".into(),
+                        effort: "low".into(),
+                    },
+                ),
+                (
+                    "complex".into(),
+                    InvocationDefault {
+                        model: "model-b".into(),
+                        effort: "medium".into(),
+                    },
+                ),
+                (
+                    "other".into(),
+                    InvocationDefault {
+                        model: "model-a".into(),
+                        effort: "high".into(),
+                    },
+                ),
+            ]))
+            .expect("defaults");
+        assert_eq!(
+            saved.task_defaults.keys().cloned().collect::<Vec<_>>(),
+            vec!["review"]
+        );
+        state
+            .set_profiles(&[profile("model-a", &["low"])], &catalog())
+            .expect("new profiles");
+        assert!(state.settings().expect("settings").task_defaults.is_empty());
+        let _ = fs::remove_dir_all(path.parent().expect("parent"));
     }
 
     #[test]

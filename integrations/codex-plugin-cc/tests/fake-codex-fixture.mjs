@@ -1,4 +1,4 @@
-// Modified by Light505 for gswitchtool (2026): adds Invoke Mode support. See CREDITS.md in gswitchtool.
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -234,6 +234,12 @@ function structuredReviewPayload(prompt) {
 }
 
 function taskPayload(prompt, resume) {
+  const changedFile = BEHAVIOR === "invoke-write" ? "outside.ts" : null;
+  if (changedFile) fs.writeFileSync(path.join(process.cwd(), changedFile), "one" + String.fromCharCode(10) + "two" + String.fromCharCode(10), "utf8");
+  if (prompt.includes("Reply format (end with at most 15 lines):")) {
+    return "Changed: " + (changedFile ? changedFile + " — added fixture changes" : "none") + "\\nTests: fixture — passed\\nOpen questions: none";
+  }
+
   if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Claude turn.")) {
     if (BEHAVIOR === "adversarial-clean") {
       return "ALLOW: No blocking issues found in the previous turn.";

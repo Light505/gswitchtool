@@ -8,6 +8,8 @@ import type {
   ExportResult,
   ImportResult,
   InvocationProfile,
+  InvocationDefault,
+  InvokeTaskKind,
   InvokeSettings,
   InvokePause,
   SwitchAccounts,
@@ -119,6 +121,8 @@ export const api = {
     invoke<InvokeSettings>("set_invoke_preferences", { accountPriority, preferredMinRemaining, maxConcurrentTasks, autoWake }),
   setInvokeWeeklyReserve: (reserve: Record<string, number>) =>
     invoke<InvokeSettings>("set_invoke_weekly_reserve", { reserve }),
+  setInvokeTaskDefaults: (taskDefaults: Partial<Record<InvokeTaskKind, InvocationDefault>>) =>
+    invoke<InvokeSettings>("set_invoke_task_defaults", { taskDefaults }),
   invokeTasks: () => invoke<InvokeTask[]>("get_invoke_tasks"),
   stopInvokeTask: (id: string) => invoke<void>("stop_invoke_task", { id }),
   pausedThreads: () => invoke<PausedThread[]>("get_paused_threads"),

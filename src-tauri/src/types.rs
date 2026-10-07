@@ -122,6 +122,13 @@ pub struct InvocationProfile {
     pub reasoning_efforts: Vec<String>,
 }
 
+/// A suggested model and effort for one kind of delegated task.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct InvocationDefault {
+    pub model: String,
+    pub effort: String,
+}
+
 /// Human-owned Invoke Mode policy. Only the WebView commands change it; the
 /// Claude-facing surface can read it but never write it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -130,6 +137,9 @@ pub struct InvokeSettings {
     pub invoke_mode: bool,
     #[serde(default)]
     pub allowed_invocation_profiles: Vec<InvocationProfile>,
+    /// Optional suggestions for Claude; request validation does not enforce them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub task_defaults: std::collections::BTreeMap<String, InvocationDefault>,
     /// Saved-account IDs, most preferred first. Accounts not listed follow in
     /// saved order.
     #[serde(default)]
@@ -167,6 +177,7 @@ impl Default for InvokeSettings {
         Self {
             invoke_mode: false,
             allowed_invocation_profiles: Vec::new(),
+            task_defaults: std::collections::BTreeMap::new(),
             account_priority: Vec::new(),
             preferred_min_remaining: DEFAULT_PREFERRED_MIN_REMAINING,
             max_concurrent_tasks: DEFAULT_MAX_CONCURRENT_TASKS,

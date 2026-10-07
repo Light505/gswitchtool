@@ -1,4 +1,4 @@
-// Added by Light505 for gswitchtool (2026): tests for Invoke Mode support. See CREDITS.md in gswitchtool.
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -9,14 +9,13 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
-import { resolveJobsDir } from "../plugins/codex/scripts/lib/state.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "codex-companion.mjs");
 
 // These tests own their app-server processes so none outlive the test run.
 function directEnv(binDir) {
-  return { ...buildEnv(binDir), CODEX_COMPANION_DISABLE_BROKER: "1" };
+  return { ...buildEnv(binDir), CLAUDE_PLUGIN_DATA: path.join(binDir, "plugin-data"), CODEX_COMPANION_DISABLE_BROKER: "1" };
 }
 
 function setupRepo(behavior) {
@@ -88,7 +87,8 @@ test("task JSON and job record keep the structured usage-limit error", () => {
   assert.equal(payload.error.codexErrorInfo, "usageLimitExceeded");
   assert.ok(payload.threadId, "the thread ID must survive a usage-limit failure");
 
-  const jobsDir = resolveJobsDir(ctx.repo);
+  const stateRoot = path.join(ctx.binDir, "plugin-data", "state");
+  const jobsDir = path.join(stateRoot, fs.readdirSync(stateRoot)[0], "jobs");
   const jobFiles = fs.readdirSync(jobsDir).filter((name) => name.endsWith(".json"));
   assert.equal(jobFiles.length, 1);
   const job = JSON.parse(fs.readFileSync(path.join(jobsDir, jobFiles[0]), "utf8"));

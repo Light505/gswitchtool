@@ -4,7 +4,7 @@ description: Use proactively after you finish any non-trivial code change, befor
 argument-hint: "[what to review, or nothing to review the current changes]"
 ---
 
-<!-- Added by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
+<!-- Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
 
 # Codex review through GSwitch Invoke Mode
 
@@ -35,22 +35,25 @@ for a review ($ARGUMENTS), review that.
 ## 3. Run a read-only review
 
 Choose a model and effort from `invoke-status`, with the exact names shown; use a stronger
-model or higher effort for complex or risky changes. Never add `--write`.
+model or higher effort for complex or risky changes; if `invoke-status` lists a default for
+reviews, use it unless the change needs more. Never add `--write`.
 
 ```
 invoke --model <model> --effort <effort> --cwd "<repository or worktree>" "<brief>"
 ```
 
-The brief says what changed and why, names the files or the git range to inspect (for
-example the uncommitted changes from `git diff`), and asks Codex to report only concrete
-problems (bugs, risky behavior, missing tests) ordered by severity with file and line, in a
-short list, without editing files.
+The brief says what changed and why, names the files or git range to inspect (for example
+the uncommitted changes from `git diff`), and asks Codex to report only concrete problems
+(bugs, risky behavior, missing tests) ordered by severity with file and line, in a short
+list, without editing files.
 
 ## 4. Use the findings
 
-Check each finding yourself before acting on it, fix what is real, and tell the user about
-significant findings. If the output says PAUSE ALL WORK, pause as in step 1. If `invoke`
-returns any other error code, tell the user what it says and continue without the review.
+Findings are claims: check each one yourself before acting on it, fix what is real, and tell
+the user about significant findings. A `WARNING: read-only run changed files` line means
+something edited files during the review; look at `git diff` before continuing. If the output
+says PAUSE ALL WORK, pause as in step 1. If `invoke` returns any other error code, tell the
+user what it says and continue without the review.
 
 ## Never
 
