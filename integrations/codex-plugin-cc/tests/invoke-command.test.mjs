@@ -36,7 +36,8 @@ async function startFakeGSwitch({
   maxTasks = null,
   taskDefaults = null,
   exclusiveModel = null,
-  stopTask = false
+  stopTask = false,
+  killAppServerAfterMs = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -76,8 +77,17 @@ async function startFakeGSwitch({
         if (manualAfterLease) policy.invokeMode = false;
         return ok({ lease_id: "lease-1", codex_home: codexHome });
       }
-      case "run_begin":
       case "run_app_server":
+        if (killAppServerAfterMs !== null) {
+          // Like GSwitch's Stop: the App Server tree dies while its turn runs.
+          const pid = request.params.pid;
+          setTimeout(() => {
+            if (process.platform === "win32") spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"]);
+            else try { process.kill(pid, "SIGKILL"); } catch {}
+          }, killAppServerAfterMs);
+        }
+        return ok();
+      case "run_begin":
       case "run_thread":
         return ok();
       case "run_end":
@@ -611,6 +621,21 @@ test("invoke --resume-thread continues the named thread", () =>
     assert.equal(fakeState.threads.length, 2);
   }));
 
+test("a resumed thread is reported to GSwitch, so its task view shows it running", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    const first = JSON.parse(
+      (await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "first task"], ctx)).stdout
+    );
+    gswitch.requests.length = 0;
+    const resumed = await companion(
+      ["invoke", "--json", "--model", "model-a", "--effort", "high", "--resume-thread", first.threadId, "keep going"],
+      ctx
+    );
+    assert.equal(resumed.status, 0, resumed.stderr);
+    const reported = gswitch.requests.filter((request) => request.method === "run_thread");
+    assert.deepEqual(reported.map((request) => request.params.thread_id), [first.threadId]);
+  }));
+
 test("after GSwitch switches accounts, invoke resumes the same thread with the same settings", () =>
   withGSwitch({}, "usage-limit-once", async (ctx, gswitch) => {
     const result = await companion(
@@ -674,6 +699,18 @@ test("a task the user stops in GSwitch is reported as stopped, not retried", () 
     const reported = gswitch.requests.find((request) => request.method === "task_result");
     assert.deepEqual(reported.params, { lease_id: "lease-1", status: "failed", code: "STOPPED_BY_USER" });
   }));
+
+for (const [when, killAfterMs] of [["while Codex starts", 20], ["while its turn runs", 800]]) {
+  // The killed App Server can never finish its turn: without the fix this hangs
+  // or crashes, so the timeout and the parsed result are the proof.
+  test(`a task stopped ${when} ends with a result instead of waiting or crashing`, { timeout: 60_000 }, () =>
+    withGSwitch({ stopTask: true, killAppServerAfterMs: killAfterMs }, "interruptible-slow-task", async (ctx, gswitch) => {
+      const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(JSON.parse(result.stdout).code, "STOPPED_BY_USER");
+      assert.ok(gswitch.methods().includes("task_result"));
+    }));
+}
 
 test("a finished task reports its result to GSwitch", () =>
   withGSwitch({}, undefined, async (ctx, gswitch) => {

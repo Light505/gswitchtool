@@ -94,6 +94,11 @@ class AppServerClientBase {
     this.nextId += 1;
 
     return new Promise((resolve, reject) => {
+      // Modified by Light505: after the App Server is gone, nothing would ever answer.
+      if (this.exitResolved) {
+        reject(this.exitError ?? new Error("codex app-server connection closed."));
+        return;
+      }
       this.pending.set(id, { resolve, reject, method });
       this.sendMessage({ id, method, params });
     });
@@ -205,6 +210,12 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
     });
 
     this.proc.on("error", (error) => {
+      this.handleExit(error);
+    });
+
+    // Modified by Light505: writing to an App Server that was just stopped
+    // (EPIPE) must end the run, not crash this process without a result.
+    this.proc.stdin.on("error", (error) => {
       this.handleExit(error);
     });
 

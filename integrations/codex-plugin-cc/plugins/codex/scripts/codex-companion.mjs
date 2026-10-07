@@ -1808,6 +1808,8 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
+  // GSwitch learns the thread from the first run's progress, a resumed one included.
+  let reportedThreadId = null;
   let runPrompt = prompt;
   let failovers = 0;
   let verifyRetries = 0;
@@ -1854,8 +1856,9 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
             onProgress: (event) => {
               progress?.(event);
               const reported = typeof event === "object" ? event?.threadId : null;
-              if (reported && reported !== threadId) {
+              if (reported && reported !== reportedThreadId) {
                 threadId = reported;
+                reportedThreadId = reported;
                 session.request("run_thread", { lease_id: leaseId, thread_id: reported }).catch(() => {});
               }
             }

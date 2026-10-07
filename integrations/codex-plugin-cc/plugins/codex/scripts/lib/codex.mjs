@@ -604,7 +604,12 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
       completeTurn(state, response.turn);
     }
 
-    return await state.completion;
+    // Modified by Light505: when the App Server exits mid-turn (for example GSwitch
+    // stopped the task), no completion will ever arrive; end the wait.
+    const exited = client.exitPromise.then(() => {
+      throw client.exitError ?? new Error("codex app-server exited before the turn completed.");
+    });
+    return await Promise.race([state.completion, exited]);
   } finally {
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
