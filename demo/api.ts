@@ -71,6 +71,7 @@ const displayOnly = {
   appVersion: async () => ({ version: "1.8.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
+  stopInvokeTask: async () => undefined,
   invokeTasks: async () => [
     { id: "demo-task-1", started_at: Date.now() - 4 * 60_000 - 12_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "C:/work/studio-app", thread_id: "01a1f2c3-demo", running: true },
     { id: "demo-task-2", started_at: Date.now() - 40_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "C:/work/studio-app", thread_id: null, running: false },

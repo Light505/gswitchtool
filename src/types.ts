@@ -51,6 +51,8 @@ export interface InvokeTask {
   cwd: string;
   thread_id?: string | null;
   running: boolean;
+  /** The user stopped it; it disappears once its worker has ended. */
+  stopping?: boolean;
 }
 
 /** One step of a Codex task, read from Codex's own session log. */

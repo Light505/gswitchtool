@@ -2606,6 +2606,9 @@ describe("Invoke Mode", () => {
     await new Promise((resolve) => setTimeout(resolve, 350));
     await userEvent.click(within(strip).getByRole("button", { name: "Stop task?" }));
     await waitFor(() => expect(mocks.stopInvokeTask).toHaveBeenCalledWith("task-1"));
+    // The confirmed stop shows at once and the task stays listed while it ends.
+    expect(within(strip).getByRole("button", { name: "Stopping…" })).toBeDisabled();
+    expect(within(strip).getAllByText("Stopping…").length).toBe(2);
   });
 
   it("follows a running task's Codex log like a terminal", async () => {

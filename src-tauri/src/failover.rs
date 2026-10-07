@@ -183,6 +183,8 @@ pub struct WorkerView {
     pub cwd: String,
     pub thread_id: Option<String>,
     pub running: bool,
+    /// The user stopped it; it stays listed until its worker disconnects.
+    pub stopping: bool,
 }
 
 struct Lease {
@@ -355,6 +357,7 @@ impl Coordinator {
                 cwd: lease.request.cwd.clone(),
                 thread_id: lease.thread_id.clone(),
                 running: lease.run != RunState::Idle,
+                stopping: lease.stopped,
             })
             .collect::<Vec<_>>();
         workers.sort_by(|left, right| {
@@ -1639,6 +1642,7 @@ mod tests {
                 cwd: "/repo".into(),
                 thread_id: Some("thread-1201".into()),
                 running: true,
+                stopping: false,
             }]
         );
     }
@@ -2411,6 +2415,8 @@ mod tests {
         assert_eq!(coordinator.workers()[0].id, worker);
         assert_eq!(coordinator.stop_task(&worker), Ok(()));
         assert_eq!(ops.world().terminated, vec![1001]);
+        // The window shows it as stopping until the worker disconnects.
+        assert!(coordinator.workers()[0].stopping);
         assert_eq!(coordinator.end_run(&worker), Ok(RunEnd::Stopped));
         assert_eq!(
             block_on(coordinator.begin_run(&worker)),

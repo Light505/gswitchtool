@@ -2185,6 +2185,14 @@ textarea {
   content: "";
 }
 
+.task-stopping {
+  color: var(--danger);
+}
+
+.task-stopping::before {
+  background: var(--danger);
+}
+
 .task-running::before {
   background: var(--success);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
@@ -2230,6 +2238,9 @@ textarea {
 .task-log {
   display: grid;
   align-content: start;
+  /* Rows keep their content height and the log scrolls; otherwise a long log
+     squeezes each scrollable command output to a sliver. */
+  grid-auto-rows: max-content;
   gap: 8px;
   height: min(62vh, 640px);
   padding: 14px 16px;

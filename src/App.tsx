@@ -2209,11 +2209,19 @@ export default function App() {
     };
   }, [t]);
 
+  // Modified by Light505: a stopped task shows "Stopping…" at once and stays
+  // listed until GSwitch reports its worker gone, so it never seems to come back.
+  const [stoppingTasks, setStoppingTasks] = useState<ReadonlySet<string>>(() => new Set());
   const stopTask = async (id: string) => {
+    setStoppingTasks((current) => new Set(current).add(id));
     try {
       await api.stopInvokeTask(id);
-      setTasks((current) => current.filter((task) => task.id !== id));
     } catch {
+      setStoppingTasks((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
       setNotice({ kind: "error", text: t("tasks.stopFailed") });
     }
   };
@@ -3354,9 +3362,10 @@ export default function App() {
               {tasks.map((task) => {
                 const folder = folderName(task.cwd);
                 const armed = confirm.armed === `task-${task.id}`;
+                const stopping = Boolean(task.stopping) || stoppingTasks.has(task.id);
                 return (
                   <li key={task.id}>
-                    <span className={"task-state" + (task.running ? " task-running" : "")}>{t(task.running ? "tasks.running" : "tasks.waiting")}</span>
+                    <span className={"task-state" + (stopping ? " task-stopping" : task.running ? " task-running" : "")}>{t(stopping ? "tasks.stopping" : task.running ? "tasks.running" : "tasks.waiting")}</span>
                     <strong>{task.model}</strong>
                     <span className="badge">{task.reasoning_effort}</span>
                     {task.write ? <span className="badge">{t("tasks.write")}</span> : null}
@@ -3377,14 +3386,15 @@ export default function App() {
                       {t("tasks.watch")}
                     </button>
                     <button
-                      aria-label={armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
-                      className={"button " + (armed ? "button-danger" : "button-secondary")}
+                      aria-label={stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
+                      className={"button " + (armed && !stopping ? "button-danger" : "button-secondary")}
                       data-confirm={`task-${task.id}`}
+                      disabled={stopping}
                       onClick={() => confirm.click(`task-${task.id}`, () => void stopTask(task.id))}
                       type="button"
                     >
-                      <Square size={13} />
-                      {armed ? t("tasks.confirmStop") : t("tasks.stop")}
+                      {stopping ? <LoaderCircle className="spin" size={13} /> : <Square size={13} />}
+                      {stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stop")}
                     </button>
                   </li>
                 );
