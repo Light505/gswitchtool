@@ -184,7 +184,7 @@ the tool rather than from Codex:
 | --- | --- |
 | `Changed files (git): …` | What git shows changed during the run, with lines added and removed. |
 | `Verify: passed` / `Verify: FAILED` | The test command Claude named, run by the tool after Codex finished. On a failure Codex gets one automatic retry in the same thread; after that, Claude takes over. |
-| `WARNING: …` | Something does not add up, such as a file changed outside the expected paths, or a file Codex says it changed that git shows unchanged. Claude then reads the diff. |
+| `WARNING: …` | Something does not add up, such as a file changed outside the expected paths, or a file Codex says it changed that git shows unchanged. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
 | `Full answer: …` | A long answer was shortened; the whole answer is in that file. |
 | `Worktree: applied …` / `Worktree kept: …` | When Claude runs two editing tasks at once, each works in its own copy of the repository, and the result is copied back into your working tree. A kept copy (a conflict that could not be resolved, or a failed test) is left for you with its reason; nothing in your working tree changes. The copies share your real `node_modules` and Rust build folder (so nothing is reinstalled), which means an install inside a copy changes those shared folders, just as it would in your working tree. |
 
@@ -283,7 +283,15 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 ## Working on the tool
 
 Changes are made on the `dev` branch and reach the installed app only through
-`main` and `pnpm run build:installer`. To try them before that:
+`main` and a release. To try them before that:
+
+**Work with the installed app, work on Dev.** The installed app and the `codex`
+plugin (`/codex:...`) are the tools that do the work, including work on GSwitch
+itself; they change only at a release you approve. GSwitch Claude Tool (Dev) and
+the `codex-dev` plugin are only for trying a change, on throwaway tasks. Rebuilding
+or restarting Dev never touches the installed app or tasks running through it. If
+a release ever breaks the installed app, reinstall the previous version from the
+GitHub releases page; Claude can also always work without Codex (Invoke Mode off).
 
 **Test before a release (Windows).** On `dev`, run:
 
@@ -297,7 +305,7 @@ home in `~/.codex-dev`; sign in to your accounts again in Dev. The installed
 app can stay open. When you are done testing,
 `pnpm run test:dev -- --done` closes only the dev build.
 
-**The app, while changing code.** Close GSwitch Claude Tool, then run this on `dev`:
+**The app, while changing code.** On `dev`, run:
 
 ```bash
 pnpm run app:dev
@@ -307,10 +315,9 @@ It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. Dev
 uses its own accounts and settings in `~/.gswitchtool-dev` and Codex home in
 `~/.codex-dev`; sign in again there. The installed app can run at the same time.
 The dev plugin is `codex-dev`; use `/codex-dev:gswitch-invoke` and
-`/codex-dev:gswitch-review` to send tasks to the Dev build.
-
-If a dev change upgrades the account file format, an older installed app cannot
-read that file until the change reaches `main` and is installed.
+`/codex-dev:gswitch-review` to send tasks to the Dev build. After a plugin change,
+`node scripts/plugin-dev.mjs` rebuilds and updates `codex-dev` in Claude Code
+(start a new Claude Code session to use it).
 
 **The plugin.** Start Claude Code from a terminal with the repository's copy of
 the plugin instead of the installed one. In the repository folder:

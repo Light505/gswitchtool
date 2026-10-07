@@ -237,6 +237,18 @@ function taskPayload(prompt, resume) {
   const worktreeBehavior = BEHAVIOR.startsWith("invoke-worktree-");
   const changedFile = BEHAVIOR === "invoke-write" ? "outside.ts" : worktreeBehavior && !prompt.includes("Resolve the merge conflicts") ? (BEHAVIOR.includes("conflict") ? "README.md" : "task.txt") : null;
   if (changedFile) fs.writeFileSync(path.join(process.cwd(), changedFile), BEHAVIOR === "invoke-write" ? "one" + String.fromCharCode(10) + "two" + String.fromCharCode(10) : "codex task change" + String.fromCharCode(10), "utf8");
+  if (BEHAVIOR === "invoke-protected-change" || BEHAVIOR === "invoke-worktree-protected-change") {
+    const file = path.join(process.cwd(), "protected.txt");
+    fs.writeFileSync(file, fs.readFileSync(file, "utf8").replace("keep this exact rule", "rewrite this rule"), "utf8");
+  }
+  if (BEHAVIOR === "invoke-protected-delete") {
+    const file = path.join(process.cwd(), "protected.txt");
+    const lines = fs.readFileSync(file, "utf8").split(String.fromCharCode(10));
+    const start = lines.findIndex((line) => line.includes("gswitch-protected:start"));
+    const end = lines.findIndex((line, index) => index > start && line.includes("gswitch-protected:end"));
+    if (start >= 0 && end >= start) lines.splice(start, end - start + 1);
+    fs.writeFileSync(file, lines.join(String.fromCharCode(10)), "utf8");
+  }
   if (worktreeBehavior && process.env.GSWITCH_TEST_USER_CHANGE_FILE && !prompt.includes("Resolve the merge conflicts")) {
     fs.writeFileSync(process.env.GSWITCH_TEST_USER_CHANGE_FILE, "user tree change" + String.fromCharCode(10), "utf8");
   }

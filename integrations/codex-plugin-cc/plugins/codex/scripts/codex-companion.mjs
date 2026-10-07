@@ -1186,6 +1186,45 @@ function snapshotGit(cwd) {
   return { root, base, untracked: readUntracked(root) };
 }
 
+// Protected blocks: the lines from a gswitch-protected:start marker through the
+// next gswitch-protected:end marker, in any comment syntax.
+function readProtectedBlocks(root, file) {
+  try {
+    const lines = fs.readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n").split("\n");
+    const blocks = [];
+    let block = null;
+    for (const line of lines) {
+      if (block === null && line.includes("gswitch-protected:start")) block = [line];
+      else if (block !== null) {
+        block.push(line);
+        if (line.includes("gswitch-protected:end")) {
+          blocks.push(block.join("\n"));
+          block = null;
+        }
+      }
+    }
+    return blocks;
+  } catch {
+    return null;
+  }
+}
+
+function protectedTextSnapshot(root) {
+  const listed = git(root, ["grep", "-l", "-z", "-F", "gswitch-protected:start"]);
+  if (listed.status !== 0) return new Map();
+  return new Map(listed.stdout.split("\0").filter(Boolean).map((file) => [file, readProtectedBlocks(root, file)]));
+}
+
+function changedProtectedText(root, previous) {
+  if (!previous) return [];
+  return [...previous]
+    .filter(([file, blocks]) => {
+      const current = readProtectedBlocks(root, file);
+      return blocks === null || current === null || JSON.stringify(current) !== JSON.stringify(blocks);
+    })
+    .map(([file]) => file);
+}
+
 function git(cwd, args, options = {}) {
   return spawnSync("git", args, { cwd, encoding: "utf8", windowsHide: true, ...options });
 }
@@ -1529,7 +1568,7 @@ async function handleInvoke(argv) {
       ? { ...result, output: compactInvokeAnswer(result.output).text }
       : result;
     outputCommandResult(payload, renderInvokeResult(result), options.json);
-    process.exitCode = result.status === "completed" && result.worktree?.reason ? 4 : result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
+    process.exitCode = result.status === "completed" && result.worktree?.reason ? 4 : result.protected?.changed?.length ? 5 : result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
   };
 
   if (useWorktree && !write) {
@@ -1615,6 +1654,7 @@ async function handleInvoke(argv) {
     ensureCodexAvailable(actualCwd);
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
     const gitBefore = snapshotGit(actualCwd);
+    const protectedBefore = write && gitBefore ? protectedTextSnapshot(gitBefore.root) : null;
     const result = await runInvokeWithFailover({
       base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
       verifyCommand: options.verify ? String(options.verify) : null
@@ -1626,6 +1666,11 @@ async function handleInvoke(argv) {
     }
     result.diff = gitBefore ? changedGitFacts(gitBefore) : { repository: false, files: [] };
     result.warnings = [];
+    const protectedChanged = gitBefore ? changedProtectedText(gitBefore.root, protectedBefore) : [];
+    if (protectedChanged.length) {
+      result.protected = { changed: protectedChanged };
+      result.warnings.push(...protectedChanged.map((file) => `WARNING: protected text changed: ${file}`));
+    }
     const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
       .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
     if (result.diff.repository) {
@@ -1641,9 +1686,9 @@ async function handleInvoke(argv) {
       if (!write && result.diff.files.length) result.warnings.push("WARNING: read-only run changed files");
     }
     if (worktreeState) {
-      const statusAllowsApply = result.status === "completed" && (!result.verify || result.verify.passed) && !invokeInterrupted;
+      const statusAllowsApply = result.status === "completed" && (!result.verify || result.verify.passed) && !invokeInterrupted && !protectedChanged.length;
       if (!statusAllowsApply) {
-        const reason = invokeInterrupted || result.code === "STOPPED_BY_USER" ? "interrupted or stopped" : result.verify?.passed === false ? "verification failed" : "run did not complete";
+        const reason = protectedChanged.length ? "protected text changed" : invokeInterrupted || result.code === "STOPPED_BY_USER" ? "interrupted or stopped" : result.verify?.passed === false ? "verification failed" : "run did not complete";
         result.worktree = { applied: false, conflictsResolved: false, keptAt: worktreeState.worktree, reason };
         result.warnings.push(`WARNING: worktree kept: ${reason}`);
       } else {

@@ -67,7 +67,7 @@ const displayOnly = {
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
-  appVersion: async () => ({ version: "1.7.0", dev: false }),
+  appVersion: async () => ({ version: "1.8.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
   invokeTasks: async () => [

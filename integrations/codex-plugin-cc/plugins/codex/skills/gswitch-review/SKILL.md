@@ -49,6 +49,7 @@ list, without editing files.
 
 ## 4. Use the findings
 
+<!-- gswitch-protected:start -->
 Findings are claims: check each one yourself before acting on it, fix what is real, and tell
 the user about significant findings. A `WARNING: read-only run changed files` line means
 something edited files during the review; look at `git diff` before continuing. If the output
@@ -61,3 +62,4 @@ user what it says and continue without the review.
 - Choose, switch, add, or remove accounts, or change Invoke Mode or the allowed models.
 - Stop or restart Codex processes.
 - Delegate implementation work here; that needs the user's `/codex:gswitch-invoke`.
+<!-- gswitch-protected:end -->

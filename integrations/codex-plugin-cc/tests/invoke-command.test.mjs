@@ -165,6 +165,14 @@ function readText(filePath) {
   return fs.readFileSync(filePath, "utf8").replace(/\r\n/g, "\n");
 }
 
+function addProtectedText(repo) {
+  const file = path.join(repo, "protected.txt");
+  fs.writeFileSync(file, "before\n<!-- gswitch-protected:start -->\nkeep this exact rule\n<!-- gswitch-protected:end -->\nafter\n");
+  run("git", ["add", "protected.txt"], { cwd: repo });
+  run("git", ["commit", "-m", "add protected text fixture"], { cwd: repo });
+  return file;
+}
+
 test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
   withGSwitch({}, undefined, async (ctx, gswitch) => {
     const json = await companion(["invoke-status", "--json"], ctx);
@@ -329,6 +337,7 @@ test("a refused invoke shows GSwitch's message and code in text output", () =>
 
 test("invoke reports git diff facts and files outside repeatable scope globs", () =>
   withGSwitch({}, "invoke-write", async (ctx) => {
+    addProtectedText(ctx.repo);
     const result = await companion([
       "invoke", "--json", "--model", "model-a", "--effort", "high", "--write",
       "--scope", "src/**", "--scope", "tests/**,docs/**", "change a file"
@@ -339,6 +348,45 @@ test("invoke reports git diff facts and files outside repeatable scope globs", (
     assert.deepEqual([payload.diff.totalFiles, payload.diff.added, payload.diff.deleted], [1, 2, 0]);
     assert.equal(payload.output, "Changed: outside.ts — added fixture changes\nTests: fixture — passed\nOpen questions: none");
     assert.ok(payload.warnings.includes("WARNING: changed outside --scope: outside.ts"));
+    assert.equal(payload.protected, undefined);
+    assert.doesNotMatch(payload.warnings.join("\n"), /protected text changed/);
+  }));
+
+test("invoke warns and fails when Codex changes protected text", () =>
+  withGSwitch({}, "invoke-protected-change", async (ctx) => {
+    const protectedFile = addProtectedText(ctx.repo);
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "change a rule"], ctx);
+    assert.equal(result.status, 5, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.protected, { changed: ["protected.txt"] });
+    assert.ok(payload.warnings.includes("WARNING: protected text changed: protected.txt"));
+    assert.match(fs.readFileSync(protectedFile, "utf8"), /rewrite this rule/);
+  }));
+
+test("invoke warns and fails when Codex deletes a protected block", () =>
+  withGSwitch({}, "invoke-protected-delete", async (ctx) => {
+    const protectedFile = addProtectedText(ctx.repo);
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "remove a rule"], ctx);
+    assert.equal(result.status, 5, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.protected, { changed: ["protected.txt"] });
+    assert.ok(payload.warnings.includes("WARNING: protected text changed: protected.txt"));
+    assert.doesNotMatch(fs.readFileSync(protectedFile, "utf8"), /gswitch-protected:start/);
+  }));
+
+test("invoke --worktree keeps protected text changes out of the user's tree", () =>
+  withGSwitch({}, "invoke-worktree-protected-change", async (ctx) => {
+    const protectedFile = addProtectedText(ctx.repo);
+    const original = fs.readFileSync(protectedFile, "utf8");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "change a rule"], ctx);
+    assert.equal(result.status, 4, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.protected, { changed: ["protected.txt"] });
+    assert.equal(payload.worktree.applied, false);
+    assert.equal(payload.worktree.reason, "protected text changed");
+    assert.ok(payload.worktree.keptAt);
+    assert.equal(fs.readFileSync(protectedFile, "utf8"), original);
+    assert.match(fs.readFileSync(path.join(payload.worktree.keptAt, "protected.txt"), "utf8"), /rewrite this rule/);
   }));
 
 test("git facts leave out edits that were already in the working tree before the run", () =>

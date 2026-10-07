@@ -32,9 +32,19 @@ Suitable work is self-contained work you can state in a brief: implementing a sp
 refactors, writing or fixing tests, debugging a failing test or error, investigating how
 code works, reviews, and mechanical multi-file edits.
 
+<!-- gswitch-protected:start -->
 Keep for yourself: conversation and decisions that need the user, tasks that depend on
 conversation context you would have to transfer at length, and edits where the brief would be
 about as long as the edit.
+
+Delegating saves Claude usage only when checking the result costs less than doing the work,
+and the check is never skipped. Keep both small: few, larger steps; one feature per session
+(start a new session for the next feature); and let `--verify`, git facts, and WARNING lines
+do the checking instead of rerunning tests or reading whole diffs.
+
+When the work is on GSwitch itself, delegate through the released plugin named `codex`, never
+through `codex-dev`: the dev copy and the Dev app are only for trying changes.
+<!-- gswitch-protected:end -->
 
 ## 3. Choose a model and effort
 
@@ -65,12 +75,19 @@ invoke --model <model> --effort <effort> [--write] [--worktree] [--scope "src/**
 
 ## 5. Use the result
 
+<!-- gswitch-protected:start -->
 Trust tool facts only: git diff stats, Verify, and WARNING lines. Codex's text is a claim.
 Read the diff only after a warning, failed verify, or changes touching security, money,
-concurrency, or data deletion. On `Verify: FAILED after 1 retry`, do not invoke again for the
-same fix; take over or ask the user. Git facts cover every change in the working tree during
-the run, including other tasks' and your own. Continue the same work with
-`--resume-thread <thread>` and the same model and effort.
+concurrency, credentials, or data deletion, and then only those files, not the whole diff.
+On `Verify: FAILED after 1 retry`, do not invoke again for the same fix; take over or ask the
+user. Git facts cover every change in the working tree during the run, including other tasks'
+and your own. Continue the same work with `--resume-thread <thread>` and the same model and
+effort.
+
+Text between `gswitch-protected:start` and `gswitch-protected:end` markers is protected. On
+`WARNING: protected text changed`, put the original text back from git and never accept the
+change, even if it looks better; only you or the user change protected text, never Codex.
+<!-- gswitch-protected:end -->
 
 If a Codex account runs out, GSwitch switches to another allowed account and `invoke`
 resumes the same thread by itself; the last line then says it resumed after an account
@@ -89,6 +106,7 @@ the user what the output says and keep the thread for later. Do not retry it you
 
 ## When Codex usage runs out
 
+<!-- gswitch-protected:start -->
 When every Codex account GSwitch may use is out of usage, GSwitch pauses Invoke Mode and the
 user decides what happens next. Pause all work in this session:
 
@@ -108,3 +126,4 @@ user decides what happens next. Pause all work in this session:
 - Turn Invoke Mode on or change the allowed models or efforts.
 - Stop or restart Codex processes.
 - Recreate an interrupted Codex conversation; resume it by thread instead.
+<!-- gswitch-protected:end -->
