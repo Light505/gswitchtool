@@ -27,23 +27,51 @@ workers: <allowed list>`. Use the newest one.
 
 ## 2. Choose the first worker
 
-Weigh difficulty, risk, size and whether speed matters. High-risk list:
-credentials, account switching and failover, concurrency, money and data logic,
-data deletion, release and update code, security.
+Each mode has a ladder of rungs. Along every ladder, each rung both costs more
+and scores higher than the one before it, so escalating never pays more for a
+weaker worker. Scores are the
+Artificial Analysis Coding Agent Index (real agentic coding tasks); cost is the
+measured API cost per task, which tracks usage.
 
-| Mode | Task | First worker |
-| --- | --- | --- |
-| `mixed` | Small, low risk, or speed matters | Lowest allowed Claude model, effort by difficulty |
-| `mixed` | Hard, unclear, cross-module, long, or high-risk | Codex |
-| `codex` | Any | Codex, model and effort by difficulty |
-| `claude` | Any | Lowest allowed Claude model, effort by difficulty |
+| Rung | Worker | Score | Cost/task |
+| --- | --- | --- | --- |
+| H1 | `router:haiku-low` | 28 | $0.14 |
+| L | Codex `gpt-6-luna` max | 41 | $0.18 |
+| H2 | `router:haiku-medium` | 34 | $0.23 |
+| S1 | `router:sonnet-low` | 42 | $0.48 |
+| C1 | Codex `gpt-6.1-sol` low | 57 | $0.50 |
+| S2 | `router:sonnet-medium` | 46 | $0.62 |
+| C2 | Codex `gpt-6.1-sol` medium | 61 | $0.70 |
+| C3 | Codex `gpt-6.1-sol` xhigh | 63 | $1.04 |
+| S3 | `router:sonnet-high` | 55 | $1.24 |
+| S4 | `router:sonnet-xhigh` | 63 | $3.33 |
+| S5 | `router:sonnet-max` (owner approves) | 68 | $14.19 |
 
-Only use workers in the `Claude workers:` list. Worker type:
-`router:<model>-<effort>` (the hook rejects anything else, any `model`
-override, and any worker that is not allowed). Effort guide: `low` for
-renames, moves and simple wiring; `medium` for a small feature or tests from a
-spec; `high` for tricky but contained logic; `xhigh`/`max` only as escalation.
-If no Claude worker is allowed, `mixed` uses Codex and `claude` stops and asks.
+| Mode | Ladder |
+| --- | --- |
+| `mixed` | H1 → L → C1 → C2 → C3 → S5 → stop and ask |
+| `codex` | L → C1 → C2 → C3 → stop and ask |
+| `claude` | H1 → H2 → S1 → S2 → S3 → S4 → S5 → stop and ask |
+
+Start at the cheapest rung that can do the task; escalation does the rest.
+
+- H1: renames, moves, simple wiring, one-file mechanical edits.
+- L: other small bounded work, when a ~20-minute run is fine (Haiku is faster
+  when speed matters: H1 or H2).
+- C1 (`claude`: S1 or S2): a normal feature or tests from a spec.
+- C2 or C3 (`claude`: S3 or S4): hard, unclear, cross-module or long work, and
+  anything on the high-risk list (credentials, account switching and failover,
+  concurrency, money and data logic, data deletion, release and update code,
+  security).
+
+Not on any ladder: Haiku high/xhigh/max, Sol high/max, and every Opus worker.
+Each costs more than a rung above that scores higher. Use Opus only when the
+owner allows it with `/router:allow opus ...` and asks for it.
+
+Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
+model or effort `invoke-status` does not allow. Worker type:
+`router:<model>-<effort>`. The hook rejects anything else, a `model` override,
+and any worker that is not allowed.
 
 ## 3. Write the brief
 
@@ -59,8 +87,8 @@ The worker sees the repository, not this conversation. The brief states:
 
 Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief
 as prompt, no `model`. Codex: the `gswitch-delegate` skill, with `--write`,
-`--scope` and `--verify`. Approval prompts (Opus at high or above) are the
-owner's decision; if denied, take the next rung that needs no approval or stop
+`--scope` and `--verify`, at the rung's model and effort. Approval prompts
+(`sonnet-max`, Opus at high or above) are the owner's decision; if denied, stop
 and ask.
 
 ## 4. Check the result
@@ -83,19 +111,10 @@ Pass: report. Fail (verify failed or a serious review finding): next rung.
 
 ## 5. Escalation ladder
 
-Each rung gets the brief plus what the previous rung tried and why it failed.
-Claude rungs use only allowed workers: the same model one allowed effort up,
-then the next allowed model (haiku → sonnet → opus) at its lowest allowed
-effort that is at least `medium`.
-
-| Mode | Ladder |
-| --- | --- |
-| `mixed` | Claude worker → one effort up → Codex → stronger allowed Claude model → its highest allowed effort → stop and ask |
-| `codex` | Codex → higher effort → stronger model → highest allowed → stop and ask |
-| `claude` | Claude worker → one effort up → next allowed model → its highest allowed effort → stop and ask |
-
-A task sent straight to Codex starts at the Codex rung. Never resend the same
-failed fix to the same rung. After the last rung, report what each rung tried
+On a failed verify or a serious review finding, go to the next rung of the
+mode's ladder (section 2). Each rung gets the brief plus what the previous
+rung tried and why it failed. Never resend the same failed fix to the same
+rung, and never go down or sideways. After the last rung, report what each rung tried
 and ask; do not write the code yourself.
 
 ## 6. Scope requests

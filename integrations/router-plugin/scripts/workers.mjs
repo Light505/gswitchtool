@@ -7,5 +7,5 @@ export const models = [
 export const efforts = ["low", "medium", "high", "xhigh", "max"];
 export const workerNames = models.flatMap(({ short }) => efforts.map((effort) => `${short}-${effort}`));
 export function defaultAllowed() {
-  return { haiku: ["low", "medium", "high"], opus: ["medium", "high"] };
+  return { haiku: ["low", "medium"], sonnet: ["low", "medium", "high", "xhigh", "max"] };
 }

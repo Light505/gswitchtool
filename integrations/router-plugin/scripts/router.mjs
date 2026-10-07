@@ -77,7 +77,8 @@ function allowedList(allowed = config().claudeAllowed) {
 }
 function needsApproval(name) {
   const [model, effort] = name.split("-");
-  return model === "opus" && efforts.indexOf(effort) >= efforts.indexOf("high");
+  return (model === "sonnet" && effort === "max") ||
+    (model === "opus" && efforts.indexOf(effort) >= efforts.indexOf("high"));
 }
 function config() {
   const value = readJSON(data("config.json"));

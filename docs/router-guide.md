@@ -80,8 +80,9 @@ More models can be added by extending the model list in `scripts/workers.mjs`
 and regenerating the agents.
 
 The global `claudeAllowed` setting in `config.json` chooses which workers may
-start. The default is `{ "haiku": ["low", "medium", "high"], "opus":
-["medium", "high"] }`, the original five workers. Missing or corrupt settings
+start. The default is `{ "haiku": ["low", "medium"], "sonnet": ["low",
+"medium", "high", "xhigh", "max"] }`: the workers on the cost ladders below.
+Missing or corrupt settings
 use this default; unknown models and efforts are ignored. An empty object
 allows no Claude workers. Project and session settings do not override it.
 
@@ -90,11 +91,9 @@ replaces that model's efforts; `/router:allow --reset` restores the default.
 For example, `/router:allow sonnet medium,high` enables those Sonnet workers.
 Bad input leaves the config unchanged.
 
-Every Opus worker at `high`, `xhigh`, or `max` needs the owner's approval.
-The prompt names the worker and the task.
-Routing and the escalation ladder only use allowed workers: the lowest allowed
-model first, at an allowed effort that fits the task; then one allowed effort
-up; then the next allowed model.
+`sonnet-max` and every Opus worker at `high`, `xhigh`, or `max` need the
+owner's approval. The prompt names the worker and the task. Routing and the
+escalation ladders skip workers that are not allowed.
 
 Workers cannot start other agents. Each Claude worker runs in its own git
 worktree; when it finishes, a script copies the result back into the working
@@ -112,37 +111,64 @@ override is refused, and the approval rule above applies.
 
 For each task the orchestrator weighs difficulty, risk, whether speed matters,
 and (from release 2) whether it splits into independent pieces. It then writes
-a brief: goal, scope (paths), and the verify command.
-
-| Mode | Task | First worker |
-| --- | --- | --- |
-| `mixed` | Small, low risk, or speed matters | Lowest allowed Claude model (default Haiku), effort by difficulty |
-| `mixed` | Hard, unclear, cross-module, long, or on the high-risk list | Codex |
-| `codex` | Any | Codex, model and effort by difficulty |
-| `claude` | Any | Lowest allowed Claude model (default Haiku), effort by difficulty |
-
-If no Claude worker is allowed, `mixed` uses Codex and `claude` stops and asks.
+a brief (goal, scope and verify command) and starts at the cheapest rung of
+the mode's ladder that can do the task.
 
 High-risk list: credentials, account switching and failover, concurrency,
-money and data logic, data deletion, release and update code, security.
+money and data logic, data deletion, release and update code, security. Such
+tasks start at Codex Sol medium or xhigh (`claude` mode: Sonnet high or xhigh).
 
-## Escalation ladder
+## Cost ladders
 
-On a failed verify or a serious review finding, the task moves one rung up.
-The next worker gets the brief plus what the previous one tried and why it
-failed.
+The ladders come from one benchmark source, so every model is measured the same
+way: the [Artificial Analysis Coding Agent
+Index](https://artificialanalysis.ai/agents/coding-agents/comparisons/claude-code-vs-codex)
+(DeepSWE v1.1, Terminal-Bench 4.0, SWE-Atlas-QnA; Claude workers in Claude
+Code, Codex models in Codex). Its cost per task is the API cost at list prices,
+counting input, cached input, cache writes and output. It reflects both the
+price per token and how many tokens each effort really uses, which is what
+uses up a plan's limits. Data as of 2026-10-08:
+
+| Worker | Score | Cost/task | On a ladder |
+| --- | --- | --- | --- |
+| Haiku 5.5 low | 28 | $0.14 | yes |
+| Haiku 5.5 medium | 34 | $0.23 | `claude` |
+| Haiku 5.5 high | 35 | $0.36 | no: Sonnet low scores 42 for $0.48 |
+| Haiku 5.5 xhigh | 41 | $0.61 | no: Sonnet low is better and cheaper |
+| Haiku 5.5 max | 36 | $2.58 | no: worse than xhigh |
+| Sonnet 5.5 low | 42 | $0.48 | `claude` |
+| Sonnet 5.5 medium | 46 | $0.62 | `claude` |
+| Sonnet 5.5 high | 55 | $1.24 | `claude` |
+| Sonnet 5.5 xhigh | 63 | $3.33 | `claude` |
+| Sonnet 5.5 max | 68 | $14.19 | top rung, owner approves |
+| Opus 5.5 max | 66 | $13.04 | no: below Sonnet max; lower efforts not measured |
+| GPT-6 Luna max | 41 | $0.18 | `mixed`, `codex` |
+| GPT-6.1 Sol low | 57 | $0.50 | `mixed`, `codex` |
+| GPT-6.1 Sol medium | 61 | $0.70 | `mixed`, `codex` |
+| GPT-6.1 Sol high | 60 | $0.89 | no: Sol medium is better and cheaper |
+| GPT-6.1 Sol xhigh | 63 | $1.04 | `mixed`, `codex` |
+| GPT-6.1 Sol max | 60 | $1.55 | no: worse than xhigh |
+
+Along each ladder every rung costs more and scores higher than the one
+before, so an escalation never pays more for a weaker worker:
 
 | Mode | Ladder |
 | --- | --- |
-| `mixed` | Claude worker → one allowed effort up → Codex → next allowed model → its highest allowed effort → stop and ask |
-| `codex` | Codex → higher effort → stronger model → highest allowed → stop and ask |
-| `claude` | Claude worker → one allowed effort up → next allowed model → its highest allowed effort → stop and ask |
+| `mixed` | Haiku low → Luna max → Sol low → Sol medium → Sol xhigh → Sonnet max (owner approves) → stop and ask |
+| `codex` | Luna max → Sol low → Sol medium → Sol xhigh → stop and ask |
+| `claude` | Haiku low → Haiku medium → Sonnet low → medium → high → xhigh → max (owner approves) → stop and ask |
 
-With the default allow-list this is Haiku → Haiku one effort up → (Codex) →
-Opus medium → Opus high (owner approves). Rungs that need approval stop for
-the owner; a denied rung is skipped.
+On a failed verify or a serious review finding, the task moves one rung up.
+The next worker gets the brief plus what the previous one tried and why it
+failed. Rungs that are not allowed are skipped.
 
-A task routed straight to Codex starts at the Codex rung. In `codex` mode the
+Limits of the data: one benchmark of hard agentic tasks, three attempts each,
+so differences of one or two points are noise. Luna below max and Opus below
+max were not measured. A subscription plan counts usage in its own way, which
+the API cost only approximates. Recheck the source when models change, and
+update this table and the route skill together.
+
+A task routed straight to Codex starts at a Codex rung. In `codex` mode the
 orchestrator never writes the code itself after the last rung; it reports what
 each rung tried and asks.
 
@@ -217,5 +243,5 @@ Claude accounts, and hitting the limit stops the whole session.
 `pnpm run plugin:dev` also builds `router-dev`, which uses `codex-dev` and
 `~/.gswitchtool-router-dev/`. Not provable by unit tests and checked by hand in a
 real session: hook inputs for subagents, worktree isolation, the approval
-prompt for Opus at high or above, status line support in the desktop app, and Codex's
+prompt for `sonnet-max` and Opus at high or above, status line support in the desktop app, and Codex's
 behavior after a declined file change.

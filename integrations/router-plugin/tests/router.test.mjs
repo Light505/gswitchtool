@@ -73,12 +73,12 @@ test("mode and review resolve session > project > global, task words ignored", (
 
 test("allow shows, replaces, orders, enables all, disables and resets globally", (t) => {
   const f = fixture(t);
-  const defaults = "Claude workers allowed: haiku low, medium, high · opus medium, high\n";
+  const defaults = "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n";
   assert.equal(f.run(["allow"]), defaults);
   assert.equal(fs.existsSync(path.join(f.data, "config.json")), false);
   f.write("config.json", { default: "claude", projects: { [projectKey(f.project)]: { claudeAllowed: { sonnet: ["max"] } } }, extra: "keep" });
   assert.equal(f.run(["allow"]), defaults);
-  assert.equal(f.run(["allow", "sonnet", "high,low,high"]), "Claude workers allowed: haiku low, medium, high · sonnet low, high · opus medium, high\n");
+  assert.equal(f.run(["allow", "sonnet", "high,low,high"]), "Claude workers allowed: haiku low, medium · sonnet low, high\n");
   assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["low", "high"]);
   f.run(["allow", "sonnet", "medium"]);
   assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["medium"]);
@@ -119,12 +119,14 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   const f = fixture(t); f.mode("claude");
   for (const claudeAllowed of [undefined, null, [], "all", 5, { haiku: "low" }, { opus: null }, { sonnet: ["high", 42] }]) {
     f.write("config.json", { claudeAllowed });
-    assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium, high · opus medium, high\n");
+    assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n");
     assert.deepEqual(f.agent(), {});
-    assert.equal(f.decision(f.agent({ subagent_type: "router:sonnet-low" })), "deny");
+    assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
+    assert.equal(f.decision(f.agent({ subagent_type: "router:opus-low" })), "deny");
   }
   f.write("config.json", "{broken");
   assert.deepEqual(f.agent(), {});
+  assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max\n");
   f.write("config.json", { claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
   assert.equal(f.run(["allow"]), "Claude workers allowed: sonnet low, max\n");
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
@@ -138,8 +140,8 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
 
 test("allow-list denies before low usage, after model override and codex mode", (t) => {
   const f = fixture(t); f.mode("claude");
-  assert.equal(f.agent({ subagent_type: "router:sonnet-medium" }).hookSpecificOutput.permissionDecisionReason,
-    "router:sonnet-medium is not allowed. Allowed: haiku low, medium, high · opus medium, high. Pick an allowed worker or send the task to Codex.");
+  assert.equal(f.agent({ subagent_type: "router:opus-low" }).hookSpecificOutput.permissionDecisionReason,
+    "router:opus-low is not allowed. Allowed: haiku low, medium · sonnet low, medium, high, xhigh, max. Pick an allowed worker or send the task to Codex.");
   f.run(["allow", "sonnet", "medium"]);
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-medium" }, { tool_name: "Task" }), {});
   const pending = f.read("sessions/s1.json").pending.length;
@@ -157,7 +159,7 @@ test("approval and low usage apply across every generated worker", (t) => {
   for (const { short } of models) for (const effort of efforts) {
     const type = `router:${short}-${effort}`;
     const result = f.agent({ subagent_type: type, description: "Fix parser" });
-    const ask = short === "opus" && ["high", "xhigh", "max"].includes(effort);
+    const ask = (short === "sonnet" && effort === "max") || (short === "opus" && ["high", "xhigh", "max"].includes(effort));
     assert.equal(f.decision(result), ask ? "ask" : undefined, type);
     if (ask) assert.equal(result.hookSpecificOutput.permissionDecisionReason, `Approve ${type} for task: Fix parser`);
   }
@@ -256,11 +258,11 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (session) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium, high · opus medium, high");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (session) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium, high · opus medium, high$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max$/);
   f.run(["allow", "sonnet", "max,low"]);
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium, high · sonnet low, max · opus medium, high$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max$/);
   f.write("config.json", { claudeAllowed: {} });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none$/);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});
@@ -279,6 +281,7 @@ test("Agent and Task permissions, fixed models, low usage, scope, approval and h
   f.write("usage.json", { fiveHour: { usedPercentage: 99, resetsAt: Date.now() / 1000 - 1 } });
   assert.equal(f.decision(f.agent({ prompt: "no scope" })), "deny");
   assert.equal(f.decision(f.agent({ prompt: "SCOPE: \nTask" })), "deny");
+  f.run(["allow", "opus", "high"]);
   assert.equal(f.decision(f.agent({ subagent_type: "router:opus-high", description: "Fix parser" })), "ask");
   assert.match(f.agent({ subagent_type: "router:opus-high", description: "Fix parser" }).hookSpecificOutput.permissionDecisionReason, /Fix parser/);
   assert.match(f.agent({ subagent_type: "general-purpose" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
@@ -509,7 +512,8 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   assert.deepEqual(call("router-dev:haiku-low"), {});
   assert.equal(call("router:haiku-low").hookSpecificOutput.permissionDecision, "deny");
   f.run(["allow", "sonnet", "max"], "", devScript);
-  assert.deepEqual(call("router-dev:sonnet-max"), {});
+  assert.equal(call("router-dev:sonnet-max").hookSpecificOutput.permissionDecision, "ask");
+  f.run(["allow", "opus", "high"], "", devScript);
   assert.equal(call("router-dev:opus-low").hookSpecificOutput.permissionDecision, "deny");
   assert.equal(call("router-dev:opus-high").hookSpecificOutput.permissionDecision, "ask");
   fs.writeFileSync(path.join(dev, "stale.md"), "stale");
