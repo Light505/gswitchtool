@@ -299,6 +299,7 @@ pub fn run() {
             commands::open_latest_release,
             commands::get_app_version,
             commands::check_app_update,
+            commands::check_app_rollback,
             commands::install_app_update,
             commands::import_auth_json,
             commands::import_auth_file,

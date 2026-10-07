@@ -17,8 +17,9 @@ interface AppUpdateView {
   notes: string | null;
 }
 
-async function check(): Promise<AvailableUpdate | null> {
-  const found = await invoke<AppUpdateView | null>("check_app_update");
+// Modified by Light505: updates and rollback share the signed native install path.
+async function check(command: "check_app_update" | "check_app_rollback"): Promise<AvailableUpdate | null> {
+  const found = await invoke<AppUpdateView | null>(command);
   if (!found) {
     return null;
   }
@@ -27,12 +28,13 @@ async function check(): Promise<AvailableUpdate | null> {
     downloadAndInstall: (onEvent) => {
       const onEventChannel = new Channel<UpdateProgressEvent>();
       onEventChannel.onmessage = (event) => onEvent?.(event);
-      return invoke<void>("install_app_update", { onEvent: onEventChannel });
+      return invoke<void>("install_app_update", { version: found.version, onEvent: onEventChannel });
     },
   };
 }
 
 export const updater = {
-  check,
+  check: () => check("check_app_update"),
+  checkRollback: () => check("check_app_rollback"),
   relaunch,
 };

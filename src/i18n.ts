@@ -190,6 +190,13 @@ const en = {
   "update.installing": "Starting installer",
   "update.invokeBusy": "Claude's delegated Codex work is running. Update after it finishes, so it is not interrupted.",
   "update.check": "Check for updates",
+  // Added by Light505: installed-app rollback confirmation and failures.
+  "rollback.check": "Roll back to previous version",
+  "rollback.confirm": "Reinstall GSwitch Claude Tool v{version}?",
+  "rollback.warning": "Your accounts and settings stay; settings added after v{version} may be ignored by the older version.",
+  "rollback.install": "Reinstall GSwitch Claude Tool",
+  "rollback.error.noPrevious": "No previous published version is available.",
+  "rollback.error.check": "Could not check for a previous version. Check your connection and try again.",
   "update.upToDate": "GSwitch Claude Tool is up to date.",
   "update.upToDateVersion": "GSwitch Claude Tool {version} is up to date.",
   "app.version": "Version {version}",
@@ -197,7 +204,7 @@ const en = {
   "update.error.disabled": "The dev build does not update itself. Updates come to the installed app.",
   "update.error.signIn": "Git has no saved GitHub sign-in. Run git pull in the gswitchtool repository once, then check again.",
   "update.error.access": "GitHub refused your sign-in for the gswitchtool repository. Check that your account can open it.",
-  "update.error.untrusted": "The latest release does not point to the gswitchtool repository, so it was not offered.",
+  "update.error.untrusted": "The selected release does not point to the gswitchtool repository, so it was not offered.",
   "update.error.check": "Could not check for updates. Check your connection and try again.",
   "update.restart": "Restart now",
   "update.restartRequired": "The update is installed. Restart GSwitch to finish.",
@@ -504,6 +511,13 @@ const en = {
 } as const;
 
 const zhCN: Record<keyof typeof en, string> = {
+  // Added by Light505: installed-app rollback.
+  "rollback.check": "回退到上一版本",
+  "rollback.confirm": "重新安装 GSwitch Claude Tool v{version}？",
+  "rollback.warning": "您的账户和设置会保留；v{version} 之后添加的设置可能会被旧版本忽略。",
+  "rollback.install": "重新安装 GSwitch Claude Tool",
+  "rollback.error.noPrevious": "没有可用的已发布旧版本。",
+  "rollback.error.check": "无法检查旧版本。请检查网络连接后重试。",
   "activity.usage": "{total} tokens · 缓存 {cached}",
   "activity.summaryTitle": "过去 7 天的模型和推理强度统计",
   "activity.summaryLine": "任务 {tasks} · {tokens} tokens",
@@ -699,7 +713,7 @@ const zhCN: Record<keyof typeof en, string> = {
   "update.error.disabled": "开发版不会自动更新。更新仅提供给已安装的应用。",
   "update.error.signIn": "Git 没有保存的 GitHub 登录。请在 gswitchtool 仓库中运行一次 git pull，然后重新检查。",
   "update.error.access": "GitHub 拒绝了你对 gswitchtool 仓库的登录。请确认你的账号可以访问它。",
-  "update.error.untrusted": "最新发布未指向 gswitchtool 仓库，因此未提供更新。",
+  "update.error.untrusted": "所选发布未指向 gswitchtool 仓库，因此未提供安装。",
   "update.error.check": "无法检查更新。请检查网络后重试。",
   "update.restart": "立即重启",
   "update.restartRequired": "更新已安装。重启 GSwitch 以完成更新。",

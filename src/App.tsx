@@ -10,6 +10,7 @@ import {
   Copy,
   ChevronDown,
   ChevronUp,
+  CircleArrowDown,
   CircleArrowUp,
   History,
   Square,
@@ -142,6 +143,7 @@ type UpdatePhase = "available" | "downloading" | "installing" | "ready" | "error
 interface PendingUpdate {
   update: AvailableUpdate;
   delivery: UpdateDelivery;
+  rollback?: boolean;
 }
 
 function fileFilters(t: Translator) {
@@ -1141,13 +1143,15 @@ function UpdateNotice({
 }) {
   const downloading = phase === "downloading" || phase === "installing";
   const isReleaseDownload = pending.delivery === "release_download";
-  const title = t(({
-    available: "update.available",
-    downloading: "update.downloadTitle",
-    installing: "update.installTitle",
-    ready: "update.readyTitle",
-    error: "update.failedTitle",
-  } as const)[phase], { version: pending.update.version });
+  const title = pending.rollback && phase === "available"
+    ? t("rollback.confirm", { version: pending.update.version })
+    : t(({
+      available: "update.available",
+      downloading: "update.downloadTitle",
+      installing: "update.installTitle",
+      ready: "update.readyTitle",
+      error: "update.failedTitle",
+    } as const)[phase], { version: pending.update.version });
   const primaryLabel = isReleaseDownload
     ? t("update.download")
     : phase === "ready"
@@ -1158,7 +1162,7 @@ function UpdateNotice({
           ? t("update.installing")
           : downloading
             ? t("update.downloading", { progress: progress ?? "…" })
-            : t("update.install");
+            : t(pending.rollback ? "rollback.install" : "update.install");
 
   return (
     <section aria-label={title} className="update-notice">
@@ -1168,6 +1172,8 @@ function UpdateNotice({
           : phase === "downloading" ? <p>{t("update.downloading", { progress: progress ?? "…" })}</p>
           : phase === "ready" ? <p>{t("update.restartRequired")}</p>
           : phase === "error" ? <p>{t("update.failed")}</p>
+          : pending.rollback && phase === "available"
+            ? <p>{t("rollback.warning", { version: pending.update.version })}</p>
           : null}
       </div>
       <div className="update-actions">
@@ -2312,10 +2318,14 @@ export default function App() {
     api.appVersion().then(setAppVersion, () => setAppVersion(null));
   }, []);
 
-  const checkForUpdateNow = async () => {
+  // Modified by Light505: a pending confirmation owns the updater slot until dismissed.
+  const checkForUpdateNow = async (rollback = false) => {
+    if (updateCheckInFlight.current) return;
+    updateCheckInFlight.current = true;
+    let offered = false;
     setUpdateChecking(true);
     try {
-      const update = await updater.check();
+      const update = await (rollback ? updater.checkRollback() : updater.check());
       if (!update) {
         setNotice({
           kind: "success",
@@ -2325,7 +2335,10 @@ export default function App() {
       }
       // Asking again brings back a version dismissed with Later.
       dismissedUpdateVersions.current.delete(update.version);
-      setPendingUpdate({ update, delivery: await api.updateDelivery() });
+      const delivery = await api.updateDelivery();
+      if (rollback && delivery === "release_download") throw "ROLLBACK_UNAVAILABLE";
+      setPendingUpdate({ update, delivery, rollback });
+      offered = true;
       setUpdatePhase("available");
       setUpdateProgress(null);
     } catch (error) {
@@ -2334,10 +2347,12 @@ export default function App() {
         GITHUB_SIGN_IN_MISSING: "update.error.signIn",
         GITHUB_ACCESS_DENIED: "update.error.access",
         UNTRUSTED_RELEASE: "update.error.untrusted",
-      } as const)[String(error) as "UPDATES_DISABLED"] ?? "update.error.check";
+        NO_PREVIOUS_RELEASE: "rollback.error.noPrevious",
+      } as const)[String(error) as "UPDATES_DISABLED"] ?? (rollback ? "rollback.error.check" : "update.error.check");
       setNotice({ kind: "error", text: t(key) });
     } finally {
       setUpdateChecking(false);
+      if (!offered) updateCheckInFlight.current = false;
     }
   };
 
@@ -2346,6 +2361,8 @@ export default function App() {
       return;
     }
     updateCheckInFlight.current = true;
+    let offered = false;
+    setUpdateChecking(true);
     try {
       const update = await updater.check();
       if (!update || dismissedUpdateVersions.current.has(update.version)) {
@@ -2353,13 +2370,15 @@ export default function App() {
       }
       const delivery = await api.updateDelivery();
       setPendingUpdate({ update, delivery });
+      offered = true;
       setUpdatePhase("available");
       setUpdateProgress(null);
     } catch {
       // A failed background check is intentionally quiet. A user-initiated
       // install reports an actionable retry state instead.
     } finally {
-      updateCheckInFlight.current = false;
+      setUpdateChecking(false);
+      if (!offered) updateCheckInFlight.current = false;
     }
   }, []);
 
@@ -2622,10 +2641,11 @@ export default function App() {
   };
 
   const dismissUpdate = () => {
-    if (pendingUpdate) {
+    if (pendingUpdate && !pendingUpdate.rollback) {
       dismissedUpdateVersions.current.add(pendingUpdate.update.version);
     }
     setPendingUpdate(null);
+    updateCheckInFlight.current = false;
     setUpdatePhase("available");
     setUpdateProgress(null);
   };
@@ -3194,12 +3214,22 @@ export default function App() {
           <button
             aria-label={t("update.check")}
             className="icon-button"
-            disabled={updateChecking}
+            disabled={updateChecking || pendingUpdate !== null}
             onClick={() => void checkForUpdateNow()}
             title={t("update.check")}
             type="button"
           >
             {updateChecking ? <LoaderCircle className="spin" size={17} /> : <CircleArrowUp size={17} />}
+          </button>
+          <button
+            aria-label={t("rollback.check")}
+            className="icon-button"
+            disabled={updateChecking || pendingUpdate !== null}
+            onClick={() => void checkForUpdateNow(true)}
+            title={t("rollback.check")}
+            type="button"
+          >
+            <CircleArrowDown size={17} />
           </button>
           <PopoverMenu
             className="language-menu appearance-menu"

@@ -32,6 +32,29 @@ use `~/.gswitchtool`, adopted once from the installed identity's AppData folder
 by 1.1.2. The upstream release workflow and scripts below name upstream's
 artifacts and need upstream's signing setup; they are not used for this fork.
 
+## Roll back
+
+In the installed app, choose **Roll back to previous version** next to
+**Check for updates**, then confirm the displayed version. It selects the
+highest stable published version below the running version among the latest
+50 releases. The existing signed installer path and running Invoke task guard
+apply; Dev disables rollback like updates.
+
+If the app will not start, close it and run `corepack pnpm run rollback` from this
+checkout to open the normal Windows installer for the stable release before
+GitHub's latest published release. Use `corepack pnpm run rollback -- --to 1.7.0` for a
+specific version, or `corepack pnpm run rollback -- --list` to see available versions.
+Git must have a saved GitHub sign-in with access to `Light505/gswitchtool`.
+The command downloads the installer through the private repository's asset API
+into a temporary folder and follows redirects without the GitHub credential.
+The app verifies the Tauri signature; the recovery command opens the release's
+normal installer directly.
+
+Rollback leaves accounts and settings in place. Settings added after the target
+version may be ignored. The command refuses versions before 1.1.2, which keep their data in AppData
+and would open without the accounts in `~/.gswitchtool`. Rollback does not
+convert or restore data.
+
 ## Current release policy
 
 GSwitch's first public release was version `1.0.0`. The maintainer waived

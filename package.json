@@ -16,6 +16,7 @@
     "build:installer": "node scripts/build-installer.mjs",
     "app:dev": "tauri dev --release",
     "release": "node scripts/release.mjs",
+    "rollback": "node scripts/rollback.mjs",
     "test:dev": "node scripts/test-dev.mjs",
     "claude:dev": "node scripts/claude-dev.mjs",
     "plugin:dev": "node scripts/plugin-dev.mjs"

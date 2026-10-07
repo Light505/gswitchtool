@@ -260,16 +260,23 @@ pub async fn check_app_update(app: AppHandle) -> Result<Option<AppUpdateView>, A
     app_update::check(&app).await
 }
 
+/// Added by Light505: the user may reinstall the nearest older signed release.
+#[tauri::command]
+pub async fn check_app_rollback(app: AppHandle) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
+    app_update::check_rollback(&app).await
+}
+
 /// Installs the update the user agreed to, unless Claude's delegated Codex
 /// work is running, which the restart would stop.
 #[tauri::command]
 pub async fn install_app_update(
     app: AppHandle,
+    version: String,
     coordinator: State<'_, Arc<Coordinator>>,
     on_event: Channel<DownloadEvent>,
 ) -> Result<(), AppUpdateFailure> {
     let (running, failover) = coordinator.status();
-    app_update::install(&app, running > 0 || failover, on_event).await
+    app_update::install(&app, running > 0 || failover, &version, on_event).await
 }
 
 fn update_delivery_for(os: &str, appimage: bool) -> UpdateDelivery {

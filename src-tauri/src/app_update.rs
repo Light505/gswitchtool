@@ -43,6 +43,7 @@ pub enum AppUpdateFailure {
     /// Claude's delegated Codex work is running; updating would stop it.
     InvokeBusy,
     NoUpdate,
+    NoPreviousRelease,
     InstallFailed,
 }
 
@@ -93,12 +94,45 @@ pub async fn check<R: Runtime>(
     .await
     .map_err(|_| AppUpdateFailure::Unavailable)??;
     let Some(manifest) = manifest else {
+        *app.state::<AppUpdateState>()
+            .pending
+            .lock()
+            .expect("update state") = None;
         return Ok(None);
     };
+    check_manifest(app, token, manifest, None).await
+}
+
+/// Added by Light505: offer only the nearest older stable installed-app release.
+pub async fn check_rollback<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
+    if !updates_enabled(app) {
+        return Err(AppUpdateFailure::UpdatesDisabled);
+    }
+    let current = &app.package_info().version;
+    let current = [current.major, current.minor, current.patch];
+    let (token, version, manifest) = tauri::async_runtime::spawn_blocking(move || {
+        let token = github_token()?;
+        let releases = published_releases(&token)?;
+        let (version, manifest) = previous_release(&releases, current)?;
+        Ok::<_, AppUpdateFailure>((token, version, manifest))
+    })
+    .await
+    .map_err(|_| AppUpdateFailure::Unavailable)??;
+    check_manifest(app, token, manifest, Some(version)).await
+}
+
+async fn check_manifest<R: Runtime>(
+    app: &AppHandle<R>,
+    token: String,
+    manifest: String,
+    target_version: Option<String>,
+) -> Result<Option<AppUpdateView>, AppUpdateFailure> {
     let endpoint = manifest
         .parse()
         .map_err(|_| AppUpdateFailure::UntrustedRelease)?;
-    let update = app
+    let builder = app
         .updater_builder()
         .endpoints(vec![endpoint])
         .and_then(|builder| builder.header("Authorization", format!("Bearer {token}")))
@@ -107,7 +141,16 @@ pub async fn check<R: Runtime>(
         .and_then(|builder| builder.header("Accept", "application/octet-stream"))
         .and_then(|builder| builder.header("User-Agent", USER_AGENT))
         .and_then(|builder| builder.header("X-GitHub-Api-Version", "2022-11-28"))
-        .and_then(|builder| builder.build())
+        .map_err(|_| AppUpdateFailure::Unavailable)?;
+    let rollback = target_version.is_some();
+    let builder = match target_version {
+        Some(target) => {
+            builder.version_comparator(move |_, release| rollback_target_matches(&target, &release))
+        }
+        None => builder,
+    };
+    let update = builder
+        .build()
         .map_err(|_| AppUpdateFailure::Unavailable)?
         .check()
         .await
@@ -117,7 +160,11 @@ pub async fn check<R: Runtime>(
             .pending
             .lock()
             .expect("update state") = None;
-        return Ok(None);
+        return if rollback {
+            Err(AppUpdateFailure::UntrustedRelease)
+        } else {
+            Ok(None)
+        };
     };
     // The download carries the credential, so it may go only to this
     // repository's release assets.
@@ -140,20 +187,25 @@ pub async fn check<R: Runtime>(
 pub async fn install<R: Runtime>(
     app: &AppHandle<R>,
     invoke_busy: bool,
+    version: &str,
     events: Channel<DownloadEvent>,
 ) -> Result<(), AppUpdateFailure> {
     if invoke_busy {
         return Err(AppUpdateFailure::InvokeBusy);
     }
-    let update = app
-        .state::<AppUpdateState>()
-        .pending
-        .lock()
-        .expect("update state")
-        .take()
-        .ok_or(AppUpdateFailure::NoUpdate)?;
+    let update = {
+        let state = app.state::<AppUpdateState>();
+        let mut pending = state.pending.lock().expect("update state");
+        if !pending
+            .as_ref()
+            .is_some_and(|update| update.version == version)
+        {
+            return Err(AppUpdateFailure::NoUpdate);
+        }
+        pending.take().ok_or(AppUpdateFailure::NoUpdate)?
+    };
     let mut started = false;
-    update
+    let result = update
         .download_and_install(
             |chunk_length, content_length| {
                 if !started {
@@ -167,7 +219,16 @@ pub async fn install<R: Runtime>(
             },
         )
         .await
-        .map_err(|_| AppUpdateFailure::InstallFailed)
+        .map_err(|_| AppUpdateFailure::InstallFailed);
+    if result.is_err() {
+        // Keep the confirmed signed target available for the existing Retry UI.
+        let state = app.state::<AppUpdateState>();
+        let mut pending = state.pending.lock().expect("update state");
+        if pending.is_none() {
+            *pending = Some(update);
+        }
+    }
+    result
 }
 
 fn is_release_asset(url: &str) -> bool {
@@ -177,6 +238,12 @@ fn is_release_asset(url: &str) -> bool {
 
 #[derive(Deserialize)]
 struct Release {
+    #[serde(default)]
+    tag_name: String,
+    #[serde(default)]
+    draft: bool,
+    #[serde(default)]
+    prerelease: bool,
     assets: Vec<Asset>,
 }
 
@@ -184,6 +251,71 @@ struct Release {
 struct Asset {
     name: String,
     url: String,
+}
+
+/// Stable vX.Y.Z tags only; numeric ordering without adding a dependency.
+fn release_version(tag: &str) -> Option<[u64; 3]> {
+    let parts: Vec<_> = tag.strip_prefix('v')?.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let mut version = [0; 3];
+    for (index, part) in parts.iter().enumerate() {
+        if part.is_empty()
+            || (part.len() > 1 && part.starts_with('0'))
+            || !part.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        version[index] = part.parse().ok()?;
+    }
+    Some(version)
+}
+
+fn rollback_target_matches(target: &str, release: &tauri_plugin_updater::RemoteRelease) -> bool {
+    release.version.to_string() == target
+}
+
+fn previous_release(
+    releases: &[Release],
+    current: [u64; 3],
+) -> Result<(String, String), AppUpdateFailure> {
+    let release = releases
+        .iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter_map(|release| release_version(&release.tag_name).map(|version| (version, release)))
+        .filter(|(version, _)| *version < current)
+        .max_by_key(|(version, _)| *version)
+        .map(|(_, release)| release)
+        .ok_or(AppUpdateFailure::NoPreviousRelease)?;
+    Ok((release.tag_name[1..].to_string(), manifest_url(release)?))
+}
+
+fn published_releases(token: &str) -> Result<Vec<Release>, AppUpdateFailure> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let response = reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(5))
+        .timeout(Duration::from_secs(15))
+        .build()
+        .map_err(|_| AppUpdateFailure::Unavailable)?
+        .get(format!("{API}/repos/{REPOSITORY}/releases?per_page=50"))
+        .bearer_auth(token)
+        .header(reqwest::header::ACCEPT, "application/vnd.github+json")
+        .header(reqwest::header::USER_AGENT, USER_AGENT)
+        .header("X-GitHub-Api-Version", "2022-11-28")
+        .send()
+        .map_err(|_| AppUpdateFailure::Unavailable)?;
+    match response.status().as_u16() {
+        200 => {}
+        401 | 403 | 404 => return Err(AppUpdateFailure::GithubAccessDenied),
+        _ => return Err(AppUpdateFailure::Unavailable),
+    }
+    let mut body = Vec::new();
+    response
+        .take(4 * 1024 * 1024)
+        .read_to_end(&mut body)
+        .map_err(|_| AppUpdateFailure::Unavailable)?;
+    serde_json::from_slice(&body).map_err(|_| AppUpdateFailure::Unavailable)
 }
 
 /// The API address of the latest published release's manifest, or `None`
@@ -328,6 +460,81 @@ fn git_command() -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn release(tag: &str) -> Release {
+        serde_json::from_value(serde_json::json!({
+            "tag_name": tag, "draft": false, "prerelease": false,
+            "assets": [{ "name": "latest.json", "url": "https://api.github.com/repos/Light505/gswitchtool/releases/assets/2" }]
+        })).expect("release")
+    }
+
+    #[test]
+    fn rollback_selects_only_the_highest_older_stable_release() {
+        let mut draft = release("v1.10.9");
+        draft.draft = true;
+        let mut prerelease = release("v1.10.8");
+        prerelease.prerelease = true;
+        let releases = [
+            release("v1.9.0"),
+            release("v1.10.0"),
+            release("v1.11.0"),
+            release("v2.0.0"),
+            draft,
+            prerelease,
+            release("1.10.7"),
+            release("v1.10.6-beta.1"),
+            release("v1.10.5+build"),
+            release("v1.010.4"),
+            release("v1.10"),
+            release("v1.10.3.0"),
+        ];
+        assert_eq!(
+            previous_release(&releases, [1, 11, 0]),
+            Ok((
+                "1.10.0".into(),
+                "https://api.github.com/repos/Light505/gswitchtool/releases/assets/2".into()
+            ))
+        );
+        assert_eq!(
+            previous_release(&releases, [1, 9, 0]),
+            Err(AppUpdateFailure::NoPreviousRelease)
+        );
+        assert_eq!(
+            previous_release(&[], [1, 11, 0]),
+            Err(AppUpdateFailure::NoPreviousRelease)
+        );
+    }
+
+    #[test]
+    fn rollback_does_not_skip_a_missing_or_untrusted_selected_manifest() {
+        let mut missing = release("v1.10.0");
+        missing.assets.clear();
+        assert_eq!(
+            previous_release(&[release("v1.9.0"), missing], [1, 11, 0]),
+            Err(AppUpdateFailure::Unavailable)
+        );
+        let mut untrusted = release("v1.10.0");
+        untrusted.assets[0].url = "https://example.com/latest.json".into();
+        assert_eq!(
+            previous_release(&[release("v1.9.0"), untrusted], [1, 11, 0]),
+            Err(AppUpdateFailure::UntrustedRelease)
+        );
+    }
+
+    #[test]
+    fn rollback_comparator_accepts_only_the_selected_manifest_version() {
+        for version in ["1.7.0", "1.6.0", "1.8.0", "1.7.0-beta.1", "1.7.0+other"] {
+            let manifest = serde_json::from_value(serde_json::json!({
+                "version": version, "platforms": {}
+            }))
+            .expect("updater manifest");
+            assert_eq!(
+                rollback_target_matches("1.7.0", &manifest),
+                version == "1.7.0",
+                "{version}"
+            );
+        }
+    }
 
     #[test]
     fn the_credential_may_go_only_to_this_repositorys_release_assets() {

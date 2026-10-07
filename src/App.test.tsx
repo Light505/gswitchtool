@@ -83,6 +83,7 @@ const mocks = vi.hoisted(() => ({
 
 const updaterMocks = vi.hoisted(() => ({
   check: vi.fn(),
+  checkRollback: vi.fn(),
   relaunch: vi.fn(),
 }));
 
@@ -269,6 +270,7 @@ function prepareDefaults() {
   mocks.resumeInvoke.mockResolvedValue(undefined);
   mocks.onInvokePaused.mockResolvedValue(() => undefined);
   updaterMocks.check.mockResolvedValue(null);
+  updaterMocks.checkRollback.mockResolvedValue(null);
   updaterMocks.relaunch.mockResolvedValue(undefined);
   webviewMocks.onDragDropEvent.mockResolvedValue(() => undefined);
 }
@@ -2407,6 +2409,31 @@ describe("GSwitch account workspace", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Update GSwitch" }));
     expect(await screen.findByText(/Claude's delegated Codex work is running\. Update after it finishes/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update GSwitch" })).toBeEnabled();
+  });
+
+  // Added by Light505: rollback requires confirmation and shares update progress/guards.
+  it("confirms the rollback target before installing and blocks other checks", async () => {
+    const downloadAndInstall = vi.fn().mockRejectedValue("INVOKE_BUSY");
+    updaterMocks.checkRollback.mockResolvedValue({ version: "1.7.0", downloadAndInstall });
+    mocks.updateDelivery.mockResolvedValue("installer_exits");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
+    expect(await screen.findByText("Reinstall GSwitch Claude Tool v1.7.0?")).toBeInTheDocument();
+    expect(screen.getByText("Your accounts and settings stay; settings added after v1.7.0 may be ignored by the older version.")).toBeInTheDocument();
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: "Reinstall GSwitch Claude Tool" }));
+    expect(await screen.findByText(/Claude's delegated Codex work is running/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reinstall GSwitch Claude Tool" })).toBeEnabled();
+    await userEvent.click(screen.getByRole("button", { name: "Later" }));
+    expect(screen.getByRole("button", { name: "Check for updates" })).toBeEnabled();
+  });
+
+  it("reports when no previous release exists", async () => {
+    updaterMocks.checkRollback.mockRejectedValue("NO_PREVIOUS_RELEASE");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
+    expect(await screen.findByText("No previous published version is available.")).toBeInTheDocument();
   });
 
   it("restarts only after a macOS or AppImage update finishes", async () => {

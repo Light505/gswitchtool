@@ -280,6 +280,25 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | *… is already open. Close it before opening …* | That same build is already open. Close it before opening another copy. Dev and installed can run side by side. |
 | Building fails while downloading libsodium | Some networks block its plain-HTTP download. Download `LATEST.tar.gz`, `libsodium-1.0.22-stable-msvc.zip`, and their `.minisig` files from https://download.libsodium.org/libsodium/releases/ into one folder and set `SODIUM_DIST_DIR` to it; the build still checks their signatures. |
 
+## Roll back
+
+Choose **Roll back to previous version** next to **Check for updates** in the
+installed app and confirm **Reinstall GSwitch Claude Tool vX.Y.Z?**. It offers
+the nearest older stable release and uses the same signed download and progress
+as an update. Wait for Claude's delegated Codex work to finish before installing.
+Dev does not update or roll back itself.
+
+If the app will not start, close GSwitch and run `corepack pnpm run rollback` from the
+repository folder. It opens the normal Windows installer for the release before
+GitHub's latest published one. To choose a version, run
+`corepack pnpm run rollback -- --to 1.7.0`; to see versions, run
+`corepack pnpm run rollback -- --list`. Git needs your saved GitHub sign-in for the private
+repository (run `git pull` once if needed).
+
+Your accounts and settings stay; settings added after the chosen version may be
+ignored. Versions before 1.1.2 are refused because they cannot see your saved
+accounts. This does not restore an older copy of your data.
+
 ## Working on the tool
 
 Changes are made on the `dev` branch and reach the installed app only through
