@@ -13,6 +13,7 @@ smallest owner needed for the task.
 | Test commands, CI, and proof boundaries | [`testing.md`](./testing.md) |
 | Windows/macOS packaging, signing, and release gates | [`release.md`](./release.md) |
 | Installing and using Invoke Mode with Claude Code | [`invoke-mode-guide.md`](./invoke-mode-guide.md) |
+| Routing tasks between Haiku, Codex and Opus workers | [`router-guide.md`](./router-guide.md) |
 
 ## Documentation model
 
