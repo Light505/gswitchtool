@@ -11,6 +11,8 @@ import {
   ChevronDown,
   ChevronUp,
   CircleArrowUp,
+  History,
+  Square,
   Palette as PaletteIcon,
   Download,
   FileJson,
@@ -68,8 +70,11 @@ import type {
   CodexCliInfo,
   CodexCliUpdateFailure,
   InvocationProfile,
+  ActivityEntry,
   AppVersion,
   InvokePause,
+  InvokeTask,
+  PausedThread,
   InvokeSettings,
   LiveAccountView,
   MigrationCandidate,
@@ -105,6 +110,7 @@ type Dialog =
   | "wake"
   | "codex-cli"
   | "invoke-settings"
+  | "activity"
   | null;
 
 type AddMethod = "start" | "oauth" | "json" | "api-key" | "migration";
@@ -1180,6 +1186,119 @@ function UpdateNotice({
 
 // The whitelist is a set of model/effort pairs: efforts differ per model, so
 // each model lists only the efforts the installed Codex reports for it.
+/** A thread ID shortened to its first characters for display. */
+function shortThread(id: string) {
+  return id.slice(0, 8);
+}
+
+function folderName(path: string) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+function elapsedText(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours) return `${hours}h ${minutes}m`;
+  return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+function activityText(entry: ActivityEntry, name: (id: string) => string, t: Translator, formatLocale: string) {
+  const thread = (id?: string | null) => (id ? t("activity.thread", { thread: shortThread(id) }) : "");
+  switch (entry.kind) {
+    case "task_started":
+      return t("activity.taskStarted", {
+        model: entry.model,
+        effort: entry.effort,
+        write: entry.write ? t("activity.canEdit") : "",
+        folder: folderName(entry.cwd),
+      });
+    case "task_ended":
+      if (entry.status === "completed") return t("activity.taskCompleted", { model: entry.model, thread: thread(entry.thread_id) });
+      if (entry.status === "stopped") return t("activity.taskStopped", { model: entry.model, thread: thread(entry.thread_id) });
+      if (entry.status === "failed" || entry.status === "rejected") {
+        return t("activity.taskFailed", {
+          model: entry.model,
+          code: entry.code ? t("activity.code", { code: entry.code }) : "",
+          thread: thread(entry.thread_id),
+        });
+      }
+      return t("activity.taskEnded", { model: entry.model, thread: thread(entry.thread_id) });
+    case "task_stopped":
+      return t("activity.youStopped", { model: entry.model, thread: thread(entry.thread_id) });
+    case "switched":
+      return t(
+        entry.reason === "priority" ? "activity.switchedPriority" : entry.reason === "model" ? "activity.switchedModel" : "activity.switchedLimit",
+        { from: name(entry.from), to: name(entry.to) },
+      );
+    case "paused":
+      return t("activity.paused", {
+        until: entry.resumes_at ? t("activity.pausedUntil", { time: formatDateTime(entry.resumes_at, formatLocale) }) : "",
+        count: String(entry.threads.length),
+      });
+    case "resumed":
+      return t(entry.by_user ? "activity.resumedByUser" : "activity.resumed", { count: String(entry.threads.length) });
+    case "woke":
+      return t("activity.woke", { accounts: entry.accounts.map(name).join(", ") });
+  }
+}
+
+function ActivityDialog({ name, onClose, t, formatLocale }: {
+  name: (id: string) => string;
+  onClose: () => void;
+  t: Translator;
+  formatLocale: string;
+}) {
+  const [entries, setEntries] = useState<ActivityEntry[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeActivity((entry) => setEntries((current) => [entry, ...(current ?? [])]));
+        if (disposed) unlisten();
+        else stop = unlisten;
+      } catch {
+        // The list still loads; it just does not grow while open.
+      }
+      try {
+        const loaded = await api.activity(200);
+        if (!disposed) setEntries((current) => [...(current ?? []), ...loaded]);
+      } catch {
+        if (!disposed) setFailed(true);
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+
+  return (
+    <Modal onClose={onClose} t={t} title={t("activity.title")} wide>
+      <div className="activity-panel">
+        {failed ? <p className="remove-error" role="alert">{t("activity.loadFailed")}</p> : null}
+        {entries && entries.length === 0 ? <p>{t("activity.empty")}</p> : null}
+        {entries?.length ? (
+          <ol className="activity-list">
+            {entries.map((entry, index) => (
+              <li key={`${entry.at}-${index}`}>
+                <time dateTime={new Date(entry.at).toISOString()} title={formatDateTime(entry.at / 1000, formatLocale)}>
+                  {formatDateTimeWithRelative(entry.at / 1000, formatLocale)}
+                </time>
+                <span>{activityText(entry, name, t, formatLocale)}</span>
+              </li>
+            ))}
+          </ol>
+        ) : null}
+      </div>
+    </Modal>
+  );
+}
+
 /** Saved ChatGPT accounts in the user's Invoke order; unlisted ones follow. */
 function orderedAccounts(accounts: AccountView[], priority: string[]) {
   const rank = (account: AccountView) => {
@@ -1202,6 +1321,9 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   const [minRemaining, setMinRemaining] = useState(String(settings.preferred_min_remaining ?? 20));
   const [maxTasks, setMaxTasks] = useState(String(settings.max_concurrent_tasks ?? 2));
   const [autoWake, setAutoWake] = useState(settings.auto_wake ?? false);
+  const [reserve, setReserve] = useState<Record<string, string>>(() =>
+    Object.fromEntries(Object.entries(settings.weekly_reserve ?? {}).map(([id, percent]) => [id, String(percent)])),
+  );
   const move = (index: number, offset: number) => {
     setOrder((current) => {
       const next = [...current];
@@ -1258,12 +1380,17 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
     setSaveError(null);
     try {
       await api.setInvokeProfiles(profiles);
-      onSaved(await api.setInvokePreferences(
+      await api.setInvokePreferences(
         order.map((account) => account.id),
         clamp(minRemaining, 0, 90, 20),
         clamp(maxTasks, 1, 6, 2),
         autoWake,
-      ));
+      );
+      onSaved(await api.setInvokeWeeklyReserve(Object.fromEntries(
+        Object.entries(reserve)
+          .map(([id, percent]) => [id, clamp(percent, 0, 90, 0)] as const)
+          .filter(([, percent]) => percent > 0),
+      )));
     } catch {
       setSaveError(t("error.invokeSave"));
     } finally {
@@ -1328,6 +1455,21 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
                   <span className="invoke-order-name" title={name}>{name}</span>
                   <span className="badge">{accountPlan(account, t)}</span>
                   {account.invoke_allowed ? null : <span className="badge badge-muted">{t("invoke.notAllowed")}</span>}
+                  <label className="invoke-reserve" title={t("invoke.weeklyReserveHint")}>
+                    <input
+                      aria-label={t("invoke.weeklyReserveFor", { name })}
+                      disabled={saving}
+                      inputMode="numeric"
+                      max={90}
+                      min={0}
+                      onChange={(event) => setReserve((current) => ({ ...current, [account.id]: event.target.value }))}
+                      placeholder="0"
+                      step={5}
+                      type="number"
+                      value={reserve[account.id] ?? ""}
+                    />
+                    <small>{t("invoke.weeklyReserve")} %</small>
+                  </label>
                   <span className="invoke-order-actions">
                     <button aria-label={t("invoke.moveUp", { name })} className="icon-button" disabled={saving || index === 0} onClick={() => move(index, -1)} type="button"><ChevronUp size={15} /></button>
                     <button aria-label={t("invoke.moveDown", { name })} className="icon-button" disabled={saving || index === order.length - 1} onClick={() => move(index, 1)} type="button"><ChevronDown size={15} /></button>
@@ -1405,6 +1547,9 @@ export default function App() {
   const [failoverWaiting, setFailoverWaiting] = useState<SwitchAccounts | null>(null);
   const [failoverCancelling, setFailoverCancelling] = useState(false);
   const [invokePause, setInvokePause] = useState<InvokePause | null>(null);
+  const [pausedThreads, setPausedThreads] = useState<PausedThread[]>([]);
+  const [tasks, setTasks] = useState<InvokeTask[]>([]);
+  const [taskClock, setTaskClock] = useState(() => Date.now());
   const [invokeResuming, setInvokeResuming] = useState(false);
   const [oauth, setOauth] = useState<OAuthFlow | null>(null);
   const [oauthStatusUnavailable, setOauthStatusUnavailable] = useState(false);
@@ -1781,6 +1926,76 @@ export default function App() {
       stop?.();
     };
   }, [loadSnapshot, t]);
+
+  useEffect(() => {
+    // Delegated Codex tasks, while Invoke Mode is on.
+    if (!invokeSettings?.invoke_mode) {
+      setTasks([]);
+      return;
+    }
+    let disposed = false;
+    const load = () => {
+      api.invokeTasks().then(
+        (loaded) => {
+          if (!disposed) {
+            setTasks(loaded);
+            setTaskClock(Date.now());
+          }
+        },
+        () => undefined,
+      );
+    };
+    load();
+    const interval = window.setInterval(load, 2000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, [invokeSettings?.invoke_mode]);
+
+  useEffect(() => {
+    if (!invokePause) {
+      setPausedThreads([]);
+      return;
+    }
+    api.pausedThreads().then(setPausedThreads, () => setPausedThreads([]));
+  }, [invokePause]);
+
+  useEffect(() => {
+    // Usage is back after a pause: say which threads Claude can continue.
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeResumed(({ threads }) => {
+          setInvokePause(null);
+          setNotice({
+            kind: "info",
+            text: threads.length
+              ? t("invoke.resumedThreads", { threads: threads.map((thread) => thread.thread_id).join(", ") })
+              : t("invoke.resumedNone"),
+          });
+        });
+        if (disposed) unlisten();
+        else stop = unlisten;
+      } catch {
+        // The pause banner still disappears when the window next reads it.
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, [t]);
+
+  const stopTask = async (id: string) => {
+    try {
+      await api.stopInvokeTask(id);
+      setTasks((current) => current.filter((task) => task.id !== id));
+    } catch {
+      setNotice({ kind: "error", text: t("tasks.stopFailed") });
+    }
+  };
 
   const resumeInvoke = async () => {
     setInvokeResuming(true);
@@ -2753,6 +2968,15 @@ export default function App() {
             </button>
           ) : null}
           <button
+            aria-label={t("toolbar.activity")}
+            className="icon-button"
+            onClick={() => setDialog("activity")}
+            title={t("toolbar.activity")}
+            type="button"
+          >
+            <History size={17} />
+          </button>
+          <button
             aria-label={t("update.check")}
             className="icon-button"
             disabled={updateChecking}
@@ -2866,10 +3090,48 @@ export default function App() {
                   ? t("invoke.pausedBodyUnknown")
                   : t("invoke.pausedBody", { time: formatDateTimeWithRelative(invokePause.resumes_at, locale.formatLocale) })}
               </p>
+              {pausedThreads.length ? (
+                <p className="paused-threads">
+                  {t("invoke.pausedThreads", { threads: pausedThreads.map((thread) => thread.thread_id).join(", ") })}
+                </p>
+              ) : null}
             </div>
             <button className="button button-secondary" disabled={invokeResuming} onClick={() => void resumeInvoke()} type="button">
               {t("invoke.resume")}
             </button>
+          </section>
+        ) : null}
+
+        {tasks.length ? (
+          <section aria-label={t("tasks.title")} className="task-strip">
+            <h2>{t("tasks.title")}</h2>
+            <ul>
+              {tasks.map((task) => {
+                const folder = folderName(task.cwd);
+                const armed = confirm.armed === `task-${task.id}`;
+                return (
+                  <li key={task.id}>
+                    <span className={"task-state" + (task.running ? " task-running" : "")}>{t(task.running ? "tasks.running" : "tasks.waiting")}</span>
+                    <strong>{task.model}</strong>
+                    <span className="badge">{task.reasoning_effort}</span>
+                    {task.write ? <span className="badge">{t("tasks.write")}</span> : null}
+                    <span className="task-folder" title={task.cwd}>{folder}</span>
+                    {task.thread_id ? <span className="task-thread" title={task.thread_id}>{t("tasks.thread", { thread: shortThread(task.thread_id) })}</span> : null}
+                    <span className="task-elapsed">{elapsedText(taskClock - task.started_at)}</span>
+                    <button
+                      aria-label={armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
+                      className={"button " + (armed ? "button-danger" : "button-secondary")}
+                      data-confirm={`task-${task.id}`}
+                      onClick={() => confirm.click(`task-${task.id}`, () => void stopTask(task.id))}
+                      type="button"
+                    >
+                      <Square size={13} />
+                      {armed ? t("tasks.confirmStop") : t("tasks.stop")}
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
           </section>
         ) : null}
 
@@ -3049,6 +3311,18 @@ export default function App() {
           )}
         </section>
       </div>
+
+      {dialog === "activity" ? (
+        <ActivityDialog
+          formatLocale={locale.formatLocale}
+          name={(id) => {
+            const account = accounts.find((saved) => saved.id === id);
+            return account ? accountPrimaryName(account) : t("common.unknown");
+          }}
+          onClose={() => setDialog(null)}
+          t={t}
+        />
+      ) : null}
 
       {dialog === "codex-cli" ? (
         <Modal dismissible={busy !== "codex-cli-update"} onClose={() => setDialog(null)} t={t} title={t("toolbar.codexCli")}>

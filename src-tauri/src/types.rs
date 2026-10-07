@@ -144,6 +144,10 @@ pub struct InvokeSettings {
     /// Wake allowed accounts whose usage window has not started.
     #[serde(default)]
     pub auto_wake: bool,
+    /// Saved-account ID to the percent of its weekly window that automatic
+    /// choices leave unused.
+    #[serde(default)]
+    pub weekly_reserve: std::collections::BTreeMap<String, u8>,
 }
 
 pub const DEFAULT_PREFERRED_MIN_REMAINING: u8 = 20;
@@ -167,6 +171,7 @@ impl Default for InvokeSettings {
             preferred_min_remaining: DEFAULT_PREFERRED_MIN_REMAINING,
             max_concurrent_tasks: DEFAULT_MAX_CONCURRENT_TASKS,
             auto_wake: false,
+            weekly_reserve: std::collections::BTreeMap::new(),
         }
     }
 }

@@ -111,6 +111,22 @@ impl InvokeState {
         })
     }
 
+    /// Sets how much of each account's weekly window automatic choices leave
+    /// unused. Zero entries are dropped.
+    pub fn set_weekly_reserve(
+        &self,
+        reserve: std::collections::BTreeMap<String, u8>,
+    ) -> Result<InvokeSettings, String> {
+        if reserve.values().any(|percent| *percent > 90) {
+            return Err("Choose a weekly reserve from 0% to 90%".to_string());
+        }
+        let reserve = reserve
+            .into_iter()
+            .filter(|(id, percent)| !id.is_empty() && *percent > 0)
+            .collect();
+        self.update(|settings| settings.weekly_reserve = reserve)
+    }
+
     /// Checks one delegation request exactly against the human's policy. It
     /// never substitutes a different model or effort.
     pub fn validate_request(&self, model: &str, effort: &str) -> Result<(), InvokeRejection> {
@@ -324,6 +340,31 @@ fn parse_model_list(result: &Value) -> Result<(Vec<CatalogModel>, Option<String>
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn the_weekly_reserve_keeps_only_real_entries_in_range() {
+        let path = temp_path("reserve");
+        let state = InvokeState::load(path.clone());
+        let saved = state
+            .set_weekly_reserve(std::collections::BTreeMap::from([
+                ("a".to_string(), 30),
+                ("b".to_string(), 0),
+                (String::new(), 10),
+            ]))
+            .expect("save");
+        assert_eq!(
+            saved.weekly_reserve,
+            std::collections::BTreeMap::from([("a".to_string(), 30)])
+        );
+        assert!(state
+            .set_weekly_reserve(std::collections::BTreeMap::from([("a".to_string(), 95)]))
+            .is_err());
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().expect("reload"),
+            saved
+        );
+        let _ = std::fs::remove_dir_all(path.parent().expect("dir"));
+    }
 
     #[test]
     fn preferences_keep_one_entry_per_account_and_stay_in_range() {

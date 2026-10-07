@@ -153,6 +153,14 @@ starts it again when needed. A Codex the user opened is never stopped: the user
 is asked to close it. The daemon's `pid-update-loop` helper holds no credential,
 survives the stop, and is ignored.
 
+The Claude Code plugin's broker for OpenAI's stock commands is stopped the same
+way only when it reports itself idle, through its own `broker/shutdown`; a busy
+broker is treated as an open Codex. Stopping a delegated task from the window
+terminates only that task's registered App Server.
+
+The activity history records account IDs, models, folders, thread IDs, and
+result codes. It never holds credentials, prompts, or Codex output.
+
 ## Storage and concurrency
 
 Credential-affecting operations are serialized by an in-process mutex and a

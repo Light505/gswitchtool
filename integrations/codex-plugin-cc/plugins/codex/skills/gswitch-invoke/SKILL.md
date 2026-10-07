@@ -76,6 +76,8 @@ If `invoke` returns `MODEL_NOT_ALLOWED` or `REASONING_NOT_ALLOWED`, run `invoke-
 choose again. If it returns `INVOKE_MODE_DISABLED` or `GSWITCH_UNAVAILABLE`, stop
 delegating. If it returns `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or `USAGE_LIMIT_EXCEEDED`,
 or the output says PAUSE ALL WORK, follow [When Codex usage runs out](#when-codex-usage-runs-out).
+If it returns `STOPPED_BY_USER`, the user stopped that task in GSwitch: do not restart or
+retry it; say what it was doing and ask how to continue.
 Any other code (for example `EXTERNAL_CODEX_RUNNING`) means automatic recovery stopped: tell
 the user what the output says and keep the thread for later. Do not retry it yourself.
 

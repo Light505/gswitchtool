@@ -1199,7 +1199,12 @@ async function handleInvoke(argv) {
     // shell launch of Codex would cost it tokens on every run.
     process.noDeprecation = true;
     ensureCodexAvailable(cwd);
-    finish(await runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId }));
+    const result = await runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId });
+    // GSwitch keeps the result in its activity history; older versions do not.
+    await session
+      .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null })
+      .catch(() => {});
+    finish(result);
   } finally {
     session.close();
   }
@@ -1277,6 +1282,9 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
       outcome = (await session.request("run_end", { lease_id: leaseId })).outcome ?? "unchanged";
     } catch {
       // Without GSwitch nothing can be switched; report the run as it ended.
+    }
+    if (outcome === "stopped") {
+      return failed("STOPPED_BY_USER", new GSwitchError("STOPPED_BY_USER").message);
     }
 
     // Acceptance testing only: treat the first finished turn as a usage limit so

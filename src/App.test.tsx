@@ -63,6 +63,13 @@ const mocks = vi.hoisted(() => ({
   setInvokePreferences: vi.fn(),
   appVersion: vi.fn(),
   onInvokeAutoWoke: vi.fn(),
+  invokeTasks: vi.fn(),
+  stopInvokeTask: vi.fn(),
+  pausedThreads: vi.fn(),
+  activity: vi.fn(),
+  onInvokeActivity: vi.fn(),
+  onInvokeResumed: vi.fn(),
+  setInvokeWeeklyReserve: vi.fn(),
   onInvokeAccountSwitched: vi.fn(),
   invokeFailover: vi.fn(),
   cancelInvokeFailover: vi.fn(),
@@ -226,6 +233,17 @@ function prepareDefaults() {
   mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
   mocks.appVersion.mockResolvedValue({ version: "1.2.0", dev: false });
   mocks.onInvokeAutoWoke.mockResolvedValue(() => undefined);
+  mocks.invokeTasks.mockResolvedValue([]);
+  mocks.stopInvokeTask.mockResolvedValue(undefined);
+  mocks.pausedThreads.mockResolvedValue([]);
+  mocks.activity.mockResolvedValue([]);
+  mocks.onInvokeActivity.mockResolvedValue(() => undefined);
+  mocks.onInvokeResumed.mockResolvedValue(() => undefined);
+  mocks.setInvokeWeeklyReserve.mockImplementation(async (reserve: Record<string, number>) => ({
+    invoke_mode: true,
+    allowed_invocation_profiles: [],
+    weekly_reserve: reserve,
+  }));
   mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number, autoWake: boolean) => ({
     auto_wake: autoWake,
     invoke_mode: true,
@@ -2528,6 +2546,98 @@ describe("Invoke Mode", () => {
     expect(badge).toHaveAttribute("title", expect.stringContaining("pro@example.com"));
     expect(within(dialog).getByText("Not on your accounts")).toBeInTheDocument();
     expect(within(dialog).getAllByText(/^Only on /)).toHaveLength(1);
+  });
+
+  it("lists delegated Codex tasks and stops one after a confirming click", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([
+      { id: "task-1", started_at: Date.now() - 125_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "C:\\work\\studio-app", thread_id: "01a1f2c3-4455-6677", running: true },
+      { id: "task-2", started_at: Date.now() - 5_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "/work/other", thread_id: null, running: false },
+    ]);
+    render(<App />);
+
+    const strip = await screen.findByRole("region", { name: "Codex tasks" });
+    expect(within(strip).getByText("Running")).toBeInTheDocument();
+    expect(within(strip).getByText("Waiting")).toBeInTheDocument();
+    expect(within(strip).getByText("studio-app")).toHaveAttribute("title", "C:\\work\\studio-app");
+    expect(within(strip).getByText("Thread 01a1f2c3")).toHaveAttribute("title", "01a1f2c3-4455-6677");
+    expect(within(strip).getByText("Edits files")).toBeInTheDocument();
+
+    const stop = within(strip).getByRole("button", { name: "Stop the gpt-6.1-sol task in studio-app" });
+    await userEvent.click(stop);
+    expect(mocks.stopInvokeTask).not.toHaveBeenCalled();
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await userEvent.click(within(strip).getByRole("button", { name: "Stop task?" }));
+    await waitFor(() => expect(mocks.stopInvokeTask).toHaveBeenCalledWith("task-1"));
+  });
+
+  it("shows no task strip in Manual Mode", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, allowed_invocation_profiles: [] });
+    mocks.invokeTasks.mockResolvedValue([
+      { id: "task-1", started_at: Date.now(), model: "m", reasoning_effort: "low", write: false, cwd: "/x", running: true },
+    ]);
+    render(<App />);
+    await screen.findByRole("button", { name: "Activity" });
+    expect(mocks.invokeTasks).not.toHaveBeenCalled();
+    expect(screen.queryByRole("region", { name: "Codex tasks" })).not.toBeInTheDocument();
+  });
+
+  it("shows the activity history with account names and live entries", async () => {
+    const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second" };
+    mocks.listAccounts.mockResolvedValue([chatAccount, second]);
+    mocks.activity.mockResolvedValue([
+      { at: Date.now() - 60_000, kind: "switched", from: "account-1", to: "account-2", reason: "usage_limit" },
+      { at: Date.now() - 120_000, kind: "task_ended", task: "t", model: "gpt-6-luna", thread_id: "01a1e9b8-0000", status: "failed", code: "CODEX_FAILED" },
+    ]);
+    let push: ((entry: unknown) => void) | undefined;
+    mocks.onInvokeActivity.mockImplementation(async (handler: typeof push) => {
+      push = handler;
+      return () => undefined;
+    });
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    expect(await within(dialog).findByText(
+      "Switched Codex from person@example.com to second@example.com: person@example.com ran out of usage.",
+    )).toBeInTheDocument();
+    expect(within(dialog).getByText("Codex task on gpt-6-luna did not finish (CODEX_FAILED), thread 01a1e9b8.")).toBeInTheDocument();
+
+    await waitFor(() => expect(push).toBeDefined());
+    act(() => push!({ at: Date.now(), kind: "woke", accounts: ["account-2"] }));
+    const items = within(dialog).getAllByRole("listitem");
+    expect(items[0]).toHaveTextContent("Started the reset timer for second@example.com.");
+  });
+
+  it("saves a weekly reserve for an account", async () => {
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: true }]);
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [], weekly_reserve: {} });
+    mocks.modelCatalog.mockResolvedValue([
+      { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
+    ]);
+    render(<App />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const reserve = within(dialog).getByRole("spinbutton", { name: "Weekly reserve for person@example.com" });
+    await userEvent.type(reserve, "30");
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({ "account-1": 30 }));
+    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+  });
+
+  it("says which paused threads can continue when usage is back", async () => {
+    let announce: ((resumed: { threads: { thread_id: string }[]; by_user: boolean }) => void) | undefined;
+    mocks.onInvokeResumed.mockImplementation(async (handler: typeof announce) => {
+      announce = handler;
+      return () => undefined;
+    });
+    render(<App />);
+    await waitFor(() => expect(announce).toBeDefined());
+    act(() => announce!({ threads: [{ thread_id: "01a1-aaaa" }, { thread_id: "01a1-bbbb" }], by_user: false }));
+    expect(await screen.findByText(
+      "Codex usage is back. Tell Claude to continue the paused threads: 01a1-aaaa, 01a1-bbbb.",
+    )).toBeInTheDocument();
   });
 
   it("says which accounts automatic Wake started", async () => {

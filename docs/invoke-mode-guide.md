@@ -106,6 +106,11 @@ Credentials stay encrypted on your computer. Claude never sees them.
    enough, it takes the one with the most usage left.
 5. **Codex tasks at once** (default 2) caps how many delegated tasks Claude can
    run in parallel; more wait their turn.
+6. **Weekly reserve** (next to each account in the order): the share of that
+   account's weekly limit automatic switching leaves unused, for example 30% to
+   keep part of your main account's week for yourself. Below it, GSwitch moves
+   tasks to other accounts and never fails over to it; if no other account has
+   usage left, Invoke Mode pauses instead of using the reserve.
 
 **Start reset timers automatically** (off until you turn it on): a usage window
 starts counting at the first request after it resets. With this on, GSwitch
@@ -207,6 +212,18 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 
 ## 7. Check what happened
 
+- **Running Codex tasks:** while Invoke Mode is on, the **Codex tasks** strip
+  above your accounts lists each delegated task: running or waiting its turn,
+  model and effort, whether it can edit files, its project folder, thread, and
+  how long it has run. **Stop** (click twice to confirm) ends a task at once;
+  Claude is told you stopped it and does not restart it.
+- **History:** the **Activity** button (the clock icon in the toolbar) lists what
+  Invoke Mode did: tasks started and how they ended, account switches and why,
+  pauses and resumes, and automatic Wakes. It keeps the latest 1,000 entries in
+  `~/.gswitchtool/activity.jsonl`, with no credentials, prompts, or Codex output.
+- **After a pause:** when Codex usage comes back, GSwitch shows a Windows
+  notification and a notice listing the paused threads; tell Claude to continue
+  them. While paused, the pause notice lists them too.
 - **Allowed models and status:** in Claude Code, ask Claude to run
   `invoke-status`, or look at GSwitch's toolbar and Invoke settings.
 - **A specific run:** Codex records every conversation in `~/.codex/sessions`.

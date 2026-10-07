@@ -233,6 +233,19 @@ async fn dispatch(
             let outcome = coordinator.end_run(&text("lease_id")?).map_err(code)?;
             Ok(json!({ "outcome": outcome }))
         }
+        "task_result" => {
+            coordinator
+                .record_task_result(
+                    &text("lease_id")?,
+                    text("status")?,
+                    params
+                        .get("code")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                )
+                .map_err(code)?;
+            Ok(json!({}))
+        }
         "limit_reached" => {
             let ack = coordinator.report_limit(&text("lease_id")?).map_err(code)?;
             Ok(json!({ "failover": ack }))
@@ -635,9 +648,18 @@ mod tests {
 
         let status = call(&request("status", Value::Null), &endpoint)["result"].clone();
         assert_eq!(status["workers_running"], 1);
+        let mut worker = status["workers"][0].clone();
+        assert_eq!(worker["id"], lease.as_str());
+        assert!(worker["started_at"].as_i64().is_some_and(|at| at > 0));
+        worker.as_object_mut().expect("worker").remove("id");
+        worker.as_object_mut().expect("worker").remove("started_at");
         assert_eq!(
-            status["workers"],
-            json!([{"model": "model-a", "reasoning_effort": "high", "write": true, "cwd": "/repo", "thread_id": "thr_1", "running": true}])
+            worker,
+            json!({"model": "model-a", "reasoning_effort": "high", "write": true, "cwd": "/repo", "thread_id": "thr_1", "running": true})
+        );
+        assert_eq!(
+            ok("task_result", json!({"status": "completed"}))["result"],
+            json!({})
         );
         assert_eq!(ok("run_end", json!({}))["result"]["outcome"], "unchanged");
 

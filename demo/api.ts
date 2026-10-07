@@ -63,9 +63,22 @@ const displayOnly = {
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
-  appVersion: async () => ({ version: "1.5.0", dev: false }),
+  appVersion: async () => ({ version: "1.6.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
+  invokeTasks: async () => [
+    { id: "demo-task-1", started_at: Date.now() - 4 * 60_000 - 12_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "C:/work/studio-app", thread_id: "01a1f2c3-demo", running: true },
+    { id: "demo-task-2", started_at: Date.now() - 40_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "C:/work/studio-app", thread_id: null, running: false },
+  ],
+  pausedThreads: async () => [],
+  activity: async () => [
+    { at: Date.now() - 4 * 60_000, kind: "task_started", task: "demo-task-1", model: "gpt-6.1-sol", effort: "medium", write: true, cwd: "C:/work/studio-app" },
+    { at: Date.now() - 9 * 60_000, kind: "switched", from: "demo-3", to: "demo-1", reason: "priority" },
+    { at: Date.now() - 31 * 60_000, kind: "woke", accounts: ["demo-4"] },
+    { at: Date.now() - 52 * 60_000, kind: "task_ended", task: "demo-task-0", model: "gpt-6-luna", thread_id: "01a1e9b8-demo", status: "completed" },
+  ],
+  onInvokeActivity: async () => () => undefined,
+  onInvokeResumed: async () => () => undefined,
   modelCatalog: async () => [
     { model: "gpt-6-astra", display_name: "gpt-6-astra", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: true },
     { model: "gpt-6-sol", display_name: "gpt-6-sol", supported_reasoning_efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], is_default: false },

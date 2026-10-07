@@ -2136,6 +2136,153 @@ textarea {
   white-space: nowrap;
 }
 
+.task-strip {
+  display: grid;
+  gap: 8px;
+  margin: 0 0 18px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.task-strip h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.task-strip ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-strip li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.task-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+
+.task-state::before {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--soft-muted);
+  content: "";
+}
+
+.task-running::before {
+  background: var(--success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--success) 22%, transparent);
+}
+
+.task-folder,
+.task-thread,
+.task-elapsed {
+  color: var(--muted);
+}
+
+.task-folder {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.task-strip .button {
+  min-height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.paused-threads {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.activity-panel {
+  padding: 16px 20px 20px;
+}
+
+.activity-panel > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.activity-list {
+  display: grid;
+  max-height: 60vh;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.activity-list li {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 4px 14px;
+  padding: 9px 2px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.activity-list li + li {
+  border-top: 1px solid var(--border);
+}
+
+.activity-list time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 560px) {
+  .activity-list li {
+    grid-template-columns: 1fr;
+  }
+}
+
+.invoke-reserve {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.invoke-reserve input {
+  width: 52px;
+  min-height: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+}
+
+.invoke-reserve small {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
 .invoke-panel {
   display: grid;
   gap: 12px;

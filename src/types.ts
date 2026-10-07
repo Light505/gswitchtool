@@ -29,7 +29,39 @@ export interface InvokeSettings {
   max_concurrent_tasks?: number;
   /** Wake allowed accounts whose usage window has not started. */
   auto_wake?: boolean;
+  /** Saved-account ID to the percent of its week automatic choices leave. */
+  weekly_reserve?: Record<string, number>;
 }
+
+/** A Codex task Claude delegated, running or waiting its turn. */
+export interface InvokeTask {
+  id: string;
+  started_at: number;
+  model: string;
+  reasoning_effort: string;
+  write: boolean;
+  cwd: string;
+  thread_id?: string | null;
+  running: boolean;
+}
+
+export interface PausedThread {
+  thread_id: string;
+  model: string;
+  reasoning_effort: string;
+  cwd: string;
+}
+
+/** One entry of the Invoke Mode activity history. */
+export type ActivityEntry = { at: number } & (
+  | { kind: "task_started"; task: string; model: string; effort: string; write: boolean; cwd: string }
+  | { kind: "task_ended"; task: string; model: string; thread_id?: string | null; status: string; code?: string | null }
+  | { kind: "task_stopped"; task: string; model: string; thread_id?: string | null }
+  | { kind: "switched"; from: string; to: string; reason: "usage_limit" | "priority" | "model" }
+  | { kind: "paused"; resumes_at?: number | null; threads: string[] }
+  | { kind: "resumed"; by_user: boolean; threads: string[] }
+  | { kind: "woke"; accounts: string[] }
+);
 
 export interface SwitchAccounts {
   from: string;

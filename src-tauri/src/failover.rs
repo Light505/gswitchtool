@@ -36,6 +36,8 @@ pub enum FailoverCode {
     InvokePaused,
     /// No account GSwitch may use can run the requested model with usage left.
     ModelUnavailable,
+    /// The user stopped the task in GSwitch.
+    StoppedByUser,
     AccountSwitchFailed,
     AccountVerificationFailed,
     UnknownLease,
@@ -64,6 +66,8 @@ pub enum RunEnd {
     FailoverInProgress,
     /// The account changed since the run started; resume.
     AccountSwitched,
+    /// The user stopped the task in GSwitch; do not resume it.
+    Stopped,
 }
 
 /// Invoke Mode starts no Codex work: a failover found no account GSwitch may
@@ -75,8 +79,18 @@ pub struct InvokePause {
     pub resumes_at: Option<i64>,
 }
 
+/// A Codex thread that was running when Invoke Mode paused, so the user can
+/// continue it once usage is back.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PausedThread {
+    pub thread_id: String,
+    pub model: String,
+    pub reasoning_effort: String,
+    pub cwd: String,
+}
+
 /// Why Invoke Mode switched the Codex account.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SwitchReason {
     /// The account ran out of Codex usage.
@@ -95,6 +109,8 @@ pub struct Preferences {
     pub account_priority: Vec<String>,
     pub preferred_min_remaining: u8,
     pub max_concurrent_tasks: u8,
+    /// Percent of an account's weekly window automatic choices leave unused.
+    pub weekly_reserve: HashMap<String, u8>,
 }
 
 impl Default for Preferences {
@@ -103,8 +119,37 @@ impl Default for Preferences {
             account_priority: Vec::new(),
             preferred_min_remaining: crate::types::DEFAULT_PREFERRED_MIN_REMAINING,
             max_concurrent_tasks: crate::types::DEFAULT_MAX_CONCURRENT_TASKS,
+            weekly_reserve: HashMap::new(),
         }
     }
+}
+
+impl Preferences {
+    /// False when the account has a weekly reserve that its weekly window has
+    /// reached, or that cannot be checked without a quota reading.
+    fn keeps_reserve(&self, account_id: &str, quota: Option<&QuotaSnapshot>) -> bool {
+        match self.weekly_reserve.get(account_id).copied().unwrap_or(0) {
+            0 => true,
+            reserve => quota.is_some_and(|quota| weekly_left_at_least(quota, reserve)),
+        }
+    }
+}
+
+/// Every Codex weekly window has at least `reserve` percent left. A window of
+/// a week or longer counts as weekly; an account without one passes.
+fn weekly_left_at_least(snapshot: &QuotaSnapshot, reserve: u8) -> bool {
+    snapshot
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.kind == QuotaBucketKind::Codex)
+        .flat_map(|bucket| &bucket.windows)
+        .filter(|window| {
+            window.kind == crate::types::QuotaWindowKind::Weekly
+                || window
+                    .window_duration_mins
+                    .is_some_and(|minutes| minutes >= 7 * 24 * 60)
+        })
+        .all(|window| window.remaining_percent.is_none_or(|left| left >= reserve))
 }
 
 /// The configuration a worker's Codex thread must keep across a failover.
@@ -128,6 +173,10 @@ enum RunState {
 /// credentials or account identity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WorkerView {
+    /// The task's ID, for stopping it from the window.
+    pub id: String,
+    /// Unix milliseconds.
+    pub started_at: i64,
     pub model: String,
     pub reasoning_effort: String,
     pub write: bool,
@@ -143,6 +192,18 @@ struct Lease {
     /// The account that was active when the current or last run started.
     account: Option<String>,
     thread_id: Option<String>,
+    started_at: i64,
+    /// The user stopped the task in GSwitch.
+    stopped: bool,
+    /// The plugin's own result, reported before it disconnects.
+    result: Option<(String, Option<String>)>,
+}
+
+fn now_unix_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis() as i64)
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -157,6 +218,10 @@ struct Inner {
     waiting_for_codex: Option<SwitchAccounts>,
     cancel_requested: bool,
     paused: Option<InvokePause>,
+    /// The threads that were running when Invoke Mode paused.
+    paused_threads: Vec<PausedThread>,
+    /// A pause ended at its reset time and is not yet announced.
+    pause_expired: bool,
     /// Set while a task's start checks for a preferred account.
     preferring: bool,
     last_preference: Option<Instant>,
@@ -208,6 +273,10 @@ pub trait FailoverOps: Send + Sync {
     fn model_available(&self, account_id: &str, model: &str) -> bool;
     /// Reports that Invoke Mode paused (`Some`) or was resumed.
     fn paused(&self, pause: Option<&InvokePause>);
+    /// Records what Invoke Mode did in the activity history.
+    fn record(&self, _activity: crate::activity::Activity) {}
+    /// Invoke Mode resumed: at the reset time, or because the user did.
+    fn resumed(&self, _threads: &[PausedThread], _by_user: bool) {}
     fn now_unix(&self) -> i64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -276,8 +345,10 @@ impl Coordinator {
         let inner = self.lock();
         let mut workers = inner
             .leases
-            .values()
-            .map(|lease| WorkerView {
+            .iter()
+            .map(|(id, lease)| WorkerView {
+                id: id.clone(),
+                started_at: lease.started_at,
                 model: lease.request.model.clone(),
                 reasoning_effort: lease.request.reasoning_effort.clone(),
                 write: lease.request.write,
@@ -296,6 +367,13 @@ impl Coordinator {
 
     pub fn open_lease(&self, connection: u64, request: LeaseRequest) -> String {
         let id = Uuid::new_v4().to_string();
+        let started = crate::activity::Activity::TaskStarted {
+            task: id.clone(),
+            model: request.model.clone(),
+            effort: request.reasoning_effort.clone(),
+            write: request.write,
+            cwd: request.cwd.clone(),
+        };
         self.lock().leases.insert(
             id.clone(),
             Lease {
@@ -304,10 +382,60 @@ impl Coordinator {
                 run: RunState::Idle,
                 account: None,
                 thread_id: None,
+                started_at: now_unix_ms(),
+                stopped: false,
+                result: None,
             },
         );
+        self.ops.record(started);
         self.notify();
         id
+    }
+
+    /// The user stops a task: its Codex App Server is stopped at once and the
+    /// worker learns it was stopped, so it is not resumed or retried.
+    pub fn stop_task(&self, lease_id: &str) -> Result<(), FailoverCode> {
+        let mut inner = self.lock();
+        let lease = inner
+            .leases
+            .get_mut(lease_id)
+            .ok_or(FailoverCode::UnknownLease)?;
+        if lease.stopped {
+            return Ok(());
+        }
+        lease.stopped = true;
+        let pid = match lease.run {
+            RunState::Running(pid) => Some(pid),
+            _ => None,
+        };
+        let stopped = crate::activity::Activity::TaskStopped {
+            task: lease_id.to_string(),
+            model: lease.request.model.clone(),
+            thread_id: lease.thread_id.clone(),
+        };
+        drop(inner);
+        if let Some(pid) = pid {
+            self.ops.terminate(pid);
+        }
+        self.ops.record(stopped);
+        self.notify();
+        Ok(())
+    }
+
+    /// The plugin's result for its task, recorded when the task ends.
+    pub fn record_task_result(
+        &self,
+        lease_id: &str,
+        status: String,
+        code: Option<String>,
+    ) -> Result<(), FailoverCode> {
+        let mut inner = self.lock();
+        let lease = inner
+            .leases
+            .get_mut(lease_id)
+            .ok_or(FailoverCode::UnknownLease)?;
+        lease.result = Some((status, code));
+        Ok(())
     }
 
     /// Lets a worker start Codex once no failover is running and a task slot
@@ -342,8 +470,10 @@ impl Coordinator {
             let next = {
                 let mut guard = self.lock();
                 let inner = &mut *guard;
-                if !inner.leases.contains_key(lease_id) {
-                    return Err(FailoverCode::UnknownLease);
+                match inner.leases.get(lease_id) {
+                    None => return Err(FailoverCode::UnknownLease),
+                    Some(lease) if lease.stopped => return Err(FailoverCode::StoppedByUser),
+                    Some(_) => {}
                 }
                 if inner.replacing.is_some() || inner.preferring {
                     None
@@ -461,12 +591,12 @@ impl Coordinator {
             &preferences.account_priority,
         );
         for account in candidates {
-            let enough = self
-                .ops
-                .read_quota(&account.id)
+            let quota = self.ops.read_quota(&account.id);
+            let enough = quota
                 .as_ref()
                 .and_then(usable_capacity)
-                .is_some_and(|score| score >= preferences.preferred_min_remaining);
+                .is_some_and(|score| score >= preferences.preferred_min_remaining)
+                && preferences.keeps_reserve(&account.id, quota.as_ref());
             if !enough {
                 continue;
             }
@@ -474,8 +604,7 @@ impl Coordinator {
                 return;
             }
             if self.ops.switch_to(&account.id).is_ok() {
-                self.ops
-                    .switched(&live, &account.id, SwitchReason::Priority);
+                self.switched(&live, &account.id, SwitchReason::Priority);
             }
             return;
         }
@@ -503,12 +632,9 @@ impl Coordinator {
             &preferences.account_priority,
         );
         for account in candidates {
-            if self
-                .ops
-                .read_quota(&account.id)
-                .as_ref()
-                .and_then(usable_capacity)
-                .is_none()
+            let quota = self.ops.read_quota(&account.id);
+            if quota.as_ref().and_then(usable_capacity).is_none()
+                || !preferences.keeps_reserve(&account.id, quota.as_ref())
             {
                 continue;
             }
@@ -518,10 +644,19 @@ impl Coordinator {
             self.ops
                 .switch_to(&account.id)
                 .map_err(|refusal| refusal.code)?;
-            self.ops.switched(&live, &account.id, SwitchReason::Model);
+            self.switched(&live, &account.id, SwitchReason::Model);
             return Ok(());
         }
         Err(FailoverCode::ModelUnavailable)
+    }
+
+    fn switched(&self, from: &str, to: &str, reason: SwitchReason) {
+        self.ops.switched(from, to, reason);
+        self.ops.record(crate::activity::Activity::Switched {
+            from: from.to_string(),
+            to: to.to_string(),
+            reason,
+        });
     }
 
     /// Records the worker's App Server. One that starts during a failover is
@@ -533,7 +668,7 @@ impl Coordinator {
             .leases
             .get_mut(lease_id)
             .ok_or(FailoverCode::UnknownLease)?;
-        if replacing {
+        if replacing || lease.stopped {
             lease.run = RunState::Idle;
             drop(inner);
             self.ops.terminate(pid);
@@ -563,9 +698,12 @@ impl Coordinator {
             .ok_or(FailoverCode::UnknownLease)?;
         lease.run = RunState::Idle;
         let account = lease.account.clone();
+        let stopped = lease.stopped;
         drop(inner);
         self.notify();
-        Ok(if replacing {
+        Ok(if stopped {
+            RunEnd::Stopped
+        } else if replacing {
             RunEnd::FailoverInProgress
         } else if switched_away(account.as_deref(), self.ops.active_account().as_deref()) {
             RunEnd::AccountSwitched
@@ -631,12 +769,14 @@ impl Coordinator {
     /// was replaced, so it never resumes under an unverified identity.
     pub async fn await_failover(&self, lease_id: &str) -> Result<(), FailoverCode> {
         self.wait_until(|inner| {
-            let account = inner
+            let lease = inner
                 .leases
                 .get(lease_id)
-                .ok_or(FailoverCode::UnknownLease)?
-                .account
-                .clone();
+                .ok_or(FailoverCode::UnknownLease)?;
+            if lease.stopped {
+                return Err(FailoverCode::StoppedByUser);
+            }
+            let account = lease.account.clone();
             if inner.replacing.is_some() {
                 return Ok(None);
             }
@@ -663,10 +803,46 @@ impl Coordinator {
 
     /// The user resumed Invoke Mode in GSwitch, or changed what it may use.
     pub fn resume(&self) {
-        if self.lock().paused.take().is_some() {
-            self.ops.paused(None);
-            self.notify();
+        let mut inner = self.lock();
+        if inner.paused.take().is_none() {
+            return;
         }
+        inner.pause_expired = false;
+        let threads = std::mem::take(&mut inner.paused_threads);
+        drop(inner);
+        self.announce_resumed(&threads, true);
+    }
+
+    /// Announces a pause that ended at its reset time. Called periodically;
+    /// does nothing otherwise.
+    pub fn announce_expired_pause(&self) {
+        let mut inner = self.lock();
+        let _ = self.current_pause(&mut inner);
+        if !inner.pause_expired {
+            return;
+        }
+        inner.pause_expired = false;
+        let threads = std::mem::take(&mut inner.paused_threads);
+        drop(inner);
+        self.announce_resumed(&threads, false);
+    }
+
+    fn announce_resumed(&self, threads: &[PausedThread], by_user: bool) {
+        self.ops.paused(None);
+        self.ops.resumed(threads, by_user);
+        self.ops.record(crate::activity::Activity::Resumed {
+            by_user,
+            threads: threads
+                .iter()
+                .map(|thread| thread.thread_id.clone())
+                .collect(),
+        });
+        self.notify();
+    }
+
+    /// The threads that were running when Invoke Mode paused.
+    pub fn paused_threads(&self) -> Vec<PausedThread> {
+        self.lock().paused_threads.clone()
     }
 
     /// A pause past its reset time is over.
@@ -677,6 +853,7 @@ impl Coordinator {
         {
             if self.ops.now_unix() >= at {
                 inner.paused = None;
+                inner.pause_expired = true;
             }
         }
         inner.paused.clone()
@@ -704,12 +881,34 @@ impl Coordinator {
                 _ => None,
             })
             .collect::<Vec<_>>();
+        let ended = inner
+            .leases
+            .iter()
+            .filter(|(_, lease)| lease.connection == connection)
+            .map(|(id, lease)| {
+                let (status, code) = match (&lease.result, lease.stopped) {
+                    (_, true) => ("stopped".to_string(), None),
+                    (Some((status, code)), false) => (status.clone(), code.clone()),
+                    (None, false) => ("unknown".to_string(), None),
+                };
+                crate::activity::Activity::TaskEnded {
+                    task: id.clone(),
+                    model: lease.request.model.clone(),
+                    thread_id: lease.thread_id.clone(),
+                    status,
+                    code,
+                }
+            })
+            .collect::<Vec<_>>();
         inner
             .leases
             .retain(|_, lease| lease.connection != connection);
         drop(inner);
         for pid in orphaned {
             self.ops.terminate(pid);
+        }
+        for activity in ended {
+            self.ops.record(activity);
         }
         self.notify();
     }
@@ -784,8 +983,30 @@ impl Coordinator {
             let pause = InvokePause {
                 resumes_at: earliest_reset(&quotas),
             };
-            self.lock().paused = Some(pause.clone());
+            let threads = {
+                let mut inner = self.lock();
+                let threads = inner
+                    .leases
+                    .values()
+                    .filter_map(|lease| {
+                        Some(PausedThread {
+                            thread_id: lease.thread_id.clone()?,
+                            model: lease.request.model.clone(),
+                            reasoning_effort: lease.request.reasoning_effort.clone(),
+                            cwd: lease.request.cwd.clone(),
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                inner.paused = Some(pause.clone());
+                inner.pause_expired = false;
+                inner.paused_threads = threads.clone();
+                threads
+            };
             self.ops.paused(Some(&pause));
+            self.ops.record(crate::activity::Activity::Paused {
+                resumes_at: pause.resumes_at,
+                threads: threads.into_iter().map(|thread| thread.thread_id).collect(),
+            });
             return Err(FailoverCode::NoEligibleAccount.into());
         };
 
@@ -801,8 +1022,7 @@ impl Coordinator {
                 Err(refusal) if refusal.code == FailoverCode::ExternalCodexRunning => continue,
                 result => result?,
             }
-            self.ops
-                .switched(exhausted, &target, SwitchReason::UsageLimit);
+            self.switched(exhausted, &target, SwitchReason::UsageLimit);
             return Ok(());
         }
     }
@@ -935,6 +1155,9 @@ fn select_account(
             .iter()
             .find(|(candidate, _)| candidate.id == account.id)
             .and_then(|(_, quota)| quota.as_ref())?;
+        if !preferences.keeps_reserve(&account.id, Some(quota)) {
+            return None;
+        }
         usable_capacity(quota).map(|score| (score, account.id.as_str()))
     })
     .collect::<Vec<_>>();
@@ -1036,7 +1259,13 @@ pub struct AppOps {
     pub on_switched: SwitchedCallback,
     pub on_waiting: WaitingCallback,
     pub on_paused: PausedCallback,
+    pub on_resumed: ResumedCallback,
+    pub activity: Arc<crate::activity::ActivityLog>,
 }
+
+/// Called when Invoke Mode resumes, with the threads that were paused and
+/// whether the user resumed it.
+pub type ResumedCallback = Box<dyn Fn(&[PausedThread], bool) + Send + Sync>;
 
 impl FailoverOps for AppOps {
     fn invoke_mode(&self) -> bool {
@@ -1118,12 +1347,21 @@ impl FailoverOps for AppOps {
                 account_priority: settings.account_priority,
                 preferred_min_remaining: settings.preferred_min_remaining,
                 max_concurrent_tasks: settings.max_concurrent_tasks,
+                weekly_reserve: settings.weekly_reserve.into_iter().collect(),
             })
             .unwrap_or_default()
     }
 
     fn paused(&self, pause: Option<&InvokePause>) {
         (self.on_paused)(pause);
+    }
+
+    fn record(&self, activity: crate::activity::Activity) {
+        self.activity.record(activity);
+    }
+
+    fn resumed(&self, threads: &[PausedThread], by_user: bool) {
+        (self.on_resumed)(threads, by_user);
     }
 }
 
@@ -1156,6 +1394,8 @@ mod tests {
         switch_reasons: Vec<SwitchReason>,
         /// (account, model) pairs known to be unavailable.
         missing_models: HashSet<(String, String)>,
+        activities: Vec<crate::activity::Activity>,
+        resumed: Vec<(Vec<String>, bool)>,
     }
 
     struct FakeOps(Mutex<World>);
@@ -1221,6 +1461,18 @@ mod tests {
         }
         fn preferences(&self) -> Preferences {
             self.world().preferences.clone()
+        }
+        fn record(&self, activity: crate::activity::Activity) {
+            self.world().activities.push(activity);
+        }
+        fn resumed(&self, threads: &[PausedThread], by_user: bool) {
+            self.world().resumed.push((
+                threads
+                    .iter()
+                    .map(|thread| thread.thread_id.clone())
+                    .collect(),
+                by_user,
+            ));
         }
         fn model_available(&self, account_id: &str, model: &str) -> bool {
             !self
@@ -1354,10 +1606,14 @@ mod tests {
     #[test]
     fn the_registry_keeps_each_workers_resume_configuration() {
         let (coordinator, ops) = setup(world());
-        running_worker(&coordinator, &ops, 1, 1201);
+        let id = running_worker(&coordinator, &ops, 1, 1201);
+        let workers = coordinator.workers();
+        assert!(workers[0].started_at > 0);
         assert_eq!(
-            coordinator.workers(),
+            workers,
             vec![WorkerView {
+                id,
+                started_at: workers[0].started_at,
                 model: "model-a".into(),
                 reasoning_effort: "high".into(),
                 write: true,
@@ -1890,6 +2146,7 @@ mod tests {
             account_priority: order.iter().map(|id| id.to_string()).collect(),
             preferred_min_remaining: min,
             max_concurrent_tasks: tasks,
+            ..Preferences::default()
         }
     }
 
@@ -2126,5 +2383,144 @@ mod tests {
         let lease = coordinator.open_lease(1, request("model-a", "high"));
         assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
         assert!(ops.world().switches.is_empty());
+    }
+
+    #[test]
+    fn a_stopped_task_stops_its_codex_and_is_never_resumed() {
+        let (coordinator, ops) = setup(world());
+        let worker = running_worker(&coordinator, &ops, 1, 1001);
+        assert_eq!(coordinator.workers()[0].id, worker);
+        assert_eq!(coordinator.stop_task(&worker), Ok(()));
+        assert_eq!(ops.world().terminated, vec![1001]);
+        assert_eq!(coordinator.end_run(&worker), Ok(RunEnd::Stopped));
+        assert_eq!(
+            block_on(coordinator.begin_run(&worker)),
+            Err(FailoverCode::StoppedByUser)
+        );
+        assert_eq!(
+            block_on(coordinator.await_failover(&worker)),
+            Err(FailoverCode::StoppedByUser)
+        );
+        // Stopping twice is harmless.
+        assert_eq!(coordinator.stop_task(&worker), Ok(()));
+        assert_eq!(ops.world().terminated, vec![1001]);
+        assert_eq!(
+            coordinator.stop_task("missing"),
+            Err(FailoverCode::UnknownLease)
+        );
+    }
+
+    #[test]
+    fn the_history_records_a_task_from_start_to_its_result() {
+        use crate::activity::Activity;
+        let (coordinator, ops) = setup(world());
+        let worker = running_worker(&coordinator, &ops, 7, 1101);
+        coordinator
+            .record_task_result(&worker, "completed".into(), None)
+            .expect("result");
+        coordinator.drop_connection(7);
+        let activities = ops.world().activities.clone();
+        assert!(
+            matches!(&activities[0], Activity::TaskStarted { model, write: true, .. } if model == "model-a")
+        );
+        assert_eq!(
+            activities.last(),
+            Some(&Activity::TaskEnded {
+                task: worker,
+                model: "model-a".into(),
+                thread_id: Some("thread-1101".into()),
+                status: "completed".into(),
+                code: None,
+            })
+        );
+    }
+
+    #[test]
+    fn a_pause_keeps_the_running_threads_and_announces_the_resume_once() {
+        use crate::activity::Activity;
+        let (coordinator, ops) = setup(depleted_world());
+        let worker = running_worker(&coordinator, &ops, 1, 1201);
+        coordinator.report_limit(&worker).expect("limit");
+        wait_for_failover(&coordinator);
+        assert_eq!(coordinator.paused_threads()[0].thread_id, "thread-1201");
+        assert!(ops
+            .world()
+            .activities
+            .iter()
+            .any(|activity| matches!(activity, Activity::Paused { threads, .. } if threads == &vec!["thread-1201".to_string()])));
+
+        // Before the reset nothing is announced; at it, exactly once.
+        coordinator.announce_expired_pause();
+        assert!(ops.world().resumed.is_empty());
+        ops.world().now = 5000;
+        coordinator.announce_expired_pause();
+        coordinator.announce_expired_pause();
+        assert_eq!(
+            ops.world().resumed,
+            vec![(vec!["thread-1201".to_string()], false)]
+        );
+        assert!(coordinator.paused_threads().is_empty());
+    }
+
+    #[test]
+    fn a_resume_by_the_user_is_announced_as_such() {
+        let (coordinator, ops) = setup(depleted_world());
+        let worker = running_worker(&coordinator, &ops, 1, 1301);
+        coordinator.report_limit(&worker).expect("limit");
+        wait_for_failover(&coordinator);
+        coordinator.resume();
+        assert_eq!(
+            ops.world().resumed,
+            vec![(vec!["thread-1301".to_string()], true)]
+        );
+        coordinator.announce_expired_pause();
+        assert_eq!(ops.world().resumed.len(), 1);
+    }
+
+    fn with_weekly(five_hour: u8, weekly: u8) -> QuotaSnapshot {
+        let mut snapshot = quota(five_hour, weekly);
+        snapshot.buckets[0].windows[1].window_duration_mins = Some(7 * 24 * 60);
+        snapshot
+    }
+
+    #[test]
+    fn automatic_choices_leave_an_accounts_weekly_reserve_alone() {
+        // B comes first but keeps 40% of its week; it has 30% left.
+        let mut preferences = ranked(&["b", "c"], 20, 2);
+        preferences.weekly_reserve = HashMap::from([("b".to_string(), 40)]);
+        let entries = vec![
+            (account("b", true), Some(with_weekly(90, 30))),
+            (account("c", true), Some(with_weekly(50, 60))),
+        ];
+        assert_eq!(
+            select_account(&entries, "a", &preferences).as_deref(),
+            Some("c")
+        );
+        // Without the reserve B would be used.
+        preferences.weekly_reserve.clear();
+        assert_eq!(
+            select_account(&entries, "a", &preferences).as_deref(),
+            Some("b")
+        );
+        // A reserve that cannot be checked is respected.
+        preferences.weekly_reserve = HashMap::from([("b".to_string(), 10)]);
+        assert!(!preferences.keeps_reserve("b", None));
+        assert!(preferences.keeps_reserve("c", None));
+
+        // Before a task: A (active) is below its reserve, so B takes over.
+        let (coordinator, ops) = setup(World {
+            quotas: HashMap::from([
+                ("a".into(), with_weekly(80, 10)),
+                ("b".into(), with_weekly(80, 80)),
+            ]),
+            preferences: Preferences {
+                weekly_reserve: HashMap::from([("a".to_string(), 25)]),
+                ..ranked(&["a", "b"], 20, 2)
+            },
+            ..world()
+        });
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        assert_eq!(block_on(coordinator.begin_run(&lease)), Ok(()));
+        assert_eq!(ops.world().switches, vec!["b".to_string()]);
     }
 }

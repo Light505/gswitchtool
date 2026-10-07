@@ -1,7 +1,9 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{OsStr, OsString},
+    io::{BufRead, BufReader, Write},
     process::{Command, Stdio},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -12,14 +14,29 @@ const QUIT_CODEX: &str = "Quit Codex before changing the active account";
 const DAEMON_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const DAEMON_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
+const BROKER_REPLY_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// What Codex is running outside GSwitch.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct CodexPresence {
-    /// A Codex the user opened: the app, the CLI, or an IDE extension.
+    /// A Codex the user opened: the app, the CLI, or an IDE extension, or a
+    /// Claude Code plugin broker that is busy or did not answer.
     open: bool,
     /// Codex's managed App Server daemon, which has no window and keeps
     /// running after the user closes Codex.
     background: bool,
+    /// Claude Code plugin brokers with no request running.
+    idle_brokers: Vec<Broker>,
+    /// Whether any broker process was seen, when brokers were not asked.
+    brokers_present: bool,
+}
+
+/// The Claude Code plugin's shared App Server for OpenAI's stock `/codex`
+/// commands (`app-server-broker.mjs serve`), which outlives those commands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Broker {
+    pid: u32,
+    endpoint: String,
 }
 
 /// Detects only known Codex command lines. A Codex the user opened must be
@@ -28,12 +45,12 @@ struct CodexPresence {
 /// caller must still perform a second preflight immediately before changing
 /// the live auth file because a process can start after this snapshot.
 pub fn ensure_no_external_codex(excluded_pids: &[u32]) -> Result<(), String> {
-    let presence = codex_presence(excluded_pids)?;
+    let presence = codex_presence(excluded_pids, true)?;
     if presence.open {
         return Err(QUIT_CODEX.to_string());
     }
-    if presence.background {
-        stop_background_codex(excluded_pids)?;
+    if presence.background || !presence.idle_brokers.is_empty() {
+        stop_background_codex(excluded_pids, &presence)?;
     }
     Ok(())
 }
@@ -44,19 +61,41 @@ pub fn ensure_no_external_codex(excluded_pids: &[u32]) -> Result<(), String> {
 /// absence. Wake uses this to skip only an account that matches the
 /// externally active identity.
 pub fn external_codex_running(excluded_pids: &[u32]) -> Result<bool, String> {
-    let presence = codex_presence(excluded_pids)?;
-    Ok(presence.open || presence.background)
+    let presence = codex_presence(excluded_pids, true)?;
+    Ok(presence.open || presence.background || !presence.idle_brokers.is_empty())
 }
 
 /// Returns whether a Codex the user opened is running. The windowless daemon
 /// does not count: `ensure_no_external_codex` stops it before a switch.
 pub fn user_codex_open(excluded_pids: &[u32]) -> Result<bool, String> {
-    Ok(codex_presence(excluded_pids)?.open)
+    Ok(codex_presence(excluded_pids, true)?.open)
 }
 
 /// Stops Codex's managed App Server daemon with `codex app-server daemon stop`
-/// and waits until it has exited. Codex starts it again when it next needs it.
-fn stop_background_codex(excluded_pids: &[u32]) -> Result<(), String> {
+/// and idle plugin brokers with their own `broker/shutdown`, then waits until
+/// they have exited. Codex and the plugin start them again when needed.
+fn stop_background_codex(excluded_pids: &[u32], presence: &CodexPresence) -> Result<(), String> {
+    for broker in &presence.idle_brokers {
+        let _ = broker_request(&broker.endpoint, "broker/shutdown");
+    }
+    if presence.background {
+        stop_daemon();
+    }
+    let deadline = Instant::now() + DAEMON_EXIT_TIMEOUT;
+    loop {
+        let now = codex_presence(excluded_pids, false)?;
+        let remaining = now.background || now.brokers_present;
+        if now.open || (remaining && Instant::now() >= deadline) {
+            return Err(QUIT_CODEX.to_string());
+        }
+        if !remaining {
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn stop_daemon() {
     let mut command = crate::app_server::codex_command();
     command
         .args(["app-server", "daemon", "stop"])
@@ -65,7 +104,9 @@ fn stop_background_codex(excluded_pids: &[u32]) -> Result<(), String> {
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     hide_console(&mut command);
-    let mut child = command.spawn().map_err(|_| QUIT_CODEX.to_string())?;
+    let Ok(mut child) = command.spawn() else {
+        return;
+    };
     let deadline = Instant::now() + DAEMON_STOP_TIMEOUT;
     loop {
         match child.try_wait() {
@@ -77,17 +118,6 @@ fn stop_background_codex(excluded_pids: &[u32]) -> Result<(), String> {
                 break;
             }
         }
-    }
-    let deadline = Instant::now() + DAEMON_EXIT_TIMEOUT;
-    loop {
-        let presence = codex_presence(excluded_pids)?;
-        if presence.open || (presence.background && Instant::now() >= deadline) {
-            return Err(QUIT_CODEX.to_string());
-        }
-        if !presence.background {
-            return Ok(());
-        }
-        thread::sleep(Duration::from_millis(100));
     }
 }
 
@@ -102,7 +132,73 @@ pub(crate) fn hide_console(command: &mut Command) {
 #[cfg(not(windows))]
 pub(crate) fn hide_console(_command: &mut Command) {}
 
-fn codex_presence(excluded_pids: &[u32]) -> Result<CodexPresence, String> {
+/// Sends one request to a plugin broker and returns its result. A broker that
+/// does not answer in time, or answers with an error, gives `None`.
+fn broker_request(endpoint: &str, method: &str) -> Option<serde_json::Value> {
+    let endpoint = endpoint.to_string();
+    let request = format!(
+        "{}\n",
+        serde_json::json!({ "id": 1, "method": method, "params": {} })
+    );
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = sender.send(broker_exchange(&endpoint, &request));
+    });
+    let reply = receiver.recv_timeout(BROKER_REPLY_TIMEOUT).ok().flatten()?;
+    serde_json::from_str::<serde_json::Value>(&reply)
+        .ok()?
+        .get("result")
+        .cloned()
+}
+
+#[cfg(windows)]
+fn broker_exchange(endpoint: &str, request: &str) -> Option<String> {
+    let path = endpoint.strip_prefix("pipe:")?;
+    let mut pipe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .ok()?;
+    pipe.write_all(request.as_bytes()).ok()?;
+    let mut line = String::new();
+    BufReader::new(pipe).read_line(&mut line).ok()?;
+    Some(line)
+}
+
+#[cfg(unix)]
+fn broker_exchange(endpoint: &str, request: &str) -> Option<String> {
+    let path = endpoint.strip_prefix("unix:")?;
+    let mut socket = std::os::unix::net::UnixStream::connect(path).ok()?;
+    socket.write_all(request.as_bytes()).ok()?;
+    let mut line = String::new();
+    BufReader::new(socket).read_line(&mut line).ok()?;
+    Some(line)
+}
+
+/// The control endpoint of a plugin broker, from its command line.
+fn broker_endpoint(command: &[OsString]) -> Option<String> {
+    let parts = command
+        .iter()
+        .map(|part| part.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    let is_broker = parts.iter().any(|part| {
+        part.replace('\\', "/")
+            .to_ascii_lowercase()
+            .ends_with("/app-server-broker.mjs")
+    }) && parts.iter().any(|part| part == "serve");
+    if !is_broker {
+        return None;
+    }
+    let index = parts.iter().position(|part| part == "--endpoint")?;
+    parts
+        .get(index + 1)
+        .filter(|value| !value.is_empty())
+        .cloned()
+}
+
+/// Scans running processes. With `ask_brokers`, each plugin broker is asked
+/// whether it is busy; otherwise brokers are only noted as present.
+fn codex_presence(excluded_pids: &[u32], ask_brokers: bool) -> Result<CodexPresence, String> {
     let mut excluded = excluded_pids.iter().copied().collect::<HashSet<_>>();
     let mut system = System::new();
     system.refresh_processes_specifics(
@@ -135,6 +231,38 @@ fn codex_presence(excluded_pids: &[u32]) -> Result<CodexPresence, String> {
         }
     }
 
+    let brokers = system
+        .processes()
+        .iter()
+        .filter(|(pid, _)| !excluded.contains(&pid.as_u32()))
+        .filter_map(|(pid, process)| {
+            broker_endpoint(process.cmd()).map(|endpoint| Broker {
+                pid: pid.as_u32(),
+                endpoint,
+            })
+        })
+        .collect::<Vec<_>>();
+    let parents = system
+        .processes()
+        .iter()
+        .filter_map(|(pid, process)| {
+            process
+                .parent()
+                .map(|parent| (pid.as_u32(), parent.as_u32()))
+        })
+        .collect::<HashMap<_, _>>();
+    let under_broker = |pid: u32| {
+        let mut current = pid;
+        for _ in 0..12 {
+            match parents.get(&current) {
+                Some(parent) if brokers.iter().any(|broker| broker.pid == *parent) => return true,
+                Some(parent) => current = *parent,
+                None => return false,
+            }
+        }
+        false
+    };
+
     let mut presence = CodexPresence::default();
     for (pid, process) in system.processes() {
         let pid = pid.as_u32();
@@ -142,6 +270,7 @@ fn codex_presence(excluded_pids: &[u32]) -> Result<CodexPresence, String> {
             || excluded.contains(&pid)
             || !is_codex_process(process.name(), process.cmd())
             || is_daemon_pid_helper(process.cmd())
+            || under_broker(pid)
         {
             continue;
         }
@@ -150,6 +279,22 @@ fn codex_presence(excluded_pids: &[u32]) -> Result<CodexPresence, String> {
         } else {
             presence.open = true;
         }
+    }
+    if ask_brokers {
+        for broker in brokers {
+            let idle = broker_request(&broker.endpoint, "broker/status")
+                .and_then(|status| status.get("busy").and_then(serde_json::Value::as_bool))
+                == Some(false);
+            if idle {
+                presence.idle_brokers.push(broker);
+            } else {
+                // A busy broker runs a stock /codex command, and one that
+                // cannot say (an older plugin) is treated the same way.
+                presence.open = true;
+            }
+        }
+    } else {
+        presence.brokers_present = !brokers.is_empty();
     }
     let uncertain_node = system.processes().iter().any(|(pid, process)| {
         let pid = pid.as_u32();
@@ -310,14 +455,141 @@ mod tests {
     #[test]
     #[ignore]
     fn the_preflight_stops_the_real_codex_daemon_and_nothing_the_user_opened() {
-        let presence = codex_presence(&[]).expect("scan");
+        let presence = codex_presence(&[], true).expect("scan");
         assert!(!presence.open, "close every other Codex before this test");
         assert!(presence.background);
         assert!(external_codex_running(&[]).expect("scan"));
         assert!(!user_codex_open(&[]).expect("scan"));
 
         ensure_no_external_codex(&[]).expect("daemon stopped");
-        assert_eq!(codex_presence(&[]).expect("scan"), CodexPresence::default());
+        assert_eq!(
+            codex_presence(&[], true).expect("scan"),
+            CodexPresence::default()
+        );
+    }
+
+    /// Needs one idle Claude Code plugin broker and no other Codex open. Start
+    /// one with the plugin's `ensureBrokerSession(cwd)` from
+    /// `scripts/lib/broker-lifecycle.mjs` (no model request), then run this
+    /// test with `--ignored`.
+    #[test]
+    #[ignore]
+    fn the_preflight_stops_an_idle_plugin_broker_and_nothing_else() {
+        let presence = codex_presence(&[], true).expect("scan");
+        assert!(!presence.open, "close every other Codex before this test");
+        assert_eq!(
+            presence.idle_brokers.len(),
+            1,
+            "start one idle broker first"
+        );
+        assert!(external_codex_running(&[]).expect("scan"));
+        assert!(!user_codex_open(&[]).expect("scan"));
+
+        ensure_no_external_codex(&[]).expect("broker stopped");
+        let after = codex_presence(&[], false).expect("scan");
+        assert!(!after.brokers_present && !after.open);
+    }
+
+    #[test]
+    fn finds_a_plugin_brokers_endpoint_on_its_command_line() {
+        let command = |parts: &[&str]| parts.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            broker_endpoint(&command(&[
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Users\me\.claude\plugins\cache\gswitchtool\codex\1.0.6\scripts\app-server-broker.mjs",
+                "serve",
+                "--endpoint",
+                r"pipe:\\.\pipe\cxc-abc-codex-app-server",
+                "--cwd",
+                r"C:\repo",
+            ])),
+            Some(r"pipe:\\.\pipe\cxc-abc-codex-app-server".to_string())
+        );
+        assert_eq!(
+            broker_endpoint(&command(&[
+                "node",
+                "/x/app-server-broker.mjs",
+                "serve",
+                "--endpoint",
+                "unix:/tmp/b.sock"
+            ])),
+            Some("unix:/tmp/b.sock".to_string())
+        );
+        // Not serving, no endpoint, or another script.
+        assert_eq!(
+            broker_endpoint(&command(&[
+                "node",
+                "/x/app-server-broker.mjs",
+                "--endpoint",
+                "unix:/a"
+            ])),
+            None
+        );
+        assert_eq!(
+            broker_endpoint(&command(&["node", "/x/app-server-broker.mjs", "serve"])),
+            None
+        );
+        assert_eq!(
+            broker_endpoint(&command(&[
+                "node",
+                "/x/server.mjs",
+                "serve",
+                "--endpoint",
+                "unix:/a"
+            ])),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn asks_a_broker_over_its_pipe_and_gives_up_on_silence() {
+        use tokio::{
+            io::{AsyncBufReadExt, AsyncWriteExt},
+            net::windows::named_pipe::ServerOptions,
+        };
+        let name = format!(r"\\.\pipe\gswitch-broker-test-{}", uuid::Uuid::new_v4());
+        let server_name = name.clone();
+        thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            runtime.block_on(async move {
+                // First client: answers status. Second: never answers.
+                let server = ServerOptions::new()
+                    .first_pipe_instance(true)
+                    .create(&server_name)
+                    .expect("pipe");
+                server.connect().await.expect("connect");
+                let next = ServerOptions::new().create(&server_name).expect("pipe");
+                let (reader, mut writer) = tokio::io::split(server);
+                let mut lines = tokio::io::BufReader::new(reader).lines();
+                let request = lines.next_line().await.expect("read").expect("line");
+                assert!(request.contains("broker/status"));
+                writer
+                    .write_all(b"{\"id\":1,\"result\":{\"busy\":false}}\n")
+                    .await
+                    .expect("write");
+                let silent = next;
+                silent.connect().await.expect("connect");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                drop(silent);
+            });
+        });
+        thread::sleep(Duration::from_millis(200));
+        let endpoint = format!("pipe:{name}");
+        assert_eq!(
+            broker_request(&endpoint, "broker/status"),
+            Some(serde_json::json!({ "busy": false }))
+        );
+        let started = Instant::now();
+        assert_eq!(broker_request(&endpoint, "broker/status"), None);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            broker_request(r"pipe:\\.\pipe\gswitch-no-such-broker", "broker/status"),
+            None
+        );
     }
 
     #[test]

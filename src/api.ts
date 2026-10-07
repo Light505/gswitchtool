@@ -20,6 +20,9 @@ import type {
   ResetCreditOutcome,
   RuntimeInfo,
   AppVersion,
+  ActivityEntry,
+  InvokeTask,
+  PausedThread,
   SwitchOutcome,
   WakeOperationView,
   WakeStart,
@@ -113,6 +116,16 @@ export const api = {
     invoke<InvokeSettings>("set_invoke_profiles", { profiles }),
   setInvokePreferences: (accountPriority: string[], preferredMinRemaining: number, maxConcurrentTasks: number, autoWake: boolean) =>
     invoke<InvokeSettings>("set_invoke_preferences", { accountPriority, preferredMinRemaining, maxConcurrentTasks, autoWake }),
+  setInvokeWeeklyReserve: (reserve: Record<string, number>) =>
+    invoke<InvokeSettings>("set_invoke_weekly_reserve", { reserve }),
+  invokeTasks: () => invoke<InvokeTask[]>("get_invoke_tasks"),
+  stopInvokeTask: (id: string) => invoke<void>("stop_invoke_task", { id }),
+  pausedThreads: () => invoke<PausedThread[]>("get_paused_threads"),
+  activity: (limit = 200) => invoke<ActivityEntry[]>("get_activity", { limit }),
+  onInvokeActivity: (handler: (entry: ActivityEntry) => void) =>
+    listen<ActivityEntry>("invoke-activity", (event) => handler(event.payload)),
+  onInvokeResumed: (handler: (resumed: { threads: PausedThread[]; by_user: boolean }) => void) =>
+    listen<{ threads: PausedThread[]; by_user: boolean }>("invoke-resumed", (event) => handler(event.payload)),
   onInvokeAutoWoke: (handler: (accounts: string[]) => void) =>
     listen<string[]>("invoke-auto-woke", (event) => handler(event.payload)),
   setAccountInvokeAllowed: (id: string, allowed: boolean) =>

@@ -30,6 +30,8 @@ const ERROR_MESSAGES = {
   ACCOUNT_VERIFICATION_FAILED:
     "The Codex account ran out, but the replacement account could not be verified, so work did not resume. Tell the user.",
   UNKNOWN_LEASE: "GSwitch no longer tracks this Codex run. Ask the user to check GSwitch.",
+  STOPPED_BY_USER:
+    "The user stopped this Codex task in GSwitch. Do not restart or retry it; tell the user what it was doing and ask how to continue.",
   MODEL_UNAVAILABLE:
     "No Codex account GSwitch may use offers this model with usage left, so the task did not start. Choose another allowed model from invoke-status, or tell the user.",
   UNAUTHORIZED: "GSwitch refused the request. Ask the user to restart GSwitch.",

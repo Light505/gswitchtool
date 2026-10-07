@@ -33,7 +33,8 @@ async function startFakeGSwitch({
   failoverDetail = null,
   paused = null,
   maxTasks = null,
-  exclusiveModel = null
+  exclusiveModel = null,
+  stopTask = false
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -75,7 +76,9 @@ async function startFakeGSwitch({
       case "run_thread":
         return ok();
       case "run_end":
-        return ok({ outcome: "unchanged" });
+        return ok({ outcome: stopTask ? "stopped" : "unchanged" });
+      case "task_result":
+        return ok();
       case "limit_reached":
         return policy.invokeMode ? ok({ failover: "started" }) : fail("INVOKE_MODE_DISABLED");
       case "await_failover":
@@ -271,7 +274,7 @@ test("invoke registers its run with GSwitch and runs with the chosen settings", 
     assert.equal(payload.failovers, 0);
     assert.match(payload.jobId, /^task-/);
 
-    assert.deepEqual(gswitch.methods(), ["lease_open", "run_begin", "run_app_server", "run_thread", "run_end"]);
+    assert.deepEqual(gswitch.methods(), ["lease_open", "run_begin", "run_app_server", "run_thread", "run_end", "task_result"]);
     const [lease, , appServer, thread] = gswitch.requests;
     assert.equal(lease.params.model, "model-a");
     assert.equal(lease.params.reasoning_effort, "xhigh");
@@ -336,7 +339,8 @@ test("after GSwitch switches accounts, invoke resumes the same thread with the s
       "await_failover",
       "run_begin",
       "run_app_server",
-      "run_end"
+      "run_end",
+      "task_result"
     ]);
     const fakeState = readFakeState(ctx.statePath);
     assert.equal(fakeState.threads.length, 1, "the failover must not create a new Codex thread");
@@ -362,6 +366,28 @@ test("a failover GSwitch cannot complete is reported with the thread kept", () =
     assert.match(payload.message, /PAUSE ALL WORK/);
     assert.ok(payload.threadId);
     assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes without a verified switch");
+  }));
+
+test("a task the user stops in GSwitch is reported as stopped, not retried", () =>
+  withGSwitch({ stopTask: true }, "usage-limit-once", async (ctx, gswitch) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 1);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "STOPPED_BY_USER");
+    assert.match(payload.message, /Do not restart or retry it/);
+    assert.ok(payload.threadId);
+    assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes after a stop");
+    assert.ok(!gswitch.methods().includes("limit_reached"));
+    const reported = gswitch.requests.find((request) => request.method === "task_result");
+    assert.deepEqual(reported.params, { lease_id: "lease-1", status: "failed", code: "STOPPED_BY_USER" });
+  }));
+
+test("a finished task reports its result to GSwitch", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const reported = gswitch.requests.find((request) => request.method === "task_result");
+    assert.deepEqual(reported.params, { lease_id: "lease-1", status: "completed", code: null });
   }));
 
 test("switching GSwitch to Manual Mode stops automatic failover", () =>

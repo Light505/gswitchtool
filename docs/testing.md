@@ -58,7 +58,9 @@ private repository with the saved Git sign-in and changes nothing. The other
 needs a running Codex daemon (start it first with `codex app-server daemon start`
 in a terminal; Codex refuses to start it under the test runner) and no other
 Codex open, and checks that GSwitch's preflight stops it. A third reads the live Codex account's model list once
-(`the_live_sign_in_reads_codexs_model_list`); it sends no model request.
+(`the_live_sign_in_reads_codexs_model_list`); it sends no model request. A fourth
+needs one idle Claude Code plugin broker, started with the plugin's
+`ensureBrokerSession`, and checks that the preflight stops it.
 
 The Claude Code plugin in `integrations/codex-plugin-cc` has its own Node test
 suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.

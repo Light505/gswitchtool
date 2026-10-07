@@ -1,4 +1,5 @@
 mod accounts;
+mod activity;
 mod app_server;
 mod app_update;
 mod auto_wake;
@@ -81,6 +82,7 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -127,6 +129,16 @@ pub fn run() {
             let switched = app.handle().clone();
             let waiting = app.handle().clone();
             let paused = app.handle().clone();
+            let resumed = app.handle().clone();
+            let recorded = app.handle().clone();
+            // What Invoke Mode did, for the Activity window.
+            let activity = Arc::new(activity::ActivityLog::new(
+                config_dir.join("activity.jsonl"),
+                Some(Box::new(move |entry| {
+                    let _ = recorded.emit("invoke-activity", entry);
+                })),
+            ));
+            app.manage(activity.clone());
             let coordinator = failover::Coordinator::new(
                 Arc::new(failover::AppOps {
                     state,
@@ -161,9 +173,44 @@ pub fn run() {
                             }
                         }
                     }),
+                    // Usage is back: say which threads can continue. At the
+                    // reset time the user may be away, so Windows says it too.
+                    on_resumed: Box::new(move |threads, by_user| {
+                        let _ = resumed.emit(
+                            "invoke-resumed",
+                            serde_json::json!({ "threads": threads, "by_user": by_user }),
+                        );
+                        if !by_user {
+                            use tauri_plugin_notification::NotificationExt;
+                            let body = if threads.is_empty() {
+                                "Codex usage is available again. Claude can delegate to Codex.".to_string()
+                            } else {
+                                format!(
+                                    "Codex usage is available again. Tell Claude to continue {} paused Codex thread{}.",
+                                    threads.len(),
+                                    if threads.len() == 1 { "" } else { "s" }
+                                )
+                            };
+                            let _ = resumed
+                                .notification()
+                                .builder()
+                                .title("GSwitch Claude Tool: Invoke Mode resumed")
+                                .body(body)
+                                .show();
+                        }
+                    }),
+                    activity: activity.clone(),
                 }),
                 failover::Timings::default(),
             );
+            // A pause ends by itself at the reset time; notice it.
+            {
+                let coordinator = coordinator.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    coordinator.announce_expired_pause();
+                });
+            }
             // Without the endpoint Claude Code cannot delegate, but Manual
             // Mode and every account action keep working.
             let endpoint = invoke_ipc::start(&config_dir, invoke.clone(), coordinator.clone());
@@ -179,6 +226,9 @@ pub fn run() {
                     state,
                     invoke.clone(),
                     Box::new(move |accounts| {
+                        activity.record(activity::Activity::Woke {
+                            accounts: accounts.to_vec(),
+                        });
                         let _ = woke.emit("invoke-auto-woke", accounts);
                     }),
                 );
@@ -246,6 +296,11 @@ pub fn run() {
             commands::set_account_invoke_allowed,
             commands::get_invoke_failover,
             commands::cancel_invoke_failover,
+            commands::set_invoke_weekly_reserve,
+            commands::get_invoke_tasks,
+            commands::stop_invoke_task,
+            commands::get_paused_threads,
+            commands::get_activity,
             commands::get_invoke_pause,
             commands::resume_invoke
         ])

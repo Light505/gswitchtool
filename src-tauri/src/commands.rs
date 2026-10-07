@@ -177,6 +177,51 @@ pub fn open_latest_release(app: AppHandle) -> Result<(), String> {
         .map_err(|_| "Unable to open the GSwitch release page in your browser".to_string())
 }
 
+/// Saves how much of each account's weekly window automatic choices leave.
+#[tauri::command]
+pub fn set_invoke_weekly_reserve(
+    invoke: State<'_, InvokeState>,
+    reserve: std::collections::BTreeMap<String, u8>,
+) -> Result<InvokeSettings, String> {
+    invoke.set_weekly_reserve(reserve)
+}
+
+/// Codex tasks Claude delegated that are running or waiting their turn.
+#[tauri::command]
+pub fn get_invoke_tasks(
+    coordinator: State<'_, Arc<Coordinator>>,
+) -> Vec<crate::failover::WorkerView> {
+    coordinator.workers()
+}
+
+/// The user stops one delegated Codex task.
+#[tauri::command]
+pub fn stop_invoke_task(
+    coordinator: State<'_, Arc<Coordinator>>,
+    id: String,
+) -> Result<(), String> {
+    coordinator
+        .stop_task(&id)
+        .map_err(|_| "That Codex task has already finished".to_string())
+}
+
+/// The threads that were running when Invoke Mode paused.
+#[tauri::command]
+pub fn get_paused_threads(
+    coordinator: State<'_, Arc<Coordinator>>,
+) -> Vec<crate::failover::PausedThread> {
+    coordinator.paused_threads()
+}
+
+/// The newest Invoke Mode activity, newest first.
+#[tauri::command]
+pub fn get_activity(
+    activity: State<'_, Arc<crate::activity::ActivityLog>>,
+    limit: Option<usize>,
+) -> Vec<crate::activity::ActivityEntry> {
+    activity.recent(limit.unwrap_or(200).min(1000))
+}
+
 /// The running app's version, shown next to its name.
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> crate::types::AppVersion {

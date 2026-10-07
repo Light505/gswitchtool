@@ -486,6 +486,40 @@ switch as a priority switch. It never waits for the user here: with the user's
 own Codex open, or a refused switch, the task runs on the current account. A
 running task is never switched away by another task's start.
 
+### Tasks, history, reserve, and resuming
+
+The window lists the coordinator's tasks (leases) every two seconds while Invoke
+Mode is on. Stopping one marks it stopped and terminates its registered App
+Server; its next `run_end` reports `stopped`, and `run_begin` or a failover wait
+refuses it with `STOPPED_BY_USER`, so the plugin reports it to Claude instead of
+resuming. Before disconnecting, the plugin reports its result with
+`task_result`.
+
+GSwitch appends each task start and end (with that result), user stop, account
+switch with its reason, pause with its running threads, resume, and automatic
+Wake to `activity.jsonl` in the data folder, keeping the newest 1,000 entries.
+
+Each account may have a weekly reserve. Automatic choices (the priority switch
+before a task, routing for a model, and failover selection) skip an account
+whose Codex weekly window has less than its reserve left, or whose quota cannot
+be read, so a failover pauses rather than spend a reserve.
+
+A pause keeps the threads that were running. A background check every 30
+seconds notices the reset time passing; GSwitch then announces the resume in the
+window and with a Windows notification, and a resume by the user is announced in
+the window. Both list the paused threads.
+
+### Stock plugin brokers
+
+OpenAI's stock `/codex` commands in the Claude Code plugin share one App Server
+through a broker (`app-server-broker.mjs serve`) that outlives the commands. The
+fork's broker answers `broker/status` with whether a request or stream is
+running or another client is connected. Before a credential change, GSwitch asks
+each broker, found by its command line, and stops an idle one with its own
+`broker/shutdown`; a busy broker, or one that cannot answer, counts as an open
+Codex. Codex processes under a broker are attributed to it rather than counted
+separately.
+
 ### Automatic Wake
 
 A Codex usage window starts counting at the first model request after it

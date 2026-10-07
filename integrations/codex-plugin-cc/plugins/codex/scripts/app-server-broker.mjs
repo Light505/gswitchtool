@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Modified by Light505 for gswitchtool (2026): adds broker/status so GSwitch stops only an idle broker. See CREDITS.md in gswitchtool.
 
 import fs from "node:fs";
 import net from "node:net";
@@ -154,6 +155,14 @@ async function main() {
         }
 
         if (message.method === "initialized" && message.id === undefined) {
+          continue;
+        }
+
+        // GSwitch asks before stopping this broker for an account switch: busy
+        // while a request or stream runs or another client is connected.
+        if (message.id !== undefined && message.method === "broker/status") {
+          const busy = Boolean(activeRequestSocket || activeStreamSocket) || sockets.size > 1;
+          send(socket, { id: message.id, result: { busy } });
           continue;
         }
 
