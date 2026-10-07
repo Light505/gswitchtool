@@ -128,7 +128,9 @@ Index](https://artificialanalysis.ai/agents/coding-agents/comparisons/claude-cod
 Code, Codex models in Codex). Its cost per task is the API cost at list prices,
 counting input, cached input, cache writes and output. It reflects both the
 price per token and how many tokens each effort really uses, which is what
-uses up a plan's limits. Data as of 2026-10-08:
+uses up a plan's limits. The full map of every model and effort, with prices
+and sources, is in [`model-benchmarks.md`](./model-benchmarks.md). Data as of
+2026-10-08:
 
 | Worker | Score | Cost/task | On a ladder |
 | --- | --- | --- | --- |
