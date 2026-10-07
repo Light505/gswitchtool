@@ -293,6 +293,7 @@ if (args[0] !== "app-server") {
 }
 const bootState = loadState();
 bootState.appServerStarts = (bootState.appServerStarts || 0) + 1;
+bootState.appServerCodexHome = process.env.CODEX_HOME || null;
 saveState(bootState);
 
 const rl = readline.createInterface({ input: process.stdin });

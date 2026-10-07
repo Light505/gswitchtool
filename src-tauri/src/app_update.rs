@@ -74,10 +74,9 @@ pub struct AppUpdateState {
     pending: Mutex<Option<Update>>,
 }
 
-/// Only the installed identity updates; the dev build shares its data folder
-/// but must never replace the installed app.
+/// Only the installed identity updates; Dev must never replace the installed app.
 fn updates_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
-    app.config().identifier == crate::SHARED_DATA_IDENTIFIER
+    !crate::build_identity::is_dev_identifier(&app.config().identifier)
 }
 
 pub async fn check<R: Runtime>(

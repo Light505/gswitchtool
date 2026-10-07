@@ -7,12 +7,25 @@ use std::{
 use crate::types::{CredentialStoreMode, RuntimeInfo};
 
 pub fn codex_home() -> Result<PathBuf, String> {
-    if let Ok(value) = env::var("CODEX_HOME") {
+    let path = if let Ok(value) = env::var("CODEX_HOME") {
         if !value.trim().is_empty() {
-            return Ok(PathBuf::from(value));
+            PathBuf::from(value)
+        } else {
+            default_codex_home()?
         }
+    } else {
+        default_codex_home()?
+    };
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(path))
+            .map_err(|_| "Unable to resolve the Codex home directory".to_string())
     }
+}
 
+fn default_codex_home() -> Result<PathBuf, String> {
     #[cfg(windows)]
     let base = env::var_os("USERPROFILE").map(PathBuf::from);
 

@@ -23,6 +23,14 @@ or Wake. It does not orchestrate their internal steps or receive the stored
 credential document. Switch and reset-credit failures cross IPC as a small
 serialized error code, not a Rust display string or raw provider error.
 
+The identifier ending in `.dev` selects the development identity. The installed
+build keeps data in `~/.gswitchtool` and uses the default `~/.codex`; it alone
+adopts the old AppData store. Dev keeps separate data in `~/.gswitchtool-dev`
+and uses `~/.codex-dev` unless its environment already sets `CODEX_HOME`.
+Accounts and credentials are not copied between builds; sign in again in Dev.
+Each data folder has its own `app-instance.lock`, so the same build cannot be
+opened twice while Dev and the installed build can run side by side.
+
 ## State ownership
 
 | State | Canonical owner | GSwitch responsibility |
@@ -165,9 +173,10 @@ refreshes nor rewrites credentials. API-key switching does no provider request.
 ## Mutation boundary
 
 Operations that may persist or refresh credentials share one Rust-owned
-in-process mutex and cross-process file lock. Only one GSwitch process runs at a
-time: each process loads the account store into memory once, so a second launch
-brings the running window forward and exits instead of keeping its own copy.
+in-process mutex and cross-process file lock within that build's data folder.
+Each build loads its own account store into memory once. Its `app-instance.lock`
+prevents a second copy of that build from opening, while the separate Dev and
+installed folders let the two builds run side by side.
 Live switching adds external Codex
 process checks because a GSwitch lock has no authority over another Codex
 process. The first check precedes provider work; a second check plus the original

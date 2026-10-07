@@ -25,7 +25,7 @@ import {
   } from "./lib/codex.mjs";
 import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
-import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, pauseInstruction, readInvokeStatus } from "./lib/gswitch.mjs";
+import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -509,6 +509,7 @@ async function executeTaskRun(request) {
     sandbox: request.write ? "workspace-write" : "read-only",
     onProgress: request.onProgress,
     onAppServer: request.onAppServer,
+    appServerEnv: request.appServerEnv,
     persistThread: true,
     threadName: resumeThreadId ? null : buildPersistentTaskThreadName(request.prompt || DEFAULT_CONTINUE_PROMPT)
   });
@@ -1106,12 +1107,18 @@ async function handleInvokeStatus(argv) {
   const { options } = parseCommandInput(argv, { booleanOptions: ["json"] });
   let report;
   try {
-    report = { available: true, ...(await readInvokeStatus()) };
+    const { codex_home: _codexHome, ...status } = await readInvokeStatus();
+    report = { available: true, ...status };
   } catch (error) {
     if (!(error instanceof GSwitchError)) {
       throw error;
     }
-    report = { available: false, code: error.code, message: error.message };
+    const appName = gswitchTargetAppName();
+    report = {
+      available: false,
+      code: error.code,
+      message: appName ? `${appName} is not running` : error.message
+    };
   }
   outputCommandResult(report, renderInvokeStatus(report), options.json);
 }
@@ -1569,11 +1576,12 @@ async function handleInvoke(argv) {
   // connection stays open.
   let session;
   let leaseId;
+  let codexHome = null;
   try {
     session = await GSwitchSession.open();
-    leaseId = (
-      await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: useWorktree ? actualCwd : workspaceRoot })
-    ).lease_id;
+    const lease = await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: useWorktree ? actualCwd : workspaceRoot });
+    leaseId = lease.lease_id;
+    codexHome = lease.codex_home ?? null;
   } catch (error) {
     session?.close();
     // Nothing ran: a worktree made for this call is removed, and one being
@@ -1608,7 +1616,7 @@ async function handleInvoke(argv) {
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
     const gitBefore = snapshotGit(actualCwd);
     const result = await runInvokeWithFailover({
-      base, session, leaseId, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
+      base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
       verifyCommand: options.verify ? String(options.verify) : null
     });
     if (result.jobId && result.output) {
@@ -1663,7 +1671,7 @@ async function handleInvoke(argv) {
             if (merge.status !== 0 && files.length) {
               const conflictPrompt = `The user's tree changed while you worked. Resolve the merge conflicts listed below, keeping both sides' intent. Do not touch other files.\n\nConflicting files:\n${files.map((file) => `- ${file}`).join("\n")}`;
               const resumed = await runInvokeWithFailover({
-                base, session, leaseId, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
+                base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
                 prompt: conflictPrompt, resumeThreadId: result.threadId
               });
               result.failovers += resumed.failovers;
@@ -1751,7 +1759,7 @@ async function handleInvoke(argv) {
  * exhausted, GSwitch alone switches accounts; this worker then resumes the same
  * thread with the same model, effort, sandbox, and working directory.
  */
-async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null }) {
+async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null }) {
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
@@ -1796,6 +1804,7 @@ async function runInvokeWithFailover({ base, session, leaseId, cwd, workspaceRoo
             resumeLast: false,
             resumeThreadId: threadId,
             jobId: job.id,
+            appServerEnv: codexHome ? { ...process.env, CODEX_HOME: codexHome } : undefined,
             onAppServer: (pid) => (pid ? session.request("run_app_server", { lease_id: leaseId, pid }) : undefined),
             onProgress: (event) => {
               progress?.(event);

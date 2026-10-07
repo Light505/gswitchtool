@@ -33,6 +33,8 @@ static TEST_WORK_FACTOR: Once = Once::new();
 pub struct CredentialVault {
     snapshot_path: Arc<PathBuf>,
     root: RootSecret,
+    #[cfg(not(test))]
+    service: String,
     lock: Arc<Mutex<()>>,
 }
 
@@ -50,6 +52,9 @@ impl CredentialVault {
         Self {
             snapshot_path: Arc::new(snapshot_path),
             root: RootSecret::Native,
+            #[cfg(not(test))]
+            service: std::env::var("GSWITCH_VAULT_SERVICE")
+                .unwrap_or_else(|_| ROOT_SERVICE.to_string()),
             lock: Arc::new(Mutex::new(())),
         }
     }
@@ -274,7 +279,7 @@ impl CredentialVault {
         match &self.root {
             #[cfg(not(test))]
             RootSecret::Native => {
-                let entry = Entry::new(ROOT_SERVICE, ROOT_USER)
+                let entry = Entry::new(&self.service, ROOT_USER)
                     .map_err(|_| "Protected credential storage is unavailable".to_string())?;
                 match entry.get_secret() {
                     Ok(secret) => {

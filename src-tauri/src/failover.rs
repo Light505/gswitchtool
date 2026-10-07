@@ -365,6 +365,23 @@ impl Coordinator {
         workers
     }
 
+    /// App Server roots currently owned by delegated workers. Never includes
+    /// task metadata or credentials, so it is safe to publish to disk.
+    pub fn registered_app_server_pids(&self) -> Vec<u32> {
+        let inner = self.lock();
+        let mut pids = inner
+            .leases
+            .values()
+            .filter_map(|lease| match lease.run {
+                RunState::Running(pid) => Some(pid),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        pids.sort_unstable();
+        pids.dedup();
+        pids
+    }
+
     pub fn open_lease(&self, connection: u64, request: LeaseRequest) -> String {
         let id = Uuid::new_v4().to_string();
         let started = crate::activity::Activity::TaskStarted {

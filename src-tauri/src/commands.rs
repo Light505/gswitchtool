@@ -250,7 +250,7 @@ pub fn get_activity(
 pub fn get_app_version(app: AppHandle) -> crate::types::AppVersion {
     crate::types::AppVersion {
         version: app.package_info().version.to_string(),
-        dev: app.config().identifier != crate::SHARED_DATA_IDENTIFIER,
+        dev: crate::build_identity::is_dev_identifier(&app.config().identifier),
     }
 }
 

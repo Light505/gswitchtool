@@ -3,6 +3,7 @@ mod activity;
 mod app_server;
 mod app_update;
 mod auto_wake;
+mod build_identity;
 mod chatgpt;
 mod cli_update;
 mod codex;
@@ -27,16 +28,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use tauri::{Emitter, Manager};
 
-/// The installed build's identifier. Only it updates itself; before 1.1.2 its
-/// AppData folder held the data that `~/.gswitchtool` now adopts.
-const SHARED_DATA_IDENTIFIER: &str = "com.light505.gswitchtool";
-
-/// Every build keeps its accounts and settings in `~/.gswitchtool`, so the
-/// installed and dev builds share them and `storage::acquire_app_instance`
-/// keeps them from running at the same time. Not AppData: Windows gives an app
-/// started from a packaged app, such as Claude's desktop app, its own private
-/// copy of AppData, which split the accounts between launches.
-const DATA_DIR_NAME: &str = ".gswitchtool";
+/// The AppData folder used only for the installed build's one-time migration.
+const INSTALLED_IDENTIFIER: &str = "com.light505.gswitchtool";
 
 /// Records each startup step with its time in `startup.log`. Earlier starts
 /// are kept (the last `STARTUP_LOG_KEEP` lines), so a start that stalled is
@@ -81,13 +74,32 @@ impl StartupTrace {
 /// The AppData folder that held the data before 1.1.2.
 fn legacy_data_dir(own_config_dir: PathBuf) -> PathBuf {
     match own_config_dir.parent() {
-        Some(parent) => parent.join(SHARED_DATA_IDENTIFIER),
+        Some(parent) => parent.join(INSTALLED_IDENTIFIER),
         None => own_config_dir,
     }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let context = tauri::generate_context!();
+    let identity = build_identity::BuildIdentity::from_identifier(
+        &context.config().identifier,
+        &std::env::var_os("USERPROFILE")
+            .or_else(|| std::env::var_os("HOME"))
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(".")),
+    );
+    if identity.dev {
+        if std::env::var_os("CODEX_HOME").is_none() {
+            let _ = std::fs::create_dir_all(&identity.codex_home);
+            std::env::set_var("CODEX_HOME", &identity.codex_home);
+        } else if let Some(home) = std::env::var_os("CODEX_HOME") {
+            let _ = std::fs::create_dir_all(home);
+        }
+    }
+    std::env::set_var("GSWITCH_VAULT_SERVICE", identity.vault_service);
+    std::env::set_var("GSWITCH_APP_IDENTIFIER", &context.config().identifier);
+    let is_dev = identity.dev;
     tauri::Builder::default()
         // Registered first, as the plugin requires. Each GSwitch process keeps
         // its own in-memory account store, so a second launch only brings the
@@ -104,11 +116,17 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .setup(|app| {
-            let config_dir = storage::adopt_data_dir(
-                &legacy_data_dir(app.path().app_config_dir()?),
-                &app.path().home_dir()?.join(DATA_DIR_NAME),
-            );
+        .setup(move |app| {
+            let data_dir = app.path().home_dir()?.join(if is_dev {
+                ".gswitchtool-dev"
+            } else {
+                ".gswitchtool"
+            });
+            let config_dir = if is_dev {
+                data_dir
+            } else {
+                storage::adopt_data_dir(&legacy_data_dir(app.path().app_config_dir()?), &data_dir)
+            };
             let name = app.package_info().name.clone();
             match storage::acquire_app_instance(&config_dir, &name)
                 .map_err(std::io::Error::other)?
@@ -122,8 +140,7 @@ pub fn run() {
                         .set_level(rfd::MessageLevel::Info)
                         .set_title(&name)
                         .set_description(format!(
-                            "{running} is already open. Close it before opening {name}; \
-                             both use the same accounts and settings."
+                            "{running} is already open. Close it before opening another {name}."
                         ))
                         .set_buttons(rfd::MessageButtons::Ok)
                         .show();
@@ -324,7 +341,7 @@ pub fn run() {
             commands::get_invoke_pause,
             commands::resume_invoke
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running GSwitch");
 }
 

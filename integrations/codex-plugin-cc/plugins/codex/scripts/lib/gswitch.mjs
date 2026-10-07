@@ -4,6 +4,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 export const GSWITCH_CONFIG_DIR_ENV = "GSWITCH_CONFIG_DIR";
 // GSwitch Claude Tool keeps its data in ~/.gswitchtool; before 1.1.2 it used a
@@ -11,6 +12,7 @@ export const GSWITCH_CONFIG_DIR_ENV = "GSWITCH_CONFIG_DIR";
 const GSWITCH_DATA_DIR = ".gswitchtool";
 const GSWITCH_IDENTIFIER = "com.light505.gswitchtool";
 const ENDPOINT_FILE = "invoke-endpoint.json";
+const TARGET_FILE = fileURLToPath(new URL("../../gswitch-target.json", import.meta.url));
 const REQUEST_TIMEOUT_MS = 10_000;
 
 const ERROR_MESSAGES = {
@@ -86,7 +88,26 @@ export function resolveGSwitchConfigDir(env = process.env) {
   if (env[GSWITCH_CONFIG_DIR_ENV]) {
     return env[GSWITCH_CONFIG_DIR_ENV];
   }
+  try {
+    const target = JSON.parse(fs.readFileSync(TARGET_FILE, "utf8"));
+    if (typeof target.dataDir === "string" && target.dataDir.trim()) {
+      return path.isAbsolute(target.dataDir)
+        ? target.dataDir
+        : path.resolve(os.homedir(), target.dataDir);
+    }
+  } catch {
+    // The released plugin has no target file and keeps its default behavior.
+  }
   return path.join(os.homedir(), GSWITCH_DATA_DIR);
+}
+
+export function gswitchTargetAppName() {
+  try {
+    const target = JSON.parse(fs.readFileSync(TARGET_FILE, "utf8"));
+    return typeof target.appName === "string" && target.appName.trim() ? target.appName : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The data directory of GSwitch Claude Tool before 1.1.2. */
@@ -101,7 +122,8 @@ export function resolveLegacyGSwitchConfigDir(env = process.env, platform = proc
 }
 
 function readEndpoint(env) {
-  const dirs = env[GSWITCH_CONFIG_DIR_ENV]
+  const hasTarget = !env[GSWITCH_CONFIG_DIR_ENV] && fs.existsSync(TARGET_FILE);
+  const dirs = env[GSWITCH_CONFIG_DIR_ENV] || hasTarget
     ? [resolveGSwitchConfigDir(env)]
     : [resolveGSwitchConfigDir(env), resolveLegacyGSwitchConfigDir(env)];
   for (const dir of dirs) {

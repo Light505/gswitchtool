@@ -199,6 +199,14 @@ fn broker_endpoint(command: &[OsString]) -> Option<String> {
 /// Scans running processes. With `ask_brokers`, each plugin broker is asked
 /// whether it is busy; otherwise brokers are only noted as present.
 fn codex_presence(excluded_pids: &[u32], ask_brokers: bool) -> Result<CodexPresence, String> {
+    // Dev owns a separate CODEX_HOME. Process command lines do not reliably
+    // identify which home a Codex process opened, so Dev must never stop or
+    // wait for the user's default-home Codex or the installed app's workers.
+    if crate::build_identity::is_dev_identifier(
+        &std::env::var("GSWITCH_APP_IDENTIFIER").unwrap_or_default(),
+    ) {
+        return Ok(CodexPresence::default());
+    }
     let mut excluded = excluded_pids.iter().copied().collect::<HashSet<_>>();
     let mut system = System::new();
     system.refresh_processes_specifics(
@@ -209,6 +217,9 @@ fn codex_presence(excluded_pids: &[u32], ask_brokers: bool) -> Result<CodexPrese
             .with_exe(UpdateKind::Always)
             .without_tasks(),
     );
+    extend_published_worker_pids(&mut excluded, &published_worker_files(), |pid| {
+        system.process(sysinfo::Pid::from_u32(pid)).is_some()
+    });
 
     // On Windows GSwitch launches `cmd -> codex.cmd -> node`. Excluding only
     // the direct child would make our own App Server look external; expand the
@@ -309,6 +320,49 @@ fn codex_presence(excluded_pids: &[u32], ask_brokers: bool) -> Result<CodexPrese
         );
     }
     Ok(presence)
+}
+
+fn published_worker_files() -> Vec<std::path::PathBuf> {
+    let Some(home) = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from)
+    else {
+        return Vec::new();
+    };
+    [".gswitchtool", ".gswitchtool-dev"]
+        .into_iter()
+        .map(|name| home.join(name).join("invoke-workers.json"))
+        .collect()
+}
+
+#[derive(serde::Deserialize)]
+struct PublishedWorkers {
+    #[serde(default)]
+    pids: Vec<u32>,
+}
+
+fn read_live_worker_pids(path: &std::path::Path, is_alive: impl Fn(u32) -> bool) -> Vec<u32> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<PublishedWorkers>(&bytes).ok())
+        .map(|workers| {
+            workers
+                .pids
+                .into_iter()
+                .filter(|pid| is_alive(*pid))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn extend_published_worker_pids(
+    excluded: &mut HashSet<u32>,
+    files: &[std::path::PathBuf],
+    is_alive: impl Fn(u32) -> bool + Copy,
+) {
+    for path in files {
+        excluded.extend(read_live_worker_pids(path, is_alive));
+    }
 }
 
 /// Stops a process that GSwitch was told it owns, together with every process
@@ -422,6 +476,18 @@ mod tests {
                 OsString::from("C:\\npm\\node_modules\\@openai\\codex\\bin\\codex.js")
             ]
         ));
+    }
+
+    #[test]
+    fn published_worker_pids_are_added_to_external_codex_exclusions() {
+        let root = std::env::temp_dir().join(format!("gswitch-workers-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("temp dir");
+        let path = root.join("invoke-workers.json");
+        std::fs::write(&path, br#"{"pids":[123,456]}"#).expect("worker file");
+        let mut excluded = HashSet::new();
+        extend_published_worker_pids(&mut excluded, std::slice::from_ref(&path), |pid| pid == 123);
+        assert_eq!(excluded, HashSet::from([123]));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

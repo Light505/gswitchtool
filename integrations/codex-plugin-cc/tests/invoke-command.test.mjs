@@ -44,6 +44,7 @@ async function startFakeGSwitch({
       ? path.join("\\\\.\\pipe", `gswitch-test-${randomUUID()}`)
       : path.join(configDir, "invoke.sock");
   const requests = [];
+  const codexHome = path.join(configDir, "codex-home");
   const policy = { invokeMode };
   const respond = (request) => {
     const fail = (code) => ({ id: request.id, error: { code } });
@@ -57,6 +58,7 @@ async function startFakeGSwitch({
             ? PROFILES.map((profile) => (profile.model === exclusiveModel ? { ...profile, exclusive: true } : profile))
             : [],
           workers_running: 0,
+          codex_home: codexHome,
           failover_in_progress: waitingForCodex,
           ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
           ...(paused ? { paused } : {}),
@@ -72,7 +74,7 @@ async function startFakeGSwitch({
         if (!profile) return fail("MODEL_NOT_ALLOWED");
         if (!profile.reasoning_efforts.includes(request.params.reasoning_effort)) return fail("REASONING_NOT_ALLOWED");
         if (manualAfterLease) policy.invokeMode = false;
-        return ok({ lease_id: "lease-1" });
+        return ok({ lease_id: "lease-1", codex_home: codexHome });
       }
       case "run_begin":
       case "run_app_server":
@@ -112,6 +114,7 @@ async function startFakeGSwitch({
   fs.writeFileSync(path.join(configDir, "invoke-endpoint.json"), JSON.stringify({ endpoint, token: TOKEN, pid: process.pid }));
   return {
     configDir,
+    codexHome,
     requests,
     methods: () => requests.map((request) => request.method),
     close: () => new Promise((resolve) => server.close(resolve))
@@ -290,6 +293,7 @@ test("invoke registers its run with GSwitch and runs with the chosen settings", 
     assert.equal(thread.params.thread_id, payload.threadId);
 
     const fakeState = readFakeState(ctx.statePath);
+    assert.equal(fakeState.appServerCodexHome, gswitch.codexHome);
     assert.equal(fakeState.lastTurnStart.model, "model-a");
     assert.equal(fakeState.lastTurnStart.effort, "xhigh");
     assert.equal(fakeState.lastTurnStart.prompt, `implement the feature${REPLY_FORMAT}`);

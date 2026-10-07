@@ -277,7 +277,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | Accounts are missing in a version before 1.1.2 | Versions before 1.1.2 kept data in AppData, and Windows gives an app started from Claude's desktop app its own private copy of AppData, so accounts added in a window opened from Claude did not appear when opening GSwitch from the Start menu. Update to 1.1.2 or later. If accounts are still missing, keep `~/.gswitchtool/startup.log` (each startup step, no account data). |
 | GSwitch never offers an update | Run `git pull` in the repository once so Git saves your GitHub sign-in, then reopen the app. Versions before 1.1.0 cannot update themselves. |
 | *Quit Codex* although no Codex window is open | GSwitch stops Codex's background service by itself; an IDE extension or a `codex` command running in a terminal still counts as open. |
-| *… is already open. Close it before opening …* | The installed app and the dev app share accounts, so only one runs at a time. Close the one that is open. |
+| *… is already open. Close it before opening …* | That same build is already open. Close it before opening another copy. Dev and installed can run side by side. |
 | Building fails while downloading libsodium | Some networks block its plain-HTTP download. Download `LATEST.tar.gz`, `libsodium-1.0.22-stable-msvc.zip`, and their `.minisig` files from https://download.libsodium.org/libsodium/releases/ into one folder and set `SODIUM_DIST_DIR` to it; the build still checks their signatures. |
 
 ## Working on the tool
@@ -291,10 +291,11 @@ Changes are made on the `dev` branch and reach the installed app only through
 pnpm run test:dev
 ```
 
-It builds **GSwitch Claude Tool (Dev)**, closes the installed app (never while
-Claude's delegated Codex tasks run through it), and opens the dev build the way
-the Start menu would, with your accounts. When you are done testing,
-`pnpm run test:dev -- --done` closes it and reopens the installed app.
+It builds **GSwitch Claude Tool (Dev)** and opens it the way the Start menu
+would. Dev has its own accounts and settings in `~/.gswitchtool-dev` and Codex
+home in `~/.codex-dev`; sign in to your accounts again in Dev. The installed
+app can stay open. When you are done testing,
+`pnpm run test:dev -- --done` closes only the dev build.
 
 **The app, while changing code.** Close GSwitch Claude Tool, then run this on `dev`:
 
@@ -302,11 +303,11 @@ the Start menu would, with your accounts. When you are done testing,
 pnpm run app:dev
 ```
 
-It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. It
-uses the same accounts and Invoke settings as the installed app, so anything you
-add or change in one appears in the other. Only one of them can be open at a
-time; opening the second shows a message naming the one to close. The Claude
-Code plugin talks to whichever is open.
+It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. Dev
+uses its own accounts and settings in `~/.gswitchtool-dev` and Codex home in
+`~/.codex-dev`; sign in again there. The installed app can run at the same time.
+The dev plugin is `codex-dev`; use `/codex-dev:gswitch-invoke` and
+`/codex-dev:gswitch-review` to send tasks to the Dev build.
 
 If a dev change upgrades the account file format, an older installed app cannot
 read that file until the change reaches `main` and is installed.

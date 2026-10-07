@@ -9,7 +9,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
-        Arc,
+        Arc, Mutex,
     },
 };
 
@@ -25,6 +25,7 @@ use crate::{
 };
 
 pub const ENDPOINT_FILE: &str = "invoke-endpoint.json";
+pub const WORKERS_FILE: &str = "invoke-workers.json";
 const MAX_REQUEST_BYTES: u64 = 64 * 1024;
 
 static NEXT_CONNECTION: AtomicU64 = AtomicU64::new(1);
@@ -33,6 +34,8 @@ pub struct Endpoint {
     token: String,
     invoke: InvokeState,
     coordinator: Arc<Coordinator>,
+    worker_file: PathBuf,
+    published_pids: Mutex<Vec<u32>>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +75,24 @@ pub fn start(
         token,
         invoke,
         coordinator,
+        worker_file: config_dir.join(WORKERS_FILE),
+        published_pids: Mutex::new(Vec::new()),
+    });
+    storage::write_json_atomic(
+        &endpoint.worker_file,
+        &json!({ "pids": [] }),
+        "Invoke worker registry",
+    )?;
+    // Some registry changes come from the GSwitch window (for example Stop),
+    // not from an IPC request. Keep the public PID projection in sync with all
+    // coordinator paths without exposing worker metadata.
+    let publisher = Arc::clone(&endpoint);
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(250));
+        loop {
+            interval.tick().await;
+            publisher.publish_worker_pids();
+        }
     });
     tauri::async_runtime::spawn(listener.serve(endpoint));
     Ok(())
@@ -105,6 +126,7 @@ where
         }
     }
     endpoint.coordinator.drop_connection(connection);
+    endpoint.publish_worker_pids();
 }
 
 /// Answers one JSON-lines request. Errors carry only a stable code.
@@ -120,7 +142,29 @@ pub(crate) async fn handle_line(line: &str, endpoint: &Endpoint, connection: u64
             Err(code) => error_response(request.id, &code),
         },
     };
+    endpoint.publish_worker_pids();
     response.to_string()
+}
+
+impl Endpoint {
+    fn publish_worker_pids(&self) {
+        let Ok(mut previous) = self.published_pids.lock() else {
+            return;
+        };
+        let pids = self.coordinator.registered_app_server_pids();
+        if *previous == pids {
+            return;
+        }
+        if storage::write_json_atomic(
+            &self.worker_file,
+            &json!({ "pids": pids }),
+            "Invoke worker registry",
+        )
+        .is_ok()
+        {
+            *previous = pids;
+        }
+    }
 }
 
 async fn dispatch(
@@ -170,6 +214,7 @@ async fn dispatch(
                 "allowed_invocation_profiles": profiles,
                 "task_defaults": settings.task_defaults,
                 "workers_running": running,
+                "codex_home": crate::codex::codex_home()?.display().to_string(),
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
                 "max_concurrent_tasks": settings.max_concurrent_tasks,
@@ -201,7 +246,10 @@ async fn dispatch(
                         .to_string(),
                 },
             );
-            Ok(json!({ "lease_id": lease_id }))
+            Ok(json!({
+                "lease_id": lease_id,
+                "codex_home": crate::codex::codex_home()?.display().to_string(),
+            }))
         }
         "run_begin" => {
             coordinator
@@ -497,6 +545,8 @@ mod tests {
             token: TOKEN.into(),
             coordinator: Coordinator::new(Arc::new(FixedOps(invoke.clone())), timings),
             invoke,
+            worker_file: dir.join(WORKERS_FILE),
+            published_pids: Mutex::new(Vec::new()),
         }
     }
 
@@ -578,6 +628,7 @@ mod tests {
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
                 "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
                 "workers_running": 0,
+                "codex_home": crate::codex::codex_home().expect("Codex home").display().to_string(),
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
                 "max_concurrent_tasks": 2,
@@ -640,6 +691,13 @@ mod tests {
             ),
             &endpoint,
         );
+        assert_eq!(
+            opened["result"]["codex_home"],
+            crate::codex::codex_home()
+                .expect("Codex home")
+                .display()
+                .to_string()
+        );
         let lease = opened["result"]["lease_id"]
             .as_str()
             .expect("lease")
@@ -657,6 +715,11 @@ mod tests {
             ok("run_app_server", json!({"pid": 4242}))["result"],
             json!({})
         );
+        let workers: Value = serde_json::from_slice(
+            &std::fs::read(&endpoint.worker_file).expect("worker registry after register"),
+        )
+        .expect("worker registry JSON");
+        assert_eq!(workers, json!({ "pids": [4242] }));
         assert_eq!(
             ok("run_thread", json!({"thread_id": "thr_1"}))["result"],
             json!({})
@@ -678,6 +741,11 @@ mod tests {
             json!({})
         );
         assert_eq!(ok("run_end", json!({}))["result"]["outcome"], "unchanged");
+        let workers: Value = serde_json::from_slice(
+            &std::fs::read(&endpoint.worker_file).expect("worker registry after unregister"),
+        )
+        .expect("worker registry JSON");
+        assert_eq!(workers, json!({ "pids": [] }));
 
         endpoint.invoke.set_invoke_mode(false).expect("manual");
         assert_eq!(
@@ -864,6 +932,8 @@ mod tests {
             token: TOKEN.into(),
             invoke: base.invoke.clone(),
             coordinator: Coordinator::new(ops.clone(), Timings::default()),
+            worker_file: dir.join(WORKERS_FILE),
+            published_pids: Mutex::new(Vec::new()),
         });
         let path = endpoint_path(&dir);
         storage::write_json_atomic(
