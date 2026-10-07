@@ -337,6 +337,17 @@ test("invoke reports git diff facts and files outside repeatable scope globs", (
     assert.ok(payload.warnings.includes("WARNING: changed outside --scope: outside.ts"));
   }));
 
+test("git facts leave out edits that were already in the working tree before the run", () =>
+  withGSwitch({}, "invoke-write", async (ctx) => {
+    fs.appendFileSync(path.join(ctx.repo, "README.md"), "one\ntwo\nthree\n");
+    fs.writeFileSync(path.join(ctx.repo, "outside.ts"), "zero\none\n");
+    fs.writeFileSync(path.join(ctx.repo, "notes.txt"), "user notes\n");
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "change a file"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(payload.diff.files, [{ path: "outside.ts", added: 1, deleted: 1 }]);
+  }));
+
 test("invoke --worktree applies a clean task patch and removes its worktree", () =>
   withGSwitch({}, "invoke-worktree-apply", async (ctx) => {
     const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "--write", "--worktree", "do the work"], ctx);

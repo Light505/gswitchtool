@@ -1130,36 +1130,53 @@ function appendReplyFormat(prompt) {
   return `${prompt.trimEnd()}\n${INVOKE_REPLY_FORMAT}`;
 }
 
-function snapshotGit(cwd) {
-  const probe = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd, encoding: "utf8", windowsHide: true });
-  if (probe.status !== 0 || !probe.stdout.trim()) return null;
-  const statusResult = spawnSync("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd, encoding: "utf8", windowsHide: true });
-  const numstatResult = spawnSync("git", ["diff", "--numstat"], { cwd, encoding: "utf8", windowsHide: true });
-  if (statusResult.status !== 0 || numstatResult.status !== 0) return null;
+// git's tree with no files, for a repository without commits.
+const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+function readUntracked(root) {
+  const listed = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
   const files = new Map();
-  for (const line of statusResult.stdout.split(/\r?\n/).filter(Boolean)) {
-    const status = line.slice(0, 2);
-    const file = line.slice(3).replace(/^.* -> /, "").replace(/\\/g, "/");
-    files.set(file, { status, added: 0, deleted: 0 });
-  }
-  for (const line of numstatResult.stdout.split(/\r?\n/).filter(Boolean)) {
-    const [addedText, deletedText, ...nameParts] = line.split("\t");
-    const file = nameParts.join("\t").replace(/\\/g, "/");
-    const current = files.get(file) ?? { status: "", added: 0, deleted: 0 };
-    current.added = Number(addedText) || 0;
-    current.deleted = Number(deletedText) || 0;
-    files.set(file, current);
-  }
-  for (const [file, entry] of files) {
-    if (entry.status !== "??") continue;
+  if (listed.status !== 0) return files;
+  for (const file of listed.stdout.split("\0").filter(Boolean)) {
     try {
-      const content = fs.readFileSync(path.resolve(cwd, file), "utf8");
-      entry.added = content.length ? content.split(/\r?\n/).filter((line, index, lines) => line.length || index < lines.length - 1).length : 0;
+      files.set(file, fs.readFileSync(path.join(root, file), "utf8"));
     } catch {
-      entry.added = 0;
+      files.set(file, "");
     }
   }
   return files;
+}
+
+function textLines(text) {
+  return text ? text.split(/\r?\n/).filter((line, index, lines) => line.length || index < lines.length - 1) : [];
+}
+
+/** Lines in `next` but not `previous` (added), and the reverse (deleted). */
+function lineDelta(previous, next) {
+  const counts = new Map();
+  for (const line of textLines(previous)) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let added = 0;
+  for (const line of textLines(next)) {
+    const left = counts.get(line) ?? 0;
+    if (left) counts.set(line, left - 1);
+    else added += 1;
+  }
+  let deleted = 0;
+  for (const left of counts.values()) deleted += left;
+  return { added, deleted };
+}
+
+// Records the working tree as the run starts (uncommitted edits included), so
+// the facts afterwards cover only what changed during the run.
+function snapshotGit(cwd) {
+  const probe = git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (probe.status !== 0 || !probe.stdout.trim()) return null;
+  const root = probe.stdout.trim();
+  const stash = gitWaitingForLock(root, ["stash", "create"]);
+  if (stash.status !== 0) return null;
+  const head = git(root, ["rev-parse", "--verify", "HEAD"]);
+  const base = stash.stdout.trim() || (head.status === 0 ? head.stdout.trim() : EMPTY_TREE);
+  return { root, base, untracked: readUntracked(root) };
 }
 
 function git(cwd, args, options = {}) {
@@ -1334,14 +1351,25 @@ function stagedPatch(worktree, base) {
   return diff.stdout;
 }
 
-function changedGitFacts(before, after) {
+function changedGitFacts(before) {
   const changed = [];
-  const names = new Set([...(before?.keys() ?? []), ...(after?.keys() ?? [])]);
-  for (const file of names) {
-    const previous = before.get(file) ?? { status: "", added: 0, deleted: 0 };
-    const current = after.get(file) ?? { status: "", added: 0, deleted: 0 };
-    if (previous.status === current.status && previous.added === current.added && previous.deleted === current.deleted) continue;
-    changed.push({ path: file, added: current.added, deleted: current.deleted });
+  // Tracked files: the working tree now against its state when the run started.
+  const numstat = git(before.root, ["diff", "--numstat", before.base]);
+  if (numstat.status !== 0) return { repository: false, files: [] };
+  for (const line of numstat.stdout.split(/\r?\n/).filter(Boolean)) {
+    const [addedText, deletedText, ...nameParts] = line.split("\t");
+    changed.push({ path: nameParts.join("\t").replace(/\\/g, "/"), added: Number(addedText) || 0, deleted: Number(deletedText) || 0 });
+  }
+  // Untracked files: new, edited, or removed since the run started.
+  const untracked = readUntracked(before.root);
+  for (const [file, text] of untracked) {
+    const previous = before.untracked.get(file);
+    if (previous === text) continue;
+    changed.push({ path: file, ...lineDelta(previous ?? "", text) });
+  }
+  for (const [file, text] of before.untracked) {
+    if (untracked.has(file) || changed.some((entry) => entry.path === file)) continue;
+    changed.push({ path: file, added: 0, deleted: textLines(text).length });
   }
   changed.sort((a, b) => a.path.localeCompare(b.path));
   return {
@@ -1578,7 +1606,7 @@ async function handleInvoke(argv) {
     process.noDeprecation = true;
     ensureCodexAvailable(actualCwd);
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
-    const gitBefore = useWorktree ? new Map() : snapshotGit(actualCwd);
+    const gitBefore = snapshotGit(actualCwd);
     const result = await runInvokeWithFailover({
       base, session, leaseId, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
       verifyCommand: options.verify ? String(options.verify) : null
@@ -1588,8 +1616,7 @@ async function handleInvoke(argv) {
       fs.writeFileSync(answerFile, result.output, "utf8");
       result.answerFile = answerFile;
     }
-    const gitAfter = snapshotGit(actualCwd);
-    result.diff = gitBefore && gitAfter ? changedGitFacts(gitBefore, gitAfter) : { repository: false, files: [] };
+    result.diff = gitBefore ? changedGitFacts(gitBefore) : { repository: false, files: [] };
     result.warnings = [];
     const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
       .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
