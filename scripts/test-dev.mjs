@@ -10,13 +10,16 @@
 // replace its file) and started through Explorer, like a Start-menu launch.
 import { spawnSync } from "node:child_process";
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const localAppData = process.env.LOCALAPPDATA;
 const installed = join(localAppData, "GSwitch Claude Tool", "gswitch.exe");
-const testDir = join(localAppData, "GSwitch Claude Tool Dev Test");
+// In the home folder, not AppData: when this runs from Claude's desktop app,
+// Windows sends its AppData writes to a private copy that Explorer cannot see.
+const testDir = join(homedir(), ".gswitchtool-dev-test");
 const testExe = join(testDir, "gswitch-dev.exe");
 const done = process.argv.includes("--done");
 
