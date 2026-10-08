@@ -379,6 +379,9 @@ Claude accounts, and hitting the limit stops the whole session.
 `~/.gswitchtool-dev/claude-setup.json`. The Dev plugins are silent until you type
 `/router-dev:dev-on` (or `/codex-dev:dev-on`) in a session; then only that session
 gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins.
+The Bash hooks carry Claude Code's `"if": "Bash(node *)"` filter, so commands
+that run no `node` (git, pnpm, tests) start no hook process; the script itself
+still checks every command that gets through (about 0.27 s each on this PC).
 The released router and `router-dev` can both be on in one session: each checks
 only its own workers (`router:*` or `router-dev:*`) and its own Codex plugin
 (`codex` or `codex-dev`) and lets the other's through. Not provable by unit tests and checked
