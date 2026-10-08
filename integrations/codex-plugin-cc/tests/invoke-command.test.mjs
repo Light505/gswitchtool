@@ -22,7 +22,7 @@ const PROFILES = [
 ];
 const FAILOVER_RESUME_PROMPT =
   "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
-const REPLY_FORMAT = "\nReply format (end with at most 15 lines):\nChanged: one line per file, what changed\nTests: commands run + pass/fail\nOpen questions: none, or list them";
+const REPLY_FORMAT = "\nWork rules: understand the code you change and the code that calls it before editing; match the surrounding style; keep the change small but complete. Keep the output of passing commands short, but read the full error when a command fails. Do not weaken, skip or delete tests.\nReply format (end with at most 15 lines):\nChanged: one line per file (path from the repository root), what changed\nTests: commands run + pass/fail\nOpen questions: none, or list them";
 
 // Answers like GSwitch's Invoke endpoint from an in-memory policy. A failover
 // "succeeds" unless failoverError is set; the fake does not switch accounts.

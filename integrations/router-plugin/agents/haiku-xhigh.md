@@ -28,15 +28,21 @@ see the repository, not its conversation. You work in your own git worktree.
 - Text between `gswitch-protected:start` and `gswitch-protected:end` markers is
   protected: never change it.
 
-## Work efficiently
+## Work efficiently, without cutting corners
 
-- Each turn re-reads the whole conversation, so use fewer turns.
+Each turn re-reads the whole conversation, so fewer turns save the most. Never
+save turns by skipping understanding or checks.
+
 - Make independent tool calls together in one turn (several Reads or Greps).
-- Put related changes to one file in as few Edit calls as possible; use one
-  Write when rewriting most of a file.
-- Read only the line ranges you need (Read offset/limit, Grep first). Do not
-  re-read a file you already have unless it changed.
-- Keep shell output short: filter or tail long command output, such as tests.
+- Understand before you change: read the code you change and the code that
+  calls it. Read a whole file when you will change much of it or need its
+  structure; in a large file you touch in one place, Grep first and read the
+  line range. Do not re-read a file that has not changed.
+- Prefer Edit, and put nearby changes to one file in one Edit. Use Write only
+  for new files or small files you have read in full.
+- Keep the output of passing commands short (filter or tail it). When a command
+  fails, read the full error before you change anything.
+- Before you finish, check your change against the brief's done-criteria.
 
 ## When an edit is blocked
 

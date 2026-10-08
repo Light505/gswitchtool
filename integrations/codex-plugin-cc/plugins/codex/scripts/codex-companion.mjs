@@ -1140,8 +1140,9 @@ async function handleInvokeStatus(argv) {
 }
 
 const INVOKE_REPLY_FORMAT = [
+  "Work rules: understand the code you change and the code that calls it before editing; match the surrounding style; keep the change small but complete. Keep the output of passing commands short, but read the full error when a command fails. Do not weaken, skip or delete tests.",
   "Reply format (end with at most 15 lines):",
-  "Changed: one line per file, what changed",
+  "Changed: one line per file (path from the repository root), what changed",
   "Tests: commands run + pass/fail",
   "Open questions: none, or list them"
 ].join("\n");

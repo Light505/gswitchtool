@@ -79,6 +79,8 @@ The worker sees the repository, not this conversation. The brief states:
 
 - Goal and done-criteria, the constraints that matter, and the files to start
   from.
+- What you already know: the cause, files and functions (`file:line`), and the
+  commands to run, so the worker does not search for them again.
 - `TASK: <id>` and `SCOPE: <glob,glob>`, each on its own line (both required).
   Write the scope generously: the task's files plus their tests and type files.
 - `VERIFY: <command>` when a test command exists.
