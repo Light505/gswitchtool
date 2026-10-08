@@ -336,6 +336,14 @@ The final report lists every scope request and who decided it.
    checks.) Untracked files that are identical to the main worktree's copy
    (Claude Code copies `.claude/settings.local.json` into every worker
    worktree) are not counted as worker changes and are skipped.
+   A locked worktree of a stopped worker is applied and kept: tell the owner
+   its path; it can be removed after the session. Every worker needs a stop
+   notice after its latest resume before finish verifies or applies it; wait
+   for that notice, then run `router finish` again. If it has stopped and finish
+   still waits, use `router apply`. Repeating finish after a successful apply
+   prints `Already applied.`; resuming the worker clears that state. Applied
+   changes are not recorded as failures if cleanup fails. Manual `router apply`
+   refuses locked worktrees unless `--keep-locked` is given, which skips cleanup.
 2. Review: `gswitch-review` runs after non-trivial changes in `mixed` and
    `codex` mode, with the same rule as the review skill (typos, comments,
    formatting, renames, one-line fixes and text-only files are skipped and the

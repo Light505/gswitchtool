@@ -369,16 +369,29 @@ test("failure prints the stored plan view without a new plan; pass stays one lin
   assert.equal(f.result("codex:gpt-6.1-sol/low", null, "pass"), "Result: recorded t1 codex:gpt-6.1-sol/low pass\n");
 });
 
-test("SendMessage asks only for bound, unfinished tasks at three failures, without lock", (t) => {
+test("SendMessage marks bound workers resumed for every decision and asks at three failures", (t) => {
   const f = fixture(t); f.plan();
   f.write("sessions/s1.json", { bindings: { a1: { type: "router:haiku-low", task: "t1" }, a2: { type: "router:haiku-low" } } });
   const send = (to = "a1") => f.hook("SendMessage", { to });
   assert.deepEqual(send(), {});
   f.result(); f.result(); assert.deepEqual(send(), {});
   f.result();
-  fs.mkdirSync(path.join(f.data, "state.lock"));
+  // Writing hooks acquire and release the state lock, including stale-lock recovery.
+  const lock = path.join(f.data, "state.lock"); fs.mkdirSync(lock);
+  const stale = new Date(Date.now() - 61000); fs.utimesSync(lock, stale, stale);
   assert.equal(reason(send()), "Task t1 has 3 failed attempts; continue by resuming router:haiku-low?");
+  assert.equal(fs.existsSync(lock), false);
+  assert.equal(typeof JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8")).bindings.a1.resumedAt, "number");
   assert.deepEqual(send("a2"), {}); assert.deepEqual(send("unbound"), {});
   appendResult(f.file, { ...readResults(f.file).at(-1), outcome: "pass" });
   assert.deepEqual(send(), {});
+  const state = JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8"));
+  assert.equal(typeof state.bindings.a1.resumedAt, "number");
+  assert.equal(typeof state.bindings.a2.resumedAt, "number");
+  assert.equal(state.bindings.unbound, undefined);
+  state.bindings.a1.appliedAt = 1;
+  f.write("sessions/s1.json", state);
+  f.setup("off"); assert.deepEqual(send(), {});
+  const resumed = JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8")).bindings.a1;
+  assert.equal(resumed.appliedAt, undefined); assert.ok(resumed.resumedAt >= state.bindings.a1.resumedAt);
 });

@@ -14,6 +14,9 @@ see the repository, not its conversation. You work in your own git worktree.
 - When the brief has a `VERIFY:` command, run it before you finish. If it fails,
   fix the cause and run it again. Do not weaken, skip or delete tests to make it
   pass.
+- Run commands in the foreground and wait for them (use a longer timeout for
+  slow test runs). Never use background commands or sleep loops; nothing you
+  started may still be running when you answer.
 - Do not commit, push, stash, reset, or change git config or branches.
 - Do not start other agents. Do not touch credentials, `.env` files, `~/.codex`,
   `~/.claude`, or anything outside the repository.

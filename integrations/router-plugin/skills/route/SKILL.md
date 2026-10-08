@@ -110,9 +110,17 @@ Trust tool facts only; the worker's text is a claim.
   check on the worker's worktree. A clean result is applied; a failed verify or
   apply is recorded as a failure for you, and the worktree is kept for a repair.
   After out-of-scope changes it applies nothing: decide them (section 6). If it
-  prints `Worktree kept: <dir> — <reason>`, tell the owner the path and reason;
-  do not delete it. (`router check` and `router apply` still exist for manual
-  use.)
+  prints `Worktree kept: <dir> — <reason>`, tell the owner the path and reason.
+  A locked worktree of a stopped worker is applied and kept; it can be removed
+  after the session. Do not delete worktrees kept for other reasons.
+  Every worker must have a stop notice after its latest resume before finish
+  verifies or applies it; otherwise wait and run `router finish` again after
+  its completion notice. If it has stopped and finish still waits, use
+  `router apply`. Repeating finish after a successful apply prints
+  `Already applied.`; resuming the worker clears that state. Applied changes are
+  not recorded as failures even if cleanup fails. (`router check` and
+  `router apply` still exist for manual use; `apply --keep-locked` applies a
+  locked worktree and skips cleanup.)
 - Codex: `invoke` already reports verify, git facts and warnings.
 - Review: same rule as the `gswitch-review` skill. Run it after non-trivial
   changes in `mixed` and `codex`; skip it for typos, comments, formatting,

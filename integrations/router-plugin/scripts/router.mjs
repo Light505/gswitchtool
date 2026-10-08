@@ -329,7 +329,10 @@ function hook(event, input) {
   }
   if (event === "SubagentStop" && isWorker(sess.bindings[input.agent_id]?.type)) {
     const bound = sess.bindings[input.agent_id];
-    if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
+    delete bound.resumedAt;
+    const stopped = sess.finished.find((worker) => worker.agentId === input.agent_id);
+    if (stopped) stopped.time = Date.now();
+    else sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
     saveSession(id, sess);
     appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
       agentId: input.agent_id, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path) });
@@ -348,14 +351,18 @@ function hook(event, input) {
     const window = usage();
     return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}`);
   }
-  if (state.mode.value === "off") return {};
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {
     const bound = sess.bindings[input.tool_input?.to];
-    if (!bound?.task) return {};
+    if (!bound) return {};
+    bound.resumedAt = Date.now();
+    delete bound.appliedAt;
+    saveSession(id, sess);
+    if (state.mode.value === "off" || !bound.task) return {};
     const task = taskState(readResults(data("results.jsonl")), id, bound.task);
     return task.failures >= ownerCheckAfter && !task.done
       ? decision("ask", `Task ${bound.task} has ${task.failures} failed attempts; continue by resuming ${bound.type}?`) : {};
   }
+  if (state.mode.value === "off") return {};
   if (event === "PreToolUse" && input.tool_name === "Bash") {
     if (sess.bindings[input.agent_id]) return decision("deny", "Router workers cannot start other agents.");
     const task = invokeTask(command, cwd);
@@ -459,7 +466,7 @@ function apply(args) {
     const worker = mainWorktree(worktree);
     const entry = main.entries.find((item) => comparable(item.root) === comparable(worker.root));
     if (comparable(worker.root) !== comparable(worktree) || !entry || comparable(main.common) !== comparable(worker.common) || comparable(main.root) === comparable(worker.root) || comparable(worker.root) === comparable(main.entries[0].root)) throw new Error("not a separate registered worktree of the same repository");
-    if (entry.locked) throw new Error("worktree is locked");
+    if (entry.locked && !args.includes("--keep-locked")) throw new Error("worktree is locked");
     if (git(worker.root, ["ls-files", "--unmerged"]).stdout.trim()) throw new Error("worker has unresolved conflicts");
     const base = gitText(main.root, ["merge-base", "HEAD", gitText(worker.root, ["rev-parse", "HEAD"])]);
     fs.mkdirSync(dataDir, { recursive: true });
@@ -496,6 +503,7 @@ function apply(args) {
         gitText(main.root, ["apply", "--whitespace=nowarn"], { input: output.stdout });
       }
     }
+    if (entry.locked) return `Worktree: applied ${changed.length} files\nWorktree kept: ${worktree} — locked by Claude Code; remove it after this session`;
     // Unlink caches before removal; never traverse junctions into the main tree.
     function unlinkCaches(directory, depth = 1) {
       if (depth > 4) return;
@@ -659,14 +667,20 @@ function recordResult(record) {
   if (record.outcome === "fail" && state.plan) lines.push(planView(state));
   return lines.join("\n");
 }
-// Runs outside the state lock (verify can take minutes); only recording a failure takes it.
+export function worktreeApplied(output) { return /^Worktree: applied \d+ files$/m.test(output); }
+// Runs outside the state lock (verify can take minutes); session writes and failures take it.
 async function finish(args) {
   const [id, directory] = args, agent = option(args, "--agent");
   if (!id || !directory || !agent) throw new Error("finish requires <sessionId> <projectDir> --agent <agentId>");
-  const bound = session(id).bindings[agent];
+  const sess = session(id), bound = sess.bindings[agent];
   if (!bound) throw new Error(`Worker ${agent} is not bound`);
+  if (bound.appliedAt != null) return "Already applied.";
   if (!bound.task) throw new Error(`Worker ${agent} has no task`);
+  const stopped = sess.finished.find((worker) => worker.agentId === agent);
+  if (!stopped || (bound.resumedAt != null && !(bound.resumedAt < stopped.time))) return "Worker still running or not stopped: wait for its completion notice, then run router finish again. If it has stopped and this repeats, apply it with router apply.";
   if (!bound.cwd || !fs.existsSync(bound.cwd) || comparable(bound.cwd) === comparable(layout(directory).root)) return "Worker changed nothing (no worktree).";
+  const entry = worktrees(directory).find((item) => comparable(item.root) === comparable(bound.cwd));
+  const keepLocked = entry?.locked;
   const failure = (reason) => locked(() => {
     const state = taskState(readResults(data("results.jsonl")), id, bound.task);
     if (!state.plan) throw new Error(`Run router plan for task ${bound.task} first.`);
@@ -681,8 +695,13 @@ async function finish(args) {
   const checked = check(["--cwd", bound.cwd, "--base", base, "--scope", (bound.scope || []).join(","), ...(verify ? ["--verify", verify] : [])]);
   if (/^Verify: FAILED/m.test(checked)) return `${checked}\n${await failure("verify")}`;
   if (/^WARNING: changed outside --scope/m.test(checked)) return `${checked}\nNot applied: decide the out-of-scope changes (approve with router scope, or record the result yourself).`;
-  const applied = apply(["--worktree", bound.cwd, "--cwd", directory]);
-  return `${checked}\n${applied}\n${applied.includes("Worktree kept:") ? await failure("worktree") : "Applied. Review it, then record pass (or a review failure) with router result."}`;
+  const applied = apply(["--worktree", bound.cwd, "--cwd", directory, ...(keepLocked ? ["--keep-locked"] : [])]);
+  if (worktreeApplied(applied)) await locked(() => {
+    const current = session(id);
+    current.bindings[agent].appliedAt = Date.now();
+    saveSession(id, current);
+  });
+  return `${checked}\n${applied}\n${worktreeApplied(applied) ? "Applied. Review it, then record pass (or a review failure) with router result." : await failure("worktree")}`;
 }
 function command(args, raw) {
   const [name, ...rest] = args;
@@ -751,7 +770,7 @@ async function main() {
     // Parsed before the lock so a lock timeout can still deny a worker's edit.
     if (isHook) try { input = object(JSON.parse(raw || "{}")); } catch {}
     // Git and verification operations have private indexes and need no state lock.
-    const readHook = isHook && args[1] === "PreToolUse" && ["Bash", "SendMessage"].includes(input.tool_name);
+    const readHook = isHook && args[1] === "PreToolUse" && input.tool_name === "Bash";
     if (isHook && ["PostToolUse", "PostToolUseFailure"].includes(args[1]) && input.tool_name === "Bash" && !codexLaunch(input)) {
       process.stdout.write("{}\n"); return;
     }
