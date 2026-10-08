@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { models, efforts, workerNames, defaultAllowed, needsApproval } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, attemptRecord, transcriptRun, aggregateStats, statsOptions, statsTable } from "./results.mjs";
+import { appendResult, readResults, resultRecord, attemptRecord, transcriptTotals, aggregateStats, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -270,7 +270,7 @@ function hook(event, input) {
     if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
     saveSession(id, sess);
     appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
-      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptRun(input.agent_transcript_path) });
+      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path) });
     return {};
   }
   if (event === "SessionStart") {

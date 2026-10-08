@@ -185,8 +185,8 @@ Every attempt is logged to `~/.gswitchtool-router/results.jsonl` (never in the
 project), so the ladders can move from benchmark numbers to your own:
 
 - When a Claude worker stops, a hook reads its transcript and records the
-  duration and tokens of that worker's last run (its brief or latest resume
-  message through its final line). Tokens count input, cache writes, cache
+  worker's total so far: duration and tokens of all its runs (idle time between
+  a stop and a resume is excluded). Tokens count input, cache writes, cache
   reads and output; each API response counts once.
 - The orchestrator records each attempt's outcome with `router result`: task
   id and short title, difficulty, worker, start or escalation, pass or fail and

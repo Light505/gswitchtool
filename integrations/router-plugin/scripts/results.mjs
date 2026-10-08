@@ -99,28 +99,30 @@ export function attemptRecord(input, { sessionId, project, agentId = null, worke
   };
 }
 
-// The last run is the worker's latest brief or resume message through its final line.
-export function transcriptRun(file) {
+// The worker's total so far. A segment starts at the brief and at each coordinator message (a resume or a
+// message while it runs), so idle time between a stop and a resume is not counted. promptId is not used: it is the orchestrator's.
+export function transcriptTotals(file) {
   let entries;
   try { entries = fs.readFileSync(file, "utf8").split(/\r?\n/).map((line) => { try { return object(JSON.parse(line)); } catch { return {}; } }); }
   catch { return null; }
-  const promptId = entries.findLast((entry) => typeof entry.promptId === "string" && entry.promptId.length > 0)?.promptId;
-  const start = promptId === undefined
-    ? entries.findLastIndex((entry) => entry.type === "user" && entry.isMeta !== true && typeof object(entry.message).content === "string")
-    : entries.findIndex((entry) => entry.promptId === promptId);
-  if (start < 0) return null;
-  const run = entries.slice(start), first = Date.parse(run[0].timestamp);
-  const last = run.map((entry) => Date.parse(entry.timestamp)).filter(Number.isFinite).at(-1);
+  const brief = entries.findIndex((entry) => entry.type === "user" && entry.isMeta !== true && typeof object(entry.message).content === "string");
+  if (brief < 0) return null;
+  const starts = entries.map((_, i) => i).filter((i) => i === brief ||
+    (i > brief && object(entries[i].origin).kind === "coordinator" && typeof object(entries[i].message).content === "string"));
+  const spans = starts.map((start, i) => {
+    const times = entries.slice(start, starts[i + 1] ?? entries.length).map((entry) => Date.parse(entry.timestamp)).filter(Number.isFinite);
+    return times.length ? times.at(-1) - times[0] : null;
+  }).filter(number);
   // One API response is written as several lines with the same message ID and usage.
   const messages = new Map();
-  for (const entry of run) {
+  for (const entry of entries) {
     const message = object(entry.message);
     if (entry.type === "assistant" && typeof message.id === "string" && message.usage) messages.set(message.id, message);
   }
   const usages = [...messages.values()].map((message) => object(message.usage));
   const sum = (field) => usages.reduce((total, usage) => total + (number(usage[field]) ? usage[field] : 0), 0);
   const inputTokens = sum("input_tokens"), cacheCreationTokens = sum("cache_creation_input_tokens"), cacheReadTokens = sum("cache_read_input_tokens"), outputTokens = sum("output_tokens");
-  return { run: promptId ?? (text(run[0].uuid) ? run[0].uuid : null), durationMs: number(last - first) ? last - first : null,
+  return { durationMs: spans.length ? spans.reduce((total, span) => total + span, 0) : null,
     inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens,
     tokens: messages.size ? inputTokens + cacheCreationTokens + cacheReadTokens + outputTokens : null,
     models: [...new Set([...messages.values()].map((message) => message.model).filter(text))] };
@@ -139,27 +141,13 @@ const median = (values) => {
   return ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
 };
 const identity = (record) => JSON.stringify([record.sessionId, record.worker, record.agentId]);
-// Runs are summed once each; records without a run keep the latest supplied value.
-function measure(attempt = {}, field) {
-  const values = [...(attempt.runs ?? new Map()).values()].map((run) => run[field]).filter(number);
-  if (values.length) return values.reduce((sum, value) => sum + value, 0);
-  return number(attempt[field]) ? attempt[field] : null;
-}
-
 export function aggregateStats(records, { project, since, now = Date.now(), normalizeProject = (value) => value } = {}) {
   const telemetry = new Map();
   for (const r of records) {
     if (r.type !== "attempt" || !text(r.sessionId) || !text(r.project) || !text(r.worker) || !text(r.agentId)) continue;
-    const key = identity(r), previous = telemetry.get(key) || { runs: new Map() };
-    // Stop and tool completion describe one attempt. An empty completion never erases measured data.
-    if (text(r.run)) {
-      const old = previous.runs.get(r.run) || {};
-      previous.runs.set(r.run, { durationMs: number(r.durationMs) ? r.durationMs : old.durationMs, tokens: number(r.tokens) ? r.tokens : old.tokens });
-    } else {
-      previous.durationMs = number(r.durationMs) ? r.durationMs : previous.durationMs;
-      previous.tokens = number(r.tokens) ? r.tokens : previous.tokens;
-    }
-    telemetry.set(key, previous);
+    // Stop and tool completion describe one attempt. Transcript totals are cumulative, so the latest supplied value wins; an empty record never erases it.
+    const key = identity(r), previous = telemetry.get(key) || {};
+    telemetry.set(key, { durationMs: firstNumber(r.durationMs, previous.durationMs), tokens: firstNumber(r.tokens, previous.tokens) });
   }
   const groups = new Map();
   for (const r of records) {
@@ -170,8 +158,8 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
     group.attempts++;
     if (r.outcome === "pass") group.passes++;
     const attempt = text(r.agentId) ? telemetry.get(identity(r)) : undefined;
-    if (number(measure(attempt, "durationMs"))) group.durations.push(measure(attempt, "durationMs"));
-    if (number(measure(attempt, "tokens"))) group.tokens.push(measure(attempt, "tokens"));
+    if (number(attempt?.durationMs)) group.durations.push(attempt.durationMs);
+    if (number(attempt?.tokens)) group.tokens.push(attempt.tokens);
     if (/^codex(?:-dev)?:/.test(r.worker) && text(r.codexJobId)) group.jobs.add(r.codexJobId);
     groups.set(key, group);
   }

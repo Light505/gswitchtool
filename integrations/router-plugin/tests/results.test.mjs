@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { costPerTask, needsApproval, workerNames } from "../scripts/workers.mjs";
-import { appendResult, readResults, attemptRecord, transcriptRun, resultRecord, aggregateStats, statsOptions, statsTable } from "../scripts/results.mjs";
+import { appendResult, readResults, attemptRecord, transcriptTotals, resultRecord, aggregateStats, statsOptions, statsTable } from "../scripts/results.mjs";
 import { projectKey } from "../scripts/router.mjs";
 
 const plugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -242,81 +242,91 @@ test("stats filters by normalized project and elapsed days and validates options
   const empty = path.join(f.home, "empty.jsonl"); assert.deepEqual(readResults(empty), []);
 });
 
-test("transcript run takes the last run, counts each message ID once and ignores bad lines", (t) => {
+test("transcript totals count each message ID once, ignore bad lines and return null without a brief", (t) => {
   const f = fixture(t), at = (s) => `2026-10-08T10:00:${s}.000Z`;
   const usage = { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 30, output_tokens: 20 };
   const file = path.join(f.home, "agent.jsonl");
   fs.writeFileSync(file, [
-    { type: "user", uuid: "u1", timestamp: at("00"), message: { role: "user", content: "brief" } },
-    { type: "assistant", uuid: "x1", timestamp: at("01"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
-    { type: "assistant", uuid: "x2", timestamp: at("02"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
-    { type: "user", uuid: "u2", timestamp: at("10"), message: { role: "user", content: "resume" } },
-    { type: "assistant", uuid: "x3", timestamp: at("12"), message: { id: "m2", model: "claude-sonnet-5-5", usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } } },
-    { type: "user", uuid: "u3", timestamp: at("13"), message: { role: "user", content: [{ type: "tool_result" }] } },
-    { type: "attachment", uuid: "x4", timestamp: at("15") }
-  ].map((line) => JSON.stringify(line)).join("\n") + "\n{corrupt}\n");
-  assert.deepEqual(transcriptRun(file), { run: "u2", durationMs: 5000, inputTokens: 1, cacheCreationTokens: 4, cacheReadTokens: 3, outputTokens: 2,
-    tokens: 10, models: ["claude-sonnet-5-5"] });
-  assert.equal(transcriptRun(path.join(f.home, "missing.jsonl")), null);
-  fs.writeFileSync(file, JSON.stringify({ type: "assistant", uuid: "x", timestamp: at("01"), message: { id: "m", usage } }) + "\n");
-  assert.equal(transcriptRun(file), null);
-});
-
-test("transcript run follows the latest promptId across injected meta lines", (t) => {
-  const f = fixture(t), file = path.join(f.home, "agent-prompt-id.jsonl");
-  const at = (second) => "2026-10-08T10:00:" + second + ".000Z";
-  const usage = (input, output) => ({ input_tokens: input, output_tokens: output });
-  fs.writeFileSync(file, [
     { type: "user", uuid: "u1", promptId: "p1", timestamp: at("00"), message: { role: "user", content: "brief" } },
-    { type: "assistant", timestamp: at("01"), message: { id: "m1", model: "claude-haiku-5-5", usage: usage(100, 10) } },
-    { type: "user", uuid: "meta1", promptId: "p1", isMeta: true, timestamp: at("02"), message: { role: "user", content: "<system-reminder>..." } },
-    { type: "assistant", timestamp: at("10"), message: { id: "m2", model: "claude-haiku-5-5", usage: usage(200, 20) } },
-    { type: "user", uuid: "u2", promptId: "p2", timestamp: at("20"), message: { role: "user", content: "resume" } },
-    { type: "assistant", timestamp: at("21"), message: { id: "m3", model: "claude-sonnet-5-5", usage: usage(30, 3) } },
-    { type: "user", uuid: "meta2", promptId: "p2", isMeta: true, timestamp: at("39"), message: { role: "user", content: "[handback-send-enforce]..." } },
-    { type: "assistant", timestamp: at("40"), message: { id: "m4", model: "claude-opus-5-5", usage: usage(40, 4) } }
+    { type: "assistant", uuid: "x1", promptId: "p1", timestamp: at("01"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "assistant", uuid: "x2", promptId: "p1", timestamp: at("02"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "user", uuid: "u3", promptId: "p2", timestamp: at("13"), message: { role: "user", content: [{ type: "tool_result" }] } },
+    { type: "assistant", uuid: "x3", promptId: "p2", timestamp: at("15"), message: { id: "m2", model: "claude-sonnet-5-5", usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } } },
+    { type: "attachment", uuid: "x4", promptId: "p2", timestamp: at("20") }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n{corrupt}\n");
+  assert.deepEqual(transcriptTotals(file), { durationMs: 20_000, inputTokens: 11, cacheCreationTokens: 9, cacheReadTokens: 33, outputTokens: 22,
+    tokens: 75, models: ["claude-haiku-5-5", "claude-sonnet-5-5"] });
+  assert.equal(transcriptTotals(path.join(f.home, "missing.jsonl")), null);
+  fs.writeFileSync(file, [
+    { type: "assistant", uuid: "x", timestamp: at("01"), message: { id: "m", usage } },
+    { type: "user", uuid: "meta", isMeta: true, timestamp: at("02"), message: { role: "user", content: "<system-reminder>..." } }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
-  assert.deepEqual(transcriptRun(file), {
-    run: "p2", durationMs: 20_000, inputTokens: 70, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 7,
-    tokens: 77, models: ["claude-sonnet-5-5", "claude-opus-5-5"]
-  });
+  assert.equal(transcriptTotals(file), null);
 });
 
-test("transcript run fallback ignores meta user lines when promptId is absent", (t) => {
-  const f = fixture(t), file = path.join(f.home, "agent-no-prompt-id.jsonl");
+test("transcript totals measure workers that share an orchestrator promptId independently", (t) => {
+  const f = fixture(t), usage = { input_tokens: 4, output_tokens: 1 };
+  const at = (second) => new Date(Date.parse("2026-10-08T10:00:00.000Z") + second * 1000).toISOString();
+  const worker = (name, start, end) => {
+    const file = path.join(f.home, `${name}.jsonl`);
+    fs.writeFileSync(file, [
+      { type: "user", promptId: "p1", timestamp: at(start), message: { role: "user", content: "brief" } },
+      { type: "assistant", promptId: "p1", timestamp: at(end), message: { id: `${name}-1`, model: "claude-haiku-5-5", usage } }
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+    return file;
+  };
+  assert.equal(transcriptTotals(worker("long", 0, 989)).durationMs, 989_000);
+  const short = transcriptTotals(worker("short", 5, 20));
+  assert.equal(short.durationMs, 15_000); assert.equal(short.tokens, 5);
+});
+
+test("transcript totals exclude idle time between a stop and a coordinator resume", (t) => {
+  const f = fixture(t), file = path.join(f.home, "agent-resume.jsonl");
+  const at = (second) => new Date(Date.parse("2026-10-08T10:00:00.000Z") + second * 1000).toISOString();
   const usage = { input_tokens: 2, output_tokens: 3 };
   fs.writeFileSync(file, [
-    { type: "user", uuid: "u1", timestamp: "2026-10-08T10:00:00.000Z", message: { role: "user", content: "brief" } },
-    { type: "assistant", timestamp: "2026-10-08T10:00:01.000Z", message: { id: "m1", model: "claude-haiku-5-5", usage } },
-    { type: "user", uuid: "meta", isMeta: true, timestamp: "2026-10-08T10:00:02.000Z", message: { role: "user", content: "<system-reminder>..." } },
-    { type: "assistant", timestamp: "2026-10-08T10:00:10.000Z", message: { id: "m2", model: "claude-haiku-5-5", usage } }
+    { type: "user", uuid: "u1", timestamp: at(0), message: { role: "user", content: "brief" } },
+    { type: "assistant", uuid: "x1", timestamp: at(5), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "user", uuid: "u2", isMeta: true, origin: { kind: "coordinator" }, timestamp: at(600), message: { role: "user", content: "resume" } },
+    { type: "assistant", uuid: "x2", timestamp: at(610), message: { id: "m2", model: "claude-haiku-5-5", usage } }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
-  assert.deepEqual(transcriptRun(file), {
-    run: "u1", durationMs: 10_000, inputTokens: 4, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 6,
+  assert.deepEqual(transcriptTotals(file), {
+    durationMs: 15_000, inputTokens: 4, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 6,
     tokens: 10, models: ["claude-haiku-5-5"]
   });
 });
 
-test("SubagentStop reads the transcript run once per stop and stats sum runs", (t) => {
+test("transcript totals ignore harness reminders when starting segments", (t) => {
+  const f = fixture(t), file = path.join(f.home, "agent-meta.jsonl"), at = (s) => `2026-10-08T10:00:${s}.000Z`;
+  const usage = { input_tokens: 2, output_tokens: 3 };
+  fs.writeFileSync(file, [
+    { type: "user", uuid: "u1", timestamp: at("00"), message: { role: "user", content: "brief" } },
+    { type: "user", uuid: "meta", isMeta: true, timestamp: at("02"), message: { role: "user", content: "<system-reminder>..." } },
+    { type: "assistant", uuid: "x1", timestamp: at("05"), message: { id: "m1", model: "claude-haiku-5-5", usage } }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+  assert.equal(transcriptTotals(file).durationMs, 5000);
+});
+
+test("SubagentStop records the worker's cumulative totals and stats keep the latest", (t) => {
   const f = fixture(t), file = path.join(f.home, "agent.jsonl"), time = new Date().toISOString();
   const at = (s) => `2026-10-08T10:00:${s}.000Z`, usage = { input_tokens: 10, output_tokens: 20 };
   fs.writeFileSync(file, [
     { type: "user", uuid: "u1", timestamp: at("00"), message: { role: "user", content: "brief" } },
     { type: "assistant", uuid: "x1", timestamp: at("03"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
-    { type: "user", uuid: "u2", timestamp: at("10"), message: { role: "user", content: "resume" } },
+    { type: "user", uuid: "u2", isMeta: true, origin: { kind: "coordinator" }, timestamp: at("10"), message: { role: "user", content: "resume" } },
     { type: "assistant", uuid: "x2", timestamp: at("12"), message: { id: "m2", model: "claude-haiku-5-5", usage } },
     { type: "assistant", uuid: "x3", timestamp: at("14"), message: { id: "m2", model: "claude-haiku-5-5", usage } }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
   f.writeSession({ mode: "claude", bindings: { a1: { type: "router:haiku-low", scope: [] } } });
   f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
   f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
-  let r = readResults(f.file)[0];
-  assert.equal(r.run, "u2"); assert.equal(r.durationMs, 4000); assert.equal(r.tokens, 30); assert.deepEqual(r.models, ["claude-haiku-5-5"]);
+  const r = readResults(f.file)[0];
+  assert.equal(r.durationMs, 7000); assert.equal(r.tokens, 60); assert.deepEqual(r.models, ["claude-haiku-5-5"]);
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /brief|resume/);
   const base = { type: "attempt", time, sessionId: "s1", project: projectKey(f.project), worker: "router:haiku-low", agentId: "a5" };
   const result = { type: "result", time, sessionId: "s1", project: projectKey(f.project), task: "t1", worker: "router:haiku-low", difficulty: "small", outcome: "pass", agentId: "a5" };
-  const records = [result, { ...base, run: "u1", durationMs: 1000, tokens: 10 }, { ...base, run: "u1", durationMs: 1000, tokens: 10 },
-    { ...base, run: "u2", durationMs: 500, tokens: 5 }, { ...base, run: "u2", durationMs: 500, tokens: 5 }];
+  // Each stop records cumulative totals, so the latest value wins; a record without numbers keeps it.
+  const records = [result, { ...base, durationMs: 1000, tokens: 10 }, { ...base, durationMs: 1500, tokens: 15 }, { ...base, durationMs: 1500, tokens: 15 }, base];
   assert.equal(aggregateStats(records)[0].medianDurationMs, 1500);
   assert.equal(aggregateStats(records)[0].medianTokens, 15);
   assert.equal(aggregateStats([{ ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" }], { normalizeProject: projectKey })[0].worker, "codex-dev:gpt-6.1-sol/low");
