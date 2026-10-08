@@ -519,7 +519,7 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   const marketplaceRoot = path.join(f.home, ".gswitchtool-dev-plugin");
   const dev = path.join(marketplaceRoot, "plugins", "router-dev");
   const manifest = JSON.parse(fs.readFileSync(path.join(dev, ".claude-plugin", "plugin.json"), "utf8"));
-  assert.equal(manifest.name, "router-dev"); assert.match(manifest.version, /^0\.1\.0-dev\.[a-f0-9]+\.[a-z0-9]+$/);
+  assert.equal(manifest.name, "router-dev"); assert.match(manifest.version, /^\d+\.\d+\.\d+-dev\.[a-f0-9]+\.[a-z0-9]+$/);
   const codexManifest = JSON.parse(fs.readFileSync(path.join(marketplaceRoot, "plugins/codex-dev/.claude-plugin/plugin.json"), "utf8"));
   assert.equal(manifest.version.split("-dev.")[1], codexManifest.version.split("-dev.")[1]);
   const marketplace = JSON.parse(fs.readFileSync(path.join(marketplaceRoot, ".claude-plugin/marketplace.json"), "utf8"));
@@ -543,7 +543,26 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   const call = (type) => JSON.parse(f.run(["hook", "PreToolUse"], { session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "SCOPE: src/*\nTASK: t1" } }, devScript));
   assert.deepEqual(call("router-dev:haiku-low"), {});
   assert.equal(fs.existsSync(path.join(f.home, ".gswitchtool-router-dev", "sessions/s1.json")), true);
-  assert.equal(call("router:haiku-low").hookSpecificOutput.permissionDecision, "deny");
+  assert.deepEqual(call("router:haiku-low"), {});
+  assert.equal(call("unknown").hookSpecificOutput.permissionDecision, "deny");
+  assert.deepEqual(f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router-dev:haiku-low" } }), {});
+  assert.deepEqual(f.hook("PreToolUse", { tool_name: "Task", tool_input: { subagent_type: "router-dev:haiku-low" } }), {});
+  assert.equal(f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "unknown" } }).hookSpecificOutput.permissionDecision, "deny");
+  const bash = (entry, event, command) => JSON.parse(f.run(["hook", event], { session_id: "foreign", cwd: f.project, tool_name: "Bash", tool_input: { command } }, entry));
+  for (const slash of ["/", "\\"]) {
+    const command = `node "${[".gswitchtool-dev-plugin", "plugins", "codex-dev", "scripts", "codex-companion.mjs"].join(slash)}" invoke --model gpt-6.1-sol --effort low "TASK: unplanned"`;
+    fs.mkdirSync(path.join(f.data, "state.lock"), { recursive: true });
+    for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) assert.deepEqual(bash(script, event, command), {});
+    fs.rmdirSync(path.join(f.data, "state.lock"));
+    assert.equal(fs.existsSync(path.join(f.data, "sessions/foreign.json")), false);
+    assert.equal(bash(devScript, "PreToolUse", command).hookSpecificOutput.permissionDecision, "deny");
+    assert.deepEqual(bash(devScript, "PostToolUse", command), {});
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.home, ".gswitchtool-router-dev", "sessions/foreign.json"))).codexLaunches.at(-1).worker, "codex-dev:gpt-6.1-sol/low");
+  }
+  const devSession = path.join(f.home, ".gswitchtool-router-dev", "sessions/foreign.json");
+  const before = fs.readFileSync(devSession, "utf8");
+  for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) assert.deepEqual(bash(devScript, event, 'node "plugins/codex/scripts/codex-companion.mjs" invoke --model gpt-6.1-sol --effort low "TASK: unplanned"'), {});
+  assert.equal(fs.readFileSync(devSession, "utf8"), before);
   assert.equal(call("router-dev:sonnet-max").hookSpecificOutput.permissionDecision, "ask");
   assert.equal(call("router-dev:opus-low").hookSpecificOutput.permissionDecision, "deny");
   assert.equal(call("router-dev:opus-high").hookSpecificOutput?.permissionDecision, "ask");

@@ -270,7 +270,11 @@ function shellOption(command, names) {
   const match = matches.at(-1);
   return match ? match[1] ?? match[2] ?? match[3] : undefined;
 }
-const isInvoke = (command) => /(?:^|[\n;|(]|&&|\|\|)[ \t]*node(?:\.exe)?["']?\s+(?:"[^"]*|'[^']*|[^\s"']*)codex-companion\.mjs["']?\s+invoke(?:\s|$)/.test(command);
+const invokePath = (command) => command.match(/(?:^|[\n;|(]|&&|\|\|)[ \t]*node(?:\.exe)?["']?\s+((?:"[^"]*|'[^']*|[^\s"']*)codex-companion\.mjs)["']?\s+invoke(?:\s|$)/)?.[1];
+const isInvoke = (command) => {
+  const companion = invokePath(command);
+  return companion !== undefined && /(?:^|["'\\/])codex-dev[\\/]/.test(companion) === (pluginName === "router-dev");
+};
 function invokeTask(command, cwd) {
   let task = taskId(command);
   const file = shellOption(command, ["--prompt-file"]);
@@ -378,6 +382,7 @@ function hook(event, input) {
     // A router worker may never launch another worker, including helpers.
     if (sess.bindings[input.agent_id]) return decision("deny", "Router workers cannot start other agents.");
     if (["Explore", "Plan"].includes(type)) return {};
+    if (workerNames.some((name) => type === `${pluginName === "router-dev" ? "router" : "router-dev"}:${name}`)) return {};
     if (!isWorker(type)) return decision("deny", "use a router worker type");
     if (tool.model !== undefined) return decision("deny", "Router worker model is fixed; remove the model override.");
     if (state.mode.value === "codex") return decision("deny", "Codex mode denies Claude workers; send this to Codex.");

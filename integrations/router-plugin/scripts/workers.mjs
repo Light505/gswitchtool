@@ -96,7 +96,7 @@ export function workerTable({ claudeAllowed = {}, codexAllowed = {}, mode, low =
   const known = (item) => item.basis !== "none" && item.score !== null;
   for (const item of rows) {
     if (!known(item)) continue;
-    const dominators = rows.filter((other) => other !== item && known(other) && other.score >= item.score && other.cost <= item.cost &&
+    const dominators = rows.filter((other) => other !== item && other.worker.split(":")[0] === item.worker.split(":")[0] && known(other) && other.score >= item.score && other.cost <= item.cost &&
       (other.score > item.score || other.cost < item.cost));
     item.dominatedBy = dominators.sort((a, b) => a.cost - b.cost)[0]?.worker ?? null;
   }

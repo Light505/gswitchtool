@@ -72,6 +72,9 @@ test("candidates honor listed rows, floors, exclusions, domination and cheapest 
     assert.ok(choices.every((row, i) => !i || row.cost >= choices[i - 1].cost));
     assert.ok(!choices.some((row) => choices.some((other) => other.worker === row.dominatedBy)));
   }
+  const mixed = workerTable({ mode: "mixed", claudeAllowed: defaultAllowed(), codexAllowed: { "gpt-6-luna": ["max"] } });
+  assert.deepEqual(candidates(mixed, taskFloor("implement", "small")).slice(0, 3).map((row) => row.worker),
+    ["router:haiku-low", "codex:gpt-6-luna/max", "router:haiku-medium"]);
   const rows = workerTable({ mode: "codex", codexAllowed });
   const exclude = ["codex:gpt-6.1-sol/low", "codex:gpt-6.1-sol/medium"];
   assert.deepEqual(candidates(rows, { ...taskFloor("implement", "moderate", [57, 61], 2), exclude }), []);
@@ -95,6 +98,7 @@ test("plan prints mode decisions, appends records, refuses off and drops LOW row
   assert.equal(readResults(f.file).length, 2);
   f.setup("mixed"); assert.match(f.plan(), /Codex workers not listed/);
   assert.match(f.plan("hard", ["--codex", codex]), /  codex:gpt-6.1-sol\/low  57  USD 0.50/);
+  assert.match(f.plan("small", ["--codex", "gpt-6-luna:max"]), /  codex:gpt-6-luna\/max[^\n]*\n  router:haiku-medium/);
   f.write("usage.json", { fiveHour: { usedPercentage: 80, resetsAt: Date.now() / 1000 + 3600 } });
   assert.doesNotMatch(f.plan("small", ["--codex", codex]), /  router:/);
   f.setup("codex"); assert.doesNotMatch(f.plan("moderate", ["--codex", codex]), /  router:/);

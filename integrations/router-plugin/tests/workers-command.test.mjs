@@ -67,6 +67,10 @@ test("workerTable dominatedBy picks the cheapest row that is no worse and cheape
   assert.equal(by["codex:gpt-6.1-sol/high"], "codex:gpt-6.1-sol/medium");
   assert.equal(by["codex:gpt-6.1-sol/medium"], null);
   assert.equal(by["codex:gpt-6.1-sol/low"], null);
+  for (const namespace of ["router", "router-dev"]) {
+    const mixed = workerTable({ namespace, mode: "mixed", claudeAllowed: { haiku: ["medium"], opus: ["medium"] }, codexAllowed: { "gpt-6-luna": ["max"], "gpt-6.1-sol": ["medium"] } });
+    assert.ok(mixed.every((row) => row.dominatedBy === null));
+  }
   // Sonnet max (68) has no listed row that scores as high or higher, so nothing dominates it.
   const sonnet = workerTable({ claudeAllowed: { haiku: ["low"], sonnet: ["low", "max"] }, mode: "claude" });
   assert.equal(sonnet.find((row) => row.worker === "router:sonnet-max").dominatedBy, null);
@@ -89,7 +93,7 @@ test("router workers prints the mixed table with notes", (t) => {
   assert.equal(lines[0], "Router workers (mode=mixed; allowed by your GSwitch settings; agent benchmark per attempt)");
   assert.match(lines[1], /^Worker\s+Score\s+Cost\/try\s+Min\/try\s+Note$/);
   assert.match(lines.find((line) => line.startsWith("router:haiku-low")), /^router:haiku-low\s+28\s+USD 0\.14\s+11\.6$/);
-  assert.match(lines.find((line) => line.startsWith("router:opus-medium")), /^router:opus-medium\s+~60\s+USD 1\.45\s+11\s+estimated; skip: codex:gpt-6\.1-sol\/medium scores as high for less$/);
+  assert.match(lines.find((line) => line.startsWith("router:opus-medium")), /^router:opus-medium\s+~60\s+USD 1\.45\s+11\s+estimated$/);
   assert.match(lines.find((line) => line.startsWith("codex:gpt-6.1-sol/high")), /^codex:gpt-6\.1-sol\/high\s+60\s+USD 0\.89\s+13\.3\s+skip: codex:gpt-6\.1-sol\/medium scores as high for less$/);
   assert.match(lines.find((line) => line.startsWith("router:opus-high")), /^router:opus-high\s+~63\s+USD 2\.16\s+16\s+estimated; needs owner approval$/);
   assert.ok(lines.indexOf(lines.find((line) => line.startsWith("router:haiku-low"))) < lines.indexOf(lines.find((line) => line.startsWith("router:opus-high"))));

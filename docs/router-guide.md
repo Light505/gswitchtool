@@ -135,7 +135,9 @@ after each failure, using the same task id for every attempt.
 
 The plan lists allowed workers whose agent-benchmark score meets the task's
 capability floor, cheapest first. It leaves out workers without a benchmark
-and workers beaten by another eligible worker on score and cost. In mixed
+and workers beaten on score and cost by another eligible worker of the same
+family (Claude or Codex), so a cheap Claude worker stays listed when a Codex
+worker beats it. In mixed
 and codex modes, the orchestrator supplies the Codex allowlist from
 `invoke-status` with `--codex`. LOW leaves out Claude workers.
 
@@ -376,7 +378,10 @@ Claude accounts, and hitting the limit stops the whole session.
 `~/.gswitchtool-router-dev/` for runtime records and reads setup from
 `~/.gswitchtool-dev/claude-setup.json`. The Dev plugins are silent until you type
 `/router-dev:dev-on` (or `/codex-dev:dev-on`) in a session; then only that session
-gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins. Not provable by unit tests and checked
+gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins.
+The released router and `router-dev` can both be on in one session: each checks
+only its own workers (`router:*` or `router-dev:*`) and its own Codex plugin
+(`codex` or `codex-dev`) and lets the other's through. Not provable by unit tests and checked
 by hand in a real session: hook inputs for subagents, Bash invoke and SendMessage, worktree isolation,
 the approval prompt for the owner check and workers above Opus medium's cost, status line support in the desktop app, and Codex's
 behavior after a declined file change.
