@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { models, efforts, workerNames, defaultAllowed, needsApproval } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, attemptRecord, transcriptTotals, aggregateStats, statsOptions, statsTable } from "./results.mjs";
+import { appendResult, readResults, resultRecord, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -500,7 +500,12 @@ function command(args, raw) {
     appendResult(data("results.jsonl"), record);
     return `Result: recorded ${record.task} ${record.worker} ${record.outcome}`;
   }
-  if (name === "stats") return statsTable(aggregateStats(readResults(data("results.jsonl")), statsOptions(rest, comparable)));
+  if (name === "stats") {
+    const records = readResults(data("results.jsonl")), options = statsOptions(rest, comparable);
+    const edits = orchestratorEdits(records, options);
+    const table = statsTable(aggregateStats(records, options));
+    return edits ? `${table}\nOrchestrator edits (not worker attempts): ${edits}` : table;
+  }
   if (name === "statusline") return statusline(raw);
   if (name === "statusline-install" || name === "statusline-uninstall") return statuslineSettings(name === "statusline-install");
   if (name === "mode") {

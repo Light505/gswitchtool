@@ -133,11 +133,11 @@ review finding. The owner may name a different start for a task.
 
 | Difficulty | `claude` | `mixed` | `codex` |
 | --- | --- | --- | --- |
-| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Luna max |
-| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Luna max |
-| Moderate: a normal feature or tests from a spec, a few files | Haiku medium | Haiku low | Luna max |
-| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol low |
-| High-risk | Opus medium | Sol xhigh | Sol xhigh |
+| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Sol low |
+| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Sol low |
+| Moderate: a normal feature or tests from a spec, a few files | Haiku low | Haiku low | Sol medium |
+| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol medium |
+| High-risk | Opus medium | Sol high | Sol high |
 
 High-risk list: credentials, account switching and failover, concurrency,
 money and data logic, data deletion, release and update code, security. These
@@ -149,12 +149,17 @@ there than a few extra cents.
 | Mode | Ladder |
 | --- | --- |
 | `claude` | Haiku low → Haiku medium → Sonnet low → Sonnet medium → Sonnet high → Opus medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
-| `mixed` | Haiku low → Luna max → Sol low → Sol medium → Sol xhigh → Sonnet max (owner approves) → stop and ask |
-| `codex` | Luna max → Sol xhigh → stop and ask (a hard task starts at Sol low, then Sol xhigh) |
+| `mixed` | Haiku low → Sonnet low → Sonnet medium → Sol low → Sol medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
+| `codex` | Sol low → Sol medium → stop and ask |
+
+A high-risk task starts at Sol high in `mixed` and `codex`. In `mixed` it then
+climbs Opus high (owner approves) → Sonnet max (owner approves) → stop and ask;
+in `codex` it stops and asks after Sol high.
 
 The next worker gets the brief plus what the previous one tried and why it
 failed. Rungs that are not allowed are skipped. Along each ladder every rung
-costs more and is stronger than the one before.
+scores higher than the one before. Codex workers are `gpt-6.1-sol` at low,
+medium or high; Sol xhigh is not allowed by the owner's GSwitch setup.
 
 ## How the defaults were chosen
 
@@ -165,23 +170,27 @@ cache writes and output) where it has a number, and its Intelligence Index runs
 for Opus below max. All numbers, prices and sources are in
 [`model-benchmarks.md`](./model-benchmarks.md).
 
-For every possible start, a script computed the expected total cost to solve a
-task: each attempt's cost plus about $0.30 of orchestrator and review overhead,
-times the chance the task gets that far, with failures counted as mostly caused
-by difficulty (a task one worker fails is likely hard for the next one too).
-Easier difficulties fail less often (assumed: moderate half as often as the
-benchmark's hard tasks, small a quarter, trivial a tenth). Each default is the
-cheapest start, or within 10% of it and faster. Escalation steps that cost more
-than they add are left out of the ladders.
+For every possible start, a script computed the expected value of solving a
+task: expected cost plus $0.05 per expected minute of waiting (about $3 per
+hour). Each attempt costs its worker's price plus $0.30 of orchestrator and
+review overhead, and takes its worker's minutes plus 3 minutes of orchestrator
+and review time. Failures count as mostly caused by difficulty (a task one
+worker fails is likely hard for the next one too). Easier difficulties fail less
+often (assumed: moderate half as often as the benchmark's hard tasks, small a
+quarter, trivial a tenth). The owner approved the defaults and ladders above;
+the script evaluates them and prints each one's cost, time and unsolved share,
+and the best start under the same method. Escalation steps must raise the score.
 
 The result: cheap first attempts pay off, because a failure costs little
-(Haiku low $0.14, Sonnet max $14.19). Starting moderate work at Opus medium
-would only pay with about $3 of overhead per attempt.
+(Haiku low $0.14, Sonnet max $14.19). Speed matters: a Codex start moves from
+Luna max to Sol low because Luna max takes about 21 minutes per attempt.
 
 Limits: one benchmark of hard agentic tasks, so one or two points are noise;
 Opus below max is estimated from the Intelligence Index runs; plan limits count
-usage their own way, which API cost only approximates; time is not part of the
-cost (a failed Haiku or Luna attempt adds 10 to 20 minutes). Recheck when models
+usage their own way, which API cost only approximates. The minutes come from the
+Artificial Analysis time per task, not from your router's runs; they are
+replaced when the router's own results reach 10 per worker and difficulty
+(see the timing evidence in `model-benchmarks.md`). Recheck when models
 or prices change and update `model-benchmarks.md`, this guide and the route
 skill together.
 
@@ -202,6 +211,10 @@ project), so the ladders can move from benchmark numbers to your own:
   id and short title, difficulty, worker, start or escalation, pass or fail and
   why, and for Codex the GSwitch job and thread, which link to GSwitch's
   Activity numbers.
+- When the orchestrator edits the code itself (a "Yourself" case or an
+  owner-requested direct edit), it records `--worker orchestrator` with no
+  agent or Codex fields. These records are not worker attempts: they are left
+  out of success rates and `/router:stats` shows them as a separate count line.
 - `/router:stats` shows attempts, success rate, median time and tokens per
   worker and difficulty.
 - `node scripts/router-ladder-calc.mjs --results <file>` prints your observed

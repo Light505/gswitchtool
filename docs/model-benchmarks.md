@@ -1,12 +1,12 @@
 # Model benchmarks and prices
 
 Capability and cost of every model and reasoning effort the router and Invoke
-Mode can use. The router's cost ladders
-([`router-guide.md`](./router-guide.md#cost-ladders)) are built from these
+Mode can use. The router's time-and-cost escalation ladders
+([`router-guide.md`](./router-guide.md#escalation-ladders)) are built from these
 tables. Data as of 2026-10-08; recheck when models or prices change and update
 this file, the router guide and the route skill together. The full AA release
 comparison was checked the same day; it matches the Intelligence Index numbers
-used here, and the ladder calculation re-run on it gives the same defaults.
+used here.
 
 ## Sources and how to read them
 
@@ -192,7 +192,8 @@ What the measures agree on:
   Terminal-Bench.
 - Haiku above medium is cheap in single runs but expensive as an agent: in
   Claude Code, Haiku xhigh and max cost more than Sonnet low and score lower.
-- Sol high and Sol max are beaten by Sol medium and Sol xhigh in CAI.
+- Sol high and Sol max are beaten by Sol medium in CAI (Sol xhigh is not
+  allowed by the owner's GSwitch setup).
 - Luna is weak at agentic terminal work at every effort (Terminal-Bench 0–15%)
   but strong on DeepSWE (64% at max). Below max it was only measured in II.
 
@@ -218,25 +219,74 @@ below max, or from the router's own results.
 
 ## Default start per difficulty
 
-`scripts/router-ladder-calc.mjs` computes, for every possible start, the
-expected cost and time to solve a task: each attempt's cost plus $0.30 of
-orchestrator and review overhead, times the chance the task gets that far.
-Failures are 80% driven by difficulty (a task one worker fails is likely hard
-for the next) and 20% luck. Easier difficulties fail less often than the CAI's
-hard tasks: moderate ×0.5, small ×0.25, trivial ×0.1. The default is the
-cheapest start, or the fastest start within 10% of it. Expected cost per task:
+`scripts/router-ladder-calc.mjs` scores each start by the objective per task:
+expected cost plus $0.05 per expected minute (about $3 per hour of waiting).
+Each attempt costs its worker's price plus $0.30 of orchestrator and review
+overhead, and takes its worker's minutes (Coding Agent Index time per task)
+plus 3 minutes of orchestrator and review time. A ladder step must raise the
+score. The chance a task reaches each attempt: failures are 80% driven by
+difficulty (a task one worker fails is likely hard for the next) and 20%
+luck. Easier difficulties fail less often than the CAI's hard tasks: moderate
+×0.5, small ×0.25, trivial ×0.1. The calculator searches every start and path
+(its "Search" section) and evaluates the approved starts and ladders as fixed
+paths (its "Chosen defaults" section). The owner approved the defaults below.
+Expected cost and minutes per task, including escalations; "previous" is the
+cost-only default with Sol xhigh counted as skipped, as it ran:
 
-| Difficulty | `claude` | `mixed` | `codex` |
-| --- | --- | --- | --- |
-| Trivial | Haiku low, $0.82 | Haiku low, $0.80 | Luna max, $0.56 |
-| Small | Haiku low, $1.48 | Haiku low, $1.40 | Luna max, $0.68 |
-| Moderate | Haiku medium, $3.05 (cheapest Haiku low $2.83) | Haiku low, $2.56 | Luna max, $0.88 |
-| Hard | Sonnet low, $6.92 (cheapest Haiku low $6.71) | Sol low, $5.86 (cheapest Luna max $5.60) | Sol low, $1.38 (cheapest Luna max $1.27) |
+`claude`:
+
+| Difficulty | Default start | Expected cost | Expected minutes | Previous |
+| --- | --- | --- | --- | --- |
+| Trivial | Haiku low | $0.82 | 19 | same |
+| Small | Haiku low | $1.48 | 26 | same |
+| Moderate | Haiku low | $2.83 | 39 | Haiku medium, $3.05, 38 min |
+| Hard | Sonnet low | $6.95 | 57 | same |
+| High-risk | Opus medium | not in calculation | | same |
+
+`mixed`:
+
+| Difficulty | Default start | Expected cost | Expected minutes | Previous |
+| --- | --- | --- | --- | --- |
+| Trivial | Haiku low | $0.82 | 18 | Haiku low, $0.84, 19 min |
+| Small | Haiku low | $1.46 | 24 | Haiku low, $1.50, 27 min |
+| Moderate | Haiku low | $2.72 | 35 | Haiku low, $2.76, 40 min |
+| Hard | Sol low | $6.25 | 51 | Sol low, $6.24, 50 min |
+| High-risk | Sol high | not in calculation | | Sol xhigh |
+
+`codex`:
+
+| Difficulty | Default start | Expected cost | Expected minutes | Previous |
+| --- | --- | --- | --- | --- |
+| Trivial | Sol low | $0.84 | 12 | Luna max, $0.48, 24 min |
+| Small | Sol low | $0.91 | 13 | Luna max, $0.48, 24 min |
+| Moderate | Sol medium | $1.00 | 14 | Luna max, $0.48, 24 min |
+| Hard | Sol medium | $1.00 | 14 | Sol low, $0.80, 12 min |
+| High-risk | Sol high | not in calculation | | Sol xhigh |
+
+The codex "previous" looked cheap only because Sol xhigh was skipped: with no
+escalation, Luna max or Sol low stopped after one failure (unsolved share
+29.5% for moderate, now 19.5%). Its unsolved share is the chance the task is
+still failing after the last rung.
+
+Sensitivity: with 6 minutes of overhead time the starts are the same. At $0.10
+per minute, trivial-to-moderate starts move to Sonnet low in `claude` and
+`mixed`; the owner chose to keep $0.05. At $0 (cost only), codex would start at
+Luna max and `mixed` hard at Haiku low. With overhead between $0.25 and $0.50
+and correlation between 0.5 and 0.8 the starts hold, except `mixed` moderate
+(Sonnet low at $0.50 overhead) and `mixed` hard (Sonnet low at correlation 0.5).
+
+Timing evidence: the router results log had one timed worker attempt (Haiku
+low, moderate, 2.3 minutes against 11.6 in the benchmark), so benchmark minutes
+are for hard tasks and only the ratios between workers are used. GSwitch's
+activity log had 37 Codex runs with times (median Luna high 17 minutes, n=8;
+Luna xhigh 6 minutes, n=7; Sol high 15 minutes, n=11), but no difficulty or
+outcome, so it cannot compare models. The speed weighting rests on the
+Artificial Analysis Coding Agent Index time per task; replace it when the
+router's own results reach 10 per worker and difficulty.
+
+Sol xhigh is not allowed by the owner's GSwitch setup, so it is not a rung.
 
 Expected costs in `claude` and `mixed` include the chance of reaching Sonnet
-max ($14.19), which dominates hard tasks. Starting moderate `claude` work at
-Opus medium costs $4.49 here and only becomes cheapest with about $3 of
-overhead per attempt. High-risk work is not in the calculation: it starts
-stronger (`claude` Opus medium, otherwise Sol xhigh) because a wrong change
-that passes the tests costs more there. The defaults hold for overhead between
-$0.25 and $0.50 and correlation between 0.5 and 0.8.
+max ($14.19), which dominates hard tasks. High-risk work is not in the
+calculation: it starts stronger (`claude` Opus medium, `mixed` and `codex` Sol
+high) because a wrong change that passes the tests costs more there.

@@ -8,8 +8,9 @@ disable-model-invocation: true
 
 Show the output as-is. Optional arguments: `--project <dir>` and `--since <days>`.
 
-Attempts and passes count orchestrator result records; each failed escalation
-counts as an attempt. Success is passes / attempts. Median ms and median tokens
+Attempts and passes count worker result records; orchestrator records
+(`--worker orchestrator`) are not attempts and show on a separate count line.
+Each failed escalation counts as an attempt. Success is passes / attempts. Median ms and median tokens
 use matched hook observations (session, worker, agent ID), combining
 both completion hooks without counting the telemetry twice. Missing metrics
 show `-`. Codex jobs counts distinct linked job IDs per row. Filters select

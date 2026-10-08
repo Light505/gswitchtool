@@ -65,7 +65,9 @@ export function resultRecord(args, normalizeProject, namespace = "router") {
   const f = flags(rest, ["--task", "--difficulty", "--worker", "--outcome", "--reason", "--step", "--title", "--agent", "--codex-job", "--codex-thread"]);
   if (!f["--task"]) throw new Error("result requires --task <id>");
   if (!difficulties.includes(f["--difficulty"])) throw new Error(`Invalid difficulty. Valid values: ${difficulties.join(", ")}`);
-  if (!isResultWorker(f["--worker"], namespace)) throw new Error("Invalid worker. Use a router worker or codex:<model>/<effort> (low, medium, high, xhigh, max)");
+  const orchestrator = f["--worker"] === "orchestrator";
+  if (!orchestrator && !isResultWorker(f["--worker"], namespace)) throw new Error("Invalid worker. Use a router worker, codex:<model>/<effort> (low, medium, high, xhigh, max) or orchestrator");
+  if (orchestrator && (f["--agent"] || f["--codex-job"] || f["--codex-thread"])) throw new Error("Orchestrator results cannot use --agent, --codex-job or --codex-thread");
   if (!["pass", "fail"].includes(f["--outcome"])) throw new Error("Invalid outcome. Valid values: pass, fail");
   if (f["--reason"] && !reasons.includes(f["--reason"])) throw new Error(`Invalid reason. Valid values: ${reasons.join(", ")}`);
   if (f["--step"] && !steps.includes(f["--step"])) throw new Error("Invalid step. Valid values: start, escalation");
@@ -166,6 +168,14 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
   return [...groups.values()].sort((a, b) => a.worker.localeCompare(b.worker) || difficulties.indexOf(a.difficulty) - difficulties.indexOf(b.difficulty))
     .map((g) => ({ worker: g.worker, difficulty: g.difficulty, attempts: g.attempts, passes: g.passes,
       successRate: g.passes / g.attempts, medianDurationMs: median(g.durations), medianTokens: median(g.tokens), linkedJobs: g.jobs.size }));
+}
+
+// Orchestrator edits are logged as results but are not worker attempts, so aggregateStats and validResult skip them.
+export function orchestratorEdits(records, { project, since, now = Date.now(), normalizeProject = (value) => value } = {}) {
+  return records.filter((r) => r.type === "result" && r.worker === "orchestrator" && text(r.sessionId) && text(r.project) && text(r.task) &&
+    difficulties.includes(r.difficulty) && ["pass", "fail"].includes(r.outcome) && typeof r.time === "string" && Number.isFinite(Date.parse(r.time)) &&
+    (!project || normalizeProject(r.project) === normalizeProject(project)) &&
+    (since === undefined || Date.parse(r.time) >= now - since * 86400000)).length;
 }
 
 export function statsOptions(args, normalizeProject) {

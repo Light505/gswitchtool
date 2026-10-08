@@ -36,32 +36,39 @@ Move up the mode's ladder only after a failure (section 5); never start higher
 
 | Difficulty | `claude` | `mixed` | `codex` |
 | --- | --- | --- | --- |
-| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Luna max |
-| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Luna max |
-| Moderate: a normal feature or tests from a spec, a few files | Haiku medium | Haiku low | Luna max |
-| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol low |
-| High-risk: credentials, account switching and failover, concurrency, money and data logic, data deletion, release and update code, security | Opus medium | Sol xhigh | Sol xhigh |
+| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Sol low |
+| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Sol low |
+| Moderate: a normal feature or tests from a spec, a few files | Haiku low | Haiku low | Sol medium |
+| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol medium |
+| High-risk: credentials, account switching and failover, concurrency, money and data logic, data deletion, release and update code, security | Opus medium | Sol high | Sol high |
 
 | Mode | Ladder |
 | --- | --- |
 | `claude` | Haiku low → Haiku medium → Sonnet low → Sonnet medium → Sonnet high → Opus medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
-| `mixed` | Haiku low → Luna max → Sol low → Sol medium → Sol xhigh → Sonnet max (owner approves) → stop and ask |
-| `codex` | Luna max → Sol xhigh → stop and ask (a hard task starts at Sol low, then Sol xhigh) |
+| `mixed` | Haiku low → Sonnet low → Sonnet medium → Sol low → Sol medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
+| `codex` | Sol low → Sol medium → stop and ask |
 
-Workers: Claude `router:<model>-<effort>`; Codex `gpt-6-luna` max and
-`gpt-6.1-sol` low, medium or xhigh through `gswitch-delegate`.
+A high-risk task in `mixed` starts at Sol high, then Opus high (owner approves) →
+Sonnet max (owner approves) → stop and ask. A high-risk task in `codex` starts at
+Sol high, then stop and ask.
 
-Why these: each default has the lowest expected total cost for its difficulty
-(failed attempts and escalations included, about USD 0.30 of orchestrator
-and review overhead per attempt), or is within 10% of it and faster. Cheap first
-attempts pay off because a failure costs little: Haiku low is USD 0.14 against
-USD 14.19 for Sonnet max. The numbers and the method are in `docs/model-benchmarks.md`
-of the GSwitch repository. The owner may name a different start for a task;
-follow it.
+Workers: Claude `router:<model>-<effort>`; Codex `gpt-6.1-sol` low, medium or
+high through `gswitch-delegate`.
+
+Why these: each default and ladder has the lowest expected cost plus USD 0.05
+per minute of waiting (about USD 3 per hour), counting failed attempts and
+escalations. Each attempt costs its worker's price plus USD 0.30 of orchestrator
+and review overhead, and takes its worker's minutes plus 3 minutes of
+orchestrator and review time. Cheap first attempts still pay off because a
+failure costs little: Haiku low is USD 0.14 against USD 14.19 for Sonnet max.
+The numbers and the method are in `docs/model-benchmarks.md` of the GSwitch
+repository. The owner may name a different start for a task; follow it.
 
 Not on any ladder (a cheaper rung scores as high, or the step adds too little
 for its cost): Haiku high/xhigh/max, Sonnet xhigh, Opus low, Opus xhigh, Opus
-max, Sol high/max, Luna below max. Use them only when the owner asks.
+max, Sol max, Luna (all efforts; Luna max is the slowest attempt), and Haiku
+medium in `mixed`. Sol high is only the high-risk start. Sol xhigh is not
+allowed by the owner's GSwitch setup. Use these only when the owner asks.
 
 Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
 model or effort `invoke-status` does not allow. Worker type:
@@ -108,13 +115,18 @@ replaces the benchmark's success rates over time, so never skip it:
 
 `router result ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --title
 "<short title>" --difficulty <trivial|small|moderate|hard|high-risk> --worker
-<router:<model>-<effort> | codex:<model>/<effort>> --step <start|escalation>
+<router:<model>-<effort> | codex:<model>/<effort> | orchestrator> --step <start|escalation>
 --outcome <pass|fail> [--reason verify|review|scope|stopped|other]
 [--agent <agentId>] [--codex-job <job>] [--codex-thread <thread>]`
 
 Use one task id (for example `t1`, `t2`) for all attempts at the same task.
 Record the difficulty you judged at the start, even if the task turned out
 harder.
+
+Use `--worker orchestrator` when you made the edit yourself (the "Yourself"
+cases or an owner-requested direct edit). Omit `--agent` and `--codex-*`. Never
+record a worker that did not run. These records are not counted in worker
+success rates.
 
 Pass: report. Fail (verify failed or a serious review finding): next rung.
 
