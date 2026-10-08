@@ -15,6 +15,13 @@
 > read-only review while Invoke Mode is on, and can use only the models you
 > allow. GSwitch switches to another allowed account when one runs out and
 > resumes the same Codex conversation.
+>
+> It comes in three parts, installed and versioned separately: the **app**
+> (holds your accounts and rules; works on its own), the **Codex plugin**
+> `codex@gswitchtool` (lets Claude Code send Codex tasks to the app), and the
+> optional **router plugin** `router@gswitchtool` (picks a Claude worker or
+> Codex for each coding task). See
+> [the three parts](./docs/invoke-mode-guide.md#the-three-parts).
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.

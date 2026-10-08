@@ -3,5 +3,5 @@
   "name": "router",
   "version": "0.1.0",
   "author": { "name": "Light505" },
-  "description": "Local task routing mechanics for Claude and Codex workers."
+  "description": "GSwitch router plugin (optional): picks a Claude worker or Codex for each coding task. Codex tasks go through the Codex plugin."
 }

@@ -15,6 +15,36 @@ You stay in control:
 - **GSwitch** checks every request, and when an account runs out of usage it
   switches to another allowed account and resumes the same Codex conversation.
 
+## The three parts
+
+| Part | What it is | Installs from | Needs |
+| --- | --- | --- | --- |
+| **GSwitch Claude Tool** (the app) | Windows app that holds your Codex accounts and decides what Codex may run | Release installer, then updates itself | Nothing else; works without Claude |
+| **Codex plugin** (`codex@gswitchtool`) | Claude Code plugin that sends Codex tasks to the app and shows its status (`/codex:...`) | Claude Code plugin list (`gswitchtool`) | The app open with Invoke Mode on, to run Codex |
+| **Router plugin** (`router@gswitchtool`, optional) | Claude Code plugin that picks who writes each coding task: a Claude worker or Codex (`/router:...`) | Same plugin list, installed separately | The Codex plugin and Invoke Mode for modes `mixed` and `codex` |
+
+Only the app holds accounts and rules. The plugins ask; the app checks every
+request against your settings and runs it or refuses it. The app and the
+plugins have separate version numbers and update separately: the app through
+its own updater, the plugins through `/plugin update`.
+
+How a task flows:
+
+```
+You ── set rules ──> GSwitch app (Invoke Mode, allowed models, accounts)
+
+Without the router (or router mode off):
+  /codex:gswitch-invoke ─> Codex plugin ─> app checks the rules ─> Codex on an allowed account
+                                                 <─ result (account switches and resume happen here)
+  Claude checks the result and reports to you.
+
+With the router (mode mixed):
+  coding task ─> router picks a worker
+     ├─ Claude worker ─> edits in its own worktree ─> router check + apply
+     └─ Codex ─> Codex plugin ─> app checks the rules ─> Codex ─> result
+  Claude checks the result; on failure the router moves one step up its ladder.
+```
+
 ## What you need
 
 - Windows 10 or 11 (macOS and Linux builds use the same steps with their own
@@ -154,6 +184,8 @@ This installs the plugin from GitHub `main`. To update it after `main` changes:
 /plugin marketplace update gswitchtool
 /plugin update codex@gswitchtool
 ```
+
+The router plugin is optional; see [`router-guide.md`](./router-guide.md#install).
 
 Start a new Claude Code session after installing or updating the plugin. To try
 plugin changes that are not on `main` yet, see

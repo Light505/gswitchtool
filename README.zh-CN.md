@@ -10,6 +10,11 @@
 > **安装和使用调用模式，请阅读[调用模式指南](./docs/invoke-mode-guide.md)（英文）。** 简而言之：只有在你输入
 > `/codex:gswitch-invoke` 时，Claude 才会把工作交给 Codex；调用模式开启时，它可以请 Codex 只读审查改动，
 > 并且只能使用你允许的模型。某个账户用量耗尽时，GSwitch 会切换到另一个允许的账户，并继续同一个 Codex 对话。
+>
+> 它分为三部分，分别安装、分别有版本号：**应用**（保存账户和规则，可单独使用）、**Codex 插件**
+> `codex@gswitchtool`（让 Claude Code 把 Codex 任务交给应用），以及可选的**路由插件**
+> `router@gswitchtool`（为每个编码任务选择 Claude 工作者或 Codex）。详见
+> [三个部分](./docs/invoke-mode-guide.md#the-three-parts)（英文）。
 
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。
 

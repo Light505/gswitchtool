@@ -11,6 +11,22 @@ the Codex plugin are unchanged underneath: account failover, `invoke`,
 
 Disable the plugin and every session behaves exactly as before.
 
+The router never talks to Codex or your accounts directly: Codex tasks go
+through the Codex plugin to the app, which applies your Invoke Mode rules. See
+[the three parts](./invoke-mode-guide.md#the-three-parts) for how they fit.
+
+## Install
+
+Install the Codex plugin first ([`invoke-mode-guide.md`](./invoke-mode-guide.md#4-install-the-claude-code-plugin)), then:
+
+```
+/plugin marketplace update gswitchtool
+/plugin install router@gswitchtool
+```
+
+Update it with `/plugin update router@gswitchtool` and start a new session. It
+starts in mode `off`; turn it on with `/router:mode`.
+
 ## Principles
 
 - The orchestrator only makes decisions. Mechanics (settings, scope checks,
