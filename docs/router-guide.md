@@ -17,6 +17,11 @@ through the Codex plugin to the app, which applies your Invoke Mode rules. See
 
 ## Install
 
+Not released yet: the router ships together with a setup panel in the app that
+replaces its commands. Until then it is in the plugin list only for the Dev
+build (`pnpm run plugin:dev`, see [Testing and Dev](#testing-and-dev)). Once
+released:
+
 Install the Codex plugin first ([`invoke-mode-guide.md`](./invoke-mode-guide.md#4-install-the-claude-code-plugin)), then:
 
 ```

@@ -21,7 +21,7 @@ You stay in control:
 | --- | --- | --- | --- |
 | **GSwitch Claude Tool** (the app) | Windows app that holds your Codex accounts and decides what Codex may run | Release installer, then updates itself | Nothing else; works without Claude |
 | **Codex plugin** (`codex@gswitchtool`) | Claude Code plugin that sends Codex tasks to the app and shows its status (`/codex:...`) | Claude Code plugin list (`gswitchtool`) | The app open with Invoke Mode on, to run Codex |
-| **Router plugin** (`router@gswitchtool`, optional) | Claude Code plugin that picks who writes each coding task: a Claude worker or Codex (`/router:...`) | Same plugin list, installed separately | The Codex plugin and Invoke Mode for modes `mixed` and `codex` |
+| **Router plugin** (`router@gswitchtool`, optional, not released yet) | Claude Code plugin that picks who writes each coding task: a Claude worker or Codex (`/router:...`) | Same plugin list, once released; until then Dev only | The Codex plugin and Invoke Mode for modes `mixed` and `codex` |
 
 Only the app holds accounts and rules. The plugins ask; the app checks every
 request against your settings and runs it or refuses it. The app and the
@@ -185,7 +185,7 @@ This installs the plugin from GitHub `main`. To update it after `main` changes:
 /plugin update codex@gswitchtool
 ```
 
-The router plugin is optional; see [`router-guide.md`](./router-guide.md#install).
+The router plugin is optional and not released yet; see [`router-guide.md`](./router-guide.md#install).
 
 Start a new Claude Code session after installing or updating the plugin. To try
 plugin changes that are not on `main` yet, see
