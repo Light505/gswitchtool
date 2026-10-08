@@ -499,6 +499,7 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   fs.mkdirSync(path.join(f.project, "scripts/lib"), { recursive: true });
   fs.copyFileSync(path.join(repository, "scripts/plugin-dev.mjs"), builder);
   fs.copyFileSync(path.join(repository, "scripts/lib/find-claude.mjs"), path.join(f.project, "scripts/lib/find-claude.mjs"));
+  fs.copyFileSync(path.join(repository, "scripts/lib/dev-gate.mjs"), path.join(f.project, "scripts/lib/dev-gate.mjs"));
   fs.cpSync(path.join(repository, "integrations/codex-plugin-cc/plugins/codex"), path.join(f.project, "integrations/codex-plugin-cc/plugins/codex"), { recursive: true });
   fs.cpSync(plugin, path.join(f.project, "integrations/router-plugin"), { recursive: true });
   fs.writeFileSync(path.join(f.project, "integrations/router-plugin/references.md"), "codex:gswitch-review and /router:mode");
