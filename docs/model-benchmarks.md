@@ -4,7 +4,9 @@ Capability and cost of every model and reasoning effort the router and Invoke
 Mode can use. The router's cost ladders
 ([`router-guide.md`](./router-guide.md#cost-ladders)) are built from these
 tables. Data as of 2026-10-08; recheck when models or prices change and update
-this file, the router guide and the route skill together.
+this file, the router guide and the route skill together. The full AA release
+comparison was checked the same day; it matches the Intelligence Index numbers
+used here, and the ladder calculation re-run on it gives the same defaults.
 
 ## Sources and how to read them
 
@@ -73,31 +75,103 @@ That is why Haiku is cheap in the II runs but not in Claude Code (CAI).
 
 | Worker | Intelligence Index | Terminal-Bench 4.0 | SciCode | Cost/task | Output tokens/task | Time/task |
 | --- | --- | --- | --- | --- | --- | --- |
-| Haiku low | 29 | 13% | 49% | $0.02 | 17k | 62s |
-| Haiku medium | 34 | 15% | 49% | $0.05 | 33k | 145s |
-| Haiku high | 38 | 22% | 49% | $0.08 | 55k | 235s |
-| Haiku xhigh | 41 | 29% | 52% | $0.12 | 89k | 291s |
-| Haiku max | 43 | 33% | 55% | $0.21 | 162k | 427s |
-| Sonnet low | 36 | 21% | 49% | $0.35 | 14k | 90s |
-| Sonnet medium | 41 | 30% | 53% | $0.48 | 21k | 137s |
-| Sonnet high | 47 | 44% | 54% | $0.88 | 37k | 235s |
-| Sonnet xhigh | 52 | 57% | 57% | $2.01 | 75k | 456s |
-| Sonnet max | 56 | 64% | 61% | $5.46 | 197k | 982s |
-| Opus low | 42 | 31% | 59% | $0.55 | 10k | 85s |
-| Opus medium | 51 | 53% | 59% | $1.34 | 26k | 209s |
-| Opus high | 54 | 57% | 60% | $1.82 | 36k | 297s |
-| Opus xhigh | 56 | 60% | 65% | $3.46 | 66k | 516s |
-| Opus max | 58 | 60% | 67% | $5.98 | 119k | 784s |
+| Haiku low | 29 | 13% | 49% | $0.02 | 17k | 60s |
+| Haiku medium | 34 | 15% | 49% | $0.05 | 33k | 126s |
+| Haiku high | 38 | 22% | 49% | $0.08 | 55k | 189s |
+| Haiku xhigh | 41 | 29% | 52% | $0.12 | 89k | 286s |
+| Haiku max | 43 | 33% | 55% | $0.21 | 162k | 420s |
+| Sonnet low | 36 | 21% | 49% | $0.35 | 14k | 88s |
+| Sonnet medium | 41 | 30% | 53% | $0.48 | 21k | 126s |
+| Sonnet high | 47 | 44% | 54% | $0.88 | 37k | 217s |
+| Sonnet xhigh | 52 | 57% | 57% | $2.01 | 75k | 431s |
+| Sonnet max | 56 | 64% | 61% | $5.46 | 197k | 954s |
+| Opus low | 42 | 31% | 59% | $0.55 | 10k | 82s |
+| Opus medium | 51 | 53% | 59% | $1.34 | 26k | 205s |
+| Opus high | 54 | 57% | 60% | $1.82 | 36k | 286s |
+| Opus xhigh | 56 | 60% | 65% | $3.46 | 66k | 513s |
+| Opus max | 58 | 60% | 67% | $5.98 | 119k | 783s |
 | Luna low | 22 | 0% | 47% | $0.0045 | 2k | 17s |
-| Luna medium | 30 | 3% | 51% | $0.02 | 11k | 172s |
-| Luna high | 33 | 5% | 50% | $0.03 | 20k | 242s |
-| Luna xhigh | 35 | 8% | 52% | $0.04 | 27k | 390s |
-| Luna max | 38 | 13% | 55% | $0.07 | 50k | n/a |
+| Luna medium | 30 | 3% | 51% | $0.02 | 11k | n/a |
+| Luna high | 33 | 5% | 50% | $0.03 | 20k | 173s |
+| Luna xhigh | 35 | 8% | 52% | $0.04 | 27k | 242s |
+| Luna max | 38 | 13% | 55% | $0.07 | 50k | 390s |
 | Sol low | 42 | 31% | 53% | $0.13 | 4k | 79s |
-| Sol medium | 48 | 48% | 53% | $0.21 | 8k | 163s |
-| Sol high | 50 | 52% | 56% | $0.32 | 13k | 254s |
+| Sol medium | 48 | 48% | 53% | $0.21 | 8k | 158s |
+| Sol high | 50 | 52% | 56% | $0.32 | 13k | 261s |
 | Sol xhigh | 51 | 54% | 56% | $0.39 | 18k | 330s |
-| Sol max | 52 | 56% | 54% | $0.72 | 38k | 685s |
+| Sol max | 52 | 56% | 54% | $0.72 | 38k | 684s |
+
+## Release comparison (all Intelligence Index evaluations)
+
+AA's [release comparison](https://artificialanalysis.ai/models/releases/comparisons?compare=claude-opus-5-5%2Cclaude-haiku-5-5%2Cclaude-sonnet-5-5%2Cgpt-6-1-sol%2Cgpt-6-luna)
+shows the same runs with all ten evaluations, the capability indexes, speed and
+latency (retrieved 2026-10-08; the whole table, unchanged, is in
+[`data/aa-release-comparison-2026-10-08.tsv`](./data/aa-release-comparison-2026-10-08.tsv)).
+Intelligence Index, Terminal-Bench 4.0 and cost per task equal the table above.
+Its input, output, cache hit and cache write prices equal the Prices table.
+"--" means AA shows no value.
+
+Scores:
+
+| Worker | Intelligence Index | Finance & Accounting | Strategy & Ops | Legal | Healthcare & Medical | Engineering | Economics | AA-Briefcase | GDPval-AA | AutomationBench-AA | Terminal-Bench 4.0 | SciCode | Humanity's Last Exam | GDP.pdf | CritPt | AA-Omniscience | AA-LCR |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Haiku low | 29 | 29 | 28 | 31 | -- | 31 | 37 | 1112 | 1125 | 22.9% | 12.6% | 49.2% | 27.0% | 11.2% | 9.1% | 3 | 72.0% |
+| Haiku medium | 34 | 35 | 34 | 36 | -- | 35 | 43 | 1372 | 1277 | 28.6% | 15.2% | 49.0% | 33.8% | 15.2% | 12.9% | 4 | 77.3% |
+| Haiku high | 38 | 38 | 37 | 38 | -- | 39 | 46 | 1443 | 1420 | 33.7% | 21.7% | 48.7% | 37.3% | 17.2% | 18.6% | 6 | 77.3% |
+| Haiku xhigh | 41 | 41 | 39 | 40 | -- | 43 | 49 | 1533 | 1511 | 36.0% | 29.3% | 51.7% | 42.7% | 18.2% | 22.6% | 6 | 78.3% |
+| Haiku max | 43 | 44 | 40 | 42 | -- | 45 | 51 | 1578 | 1620 | 35.4% | 32.8% | 55.0% | 44.4% | 20.8% | 18.9% | 11 | 82.7% |
+| Sonnet low | 36 | 38 | 41 | 41 | -- | 38 | 44 | 1272 | 1179 | 49.4% | 20.7% | 49.1% | 36.2% | 16.0% | 11.4% | 19 | 76.0% |
+| Sonnet medium | 41 | 41 | 45 | 44 | -- | 42 | 47 | 1442 | 1324 | 54.9% | 29.8% | 52.9% | 39.8% | 20.2% | 16.9% | 20 | 76.3% |
+| Sonnet high | 47 | 47 | 52 | 49 | -- | 48 | 52 | 1639 | 1551 | 59.4% | 43.9% | 53.7% | 45.8% | 25.2% | 24.6% | 21 | 78.0% |
+| Sonnet xhigh | 52 | 52 | 56 | 52 | -- | 54 | 56 | 1751 | 1731 | 65.5% | 57.1% | 57.3% | 50.0% | 24.6% | 31.1% | 24 | 79.7% |
+| Sonnet max | 56 | 57 | 60 | 56 | 58 | 58 | 61 | 1823 | 1839 | 71.8% | 63.6% | 61.0% | 55.0% | 25.8% | 31.4% | 32 | 82.7% |
+| Opus low | 42 | 46 | 48 | 52 | -- | 45 | 53 | 1280 | 1235 | 52.9% | 31.3% | 58.6% | 48.3% | 25.6% | 17.7% | 39 | 80.7% |
+| Opus medium | 51 | 54 | 57 | 57 | -- | 54 | 60 | 1628 | 1586 | 61.2% | 52.5% | 59.3% | 54.7% | 25.6% | 27.7% | 40 | 84.3% |
+| Opus high | 54 | 56 | 59 | 59 | -- | 56 | 61 | 1689 | 1707 | 63.2% | 56.6% | 60.4% | 55.6% | 28.8% | 30.9% | 41 | 82.7% |
+| Opus xhigh | 56 | 58 | 62 | 61 | -- | 59 | 63 | 1768 | 1837 | 65.0% | 59.6% | 65.0% | 57.5% | 26.6% | 31.7% | 43 | 84.7% |
+| Opus max | 58 | 61 | 64 | 63 | 61 | 60 | 66 | 1807 | 1866 | 69.5% | 59.6% | 66.9% | 61.4% | 26.2% | 31.7% | 46 | 84.7% |
+| Luna non-reasoning | 18 | 20 | 20 | 19 | -- | 21 | 24 | 903 | 1049 | 9.1% | 1.5% | 43.1% | 8.6% | 5.8% | 1.1% | −22 | 39.7% |
+| Luna low | 22 | 24 | 23 | 25 | -- | 23 | 30 | 741 | 1036 | 12.0% | 0.0% | 46.9% | 20.3% | 9.0% | 2.6% | −9 | 74.0% |
+| Luna medium | 30 | 33 | 37 | 33 | -- | 29 | 37 | 1099 | 1262 | 40.5% | 2.5% | 50.9% | 28.3% | 13.8% | 10.6% | −5 | 78.3% |
+| Luna high | 33 | 36 | 41 | 35 | -- | 32 | 40 | 1186 | 1344 | 47.8% | 4.5% | 50.3% | 32.9% | 18.2% | 15.4% | −6 | 79.3% |
+| Luna xhigh | 35 | 37 | 43 | 37 | -- | 34 | 42 | 1237 | 1364 | 47.8% | 8.1% | 51.7% | 34.3% | 18.6% | 17.4% | −2 | 80.0% |
+| Luna max | 38 | 40 | 46 | 40 | 37 | 37 | 45 | 1336 | 1432 | 53.2% | 12.6% | 54.6% | 38.5% | 22.8% | 19.4% | 1 | 83.3% |
+| Sol low | 42 | 45 | 46 | 50 | -- | 44 | 52 | 1118 | 1297 | 52.6% | 30.8% | 53.2% | 47.4% | 27.0% | 24.9% | 38 | 84.0% |
+| Sol medium | 48 | 50 | 53 | 54 | -- | 50 | 56 | 1365 | 1433 | 62.6% | 48.0% | 53.2% | 49.9% | 30.0% | 27.7% | 40 | 83.3% |
+| Sol high | 50 | 53 | 55 | 56 | -- | 52 | 58 | 1471 | 1486 | 64.5% | 51.5% | 55.8% | 51.4% | 32.0% | 30.0% | 41 | 82.3% |
+| Sol xhigh | 51 | 53 | 56 | 57 | -- | 53 | 58 | 1507 | 1510 | 66.6% | 54.0% | 55.7% | 52.6% | 31.8% | 31.7% | 41 | 79.7% |
+| Sol max | 52 | 54 | 57 | 58 | 51 | 54 | 59 | 1564 | 1575 | 64.9% | 56.1% | 54.2% | 52.9% | 31.0% | 31.7% | 42 | 83.0% |
+
+Cost and speed:
+
+| Worker | Cost/task | Output tokens/s | First token (s) | First answer token (s) | End-to-end response (s) | Time/task (s) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Haiku low | $0.02 | 185 | 12.79 | 12.79 | 15.49 | 60.01 |
+| Haiku medium | $0.05 | 155 | 13.40 | 13.40 | 16.62 | 125.75 |
+| Haiku high | $0.08 | 178 | 26.69 | 26.69 | 29.49 | 188.98 |
+| Haiku xhigh | $0.12 | 193 | 78.84 | 78.84 | 81.43 | 286.30 |
+| Haiku max | $0.21 | 244 | 341.02 | 341.02 | 343.06 | 420.16 |
+| Sonnet low | $0.35 | 103 | 1.11 | 1.11 | 5.97 | 88.03 |
+| Sonnet medium | $0.48 | 102 | 2.05 | 2.05 | 6.96 | 126.43 |
+| Sonnet high | $0.88 | 104 | 12.70 | 12.70 | 17.53 | 217.35 |
+| Sonnet xhigh | $2.01 | 107 | 34.06 | 34.06 | 38.72 | 430.69 |
+| Sonnet max | $5.46 | 131 | 473.93 | 473.93 | 477.76 | 953.87 |
+| Opus low | $0.55 | 79 | 8.29 | 8.29 | 14.62 | 81.80 |
+| Opus medium | $1.34 | 76 | 21.32 | 21.32 | 27.86 | 204.82 |
+| Opus high | $1.82 | 76 | 37.62 | 37.62 | 44.16 | 286.31 |
+| Opus xhigh | $3.46 | 80 | 131.18 | 131.18 | 137.44 | 513.29 |
+| Opus max | $5.98 | 96 | 723.65 | 723.65 | 728.88 | 783.19 |
+| Luna non-reasoning | $0.01 | 119 | 0.76 | 0.76 | 4.96 | 31.49 |
+| Luna low | $0.0045 | 125 | 3.23 | 3.23 | 7.23 | 16.89 |
+| Luna medium | $0.02 | -- | -- | -- | -- | -- |
+| Luna high | $0.03 | 112 | 19.29 | 19.29 | 23.75 | 172.80 |
+| Luna xhigh | $0.04 | 115 | 27.33 | 27.33 | 31.66 | 241.52 |
+| Luna max | $0.07 | 128 | 108.60 | 108.60 | 112.50 | 389.64 |
+| Sol low | $0.13 | 49 | 3.11 | 3.11 | 13.35 | 79.48 |
+| Sol medium | $0.21 | 50 | 6.43 | 6.43 | 16.43 | 157.99 |
+| Sol high | $0.32 | 50 | 60.71 | 60.71 | 70.66 | 261.03 |
+| Sol xhigh | $0.39 | 53 | 148.30 | 148.30 | 157.67 | 329.86 |
+| Sol max | $0.72 | 56 | 331.97 | 331.97 | 340.97 | 684.27 |
 
 ## Best value per cost (Pareto frontier)
 
