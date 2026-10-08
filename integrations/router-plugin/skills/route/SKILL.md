@@ -27,46 +27,38 @@ workers: <allowed list>`. Use the newest one.
 
 ## 2. Choose the first worker
 
-Each mode has a ladder of rungs. Along every ladder, each rung both costs more
-and scores higher than the one before it, so escalating never pays more for a
-weaker worker. Scores are the
-Artificial Analysis Coding Agent Index (real agentic coding tasks); cost is the
-measured API cost per task, which tracks usage.
+Judge the task's difficulty and start at that difficulty's default worker.
+Move up the mode's ladder only after a failure (section 5); never start higher
+"to be safe", except for high-risk work.
 
-| Rung | Worker | Score | Cost/task |
+| Difficulty | `claude` | `mixed` | `codex` |
 | --- | --- | --- | --- |
-| H1 | `router:haiku-low` | 28 | $0.14 |
-| L | Codex `gpt-6-luna` max | 41 | $0.18 |
-| H2 | `router:haiku-medium` | 34 | $0.23 |
-| S1 | `router:sonnet-low` | 42 | $0.48 |
-| C1 | Codex `gpt-6.1-sol` low | 57 | $0.50 |
-| S2 | `router:sonnet-medium` | 46 | $0.62 |
-| C2 | Codex `gpt-6.1-sol` medium | 61 | $0.70 |
-| C3 | Codex `gpt-6.1-sol` xhigh | 63 | $1.04 |
-| S3 | `router:sonnet-high` | 55 | $1.24 |
-| S4 | `router:sonnet-xhigh` | 63 | $3.33 |
-| S5 | `router:sonnet-max` (owner approves) | 68 | $14.19 |
+| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Luna max |
+| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Luna max |
+| Moderate: a normal feature or tests from a spec, a few files | Haiku medium | Haiku low | Luna max |
+| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol low |
+| High-risk: credentials, account switching and failover, concurrency, money and data logic, data deletion, release and update code, security | Opus medium | Sol xhigh | Sol xhigh |
 
 | Mode | Ladder |
 | --- | --- |
-| `mixed` | H1 → L → C1 → C2 → C3 → S5 → stop and ask |
-| `codex` | L → C1 → C2 → C3 → stop and ask |
-| `claude` | H1 → H2 → S1 → S2 → S3 → S4 → S5 → stop and ask |
+| `claude` | Haiku low → Haiku medium → Sonnet low → Sonnet medium → Sonnet high → Opus medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
+| `mixed` | Haiku low → Luna max → Sol low → Sol medium → Sol xhigh → Sonnet max (owner approves) → stop and ask |
+| `codex` | Luna max → Sol xhigh → stop and ask (a hard task starts at Sol low, then Sol xhigh) |
 
-Start at the cheapest rung that can do the task; escalation does the rest.
+Workers: Claude `router:<model>-<effort>`; Codex `gpt-6-luna` max and
+`gpt-6.1-sol` low, medium or xhigh through `gswitch-delegate`.
 
-- H1: renames, moves, simple wiring, one-file mechanical edits.
-- L: other small bounded work, when a ~20-minute run is fine (Haiku is faster
-  when speed matters: H1 or H2).
-- C1 (`claude`: S1 or S2): a normal feature or tests from a spec.
-- C2 or C3 (`claude`: S3 or S4): hard, unclear, cross-module or long work, and
-  anything on the high-risk list (credentials, account switching and failover,
-  concurrency, money and data logic, data deletion, release and update code,
-  security).
+Why these: each default has the lowest expected total cost for its difficulty
+(failed attempts and escalations included, about $0.30 of orchestrator and
+review overhead per attempt), or is within 10% of it and faster. Cheap first
+attempts pay off because a failure costs little: Haiku low is $0.14 against
+$14.19 for Sonnet max. The numbers and the method are in `docs/model-benchmarks.md`
+of the GSwitch repository. The owner may name a different start for a task;
+follow it.
 
-Not on any ladder: Haiku high/xhigh/max, Sol high/max, and every Opus worker.
-Each costs more than a rung above that scores higher. Opus is allowed by
-default but is on no ladder: use it only when the owner asks for it.
+Not on any ladder (a cheaper rung scores as high, or the step adds too little
+for its cost): Haiku high/xhigh/max, Sonnet xhigh, Opus low, Opus xhigh, Opus
+max, Sol high/max, Luna below max. Use them only when the owner asks.
 
 Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
 model or effort `invoke-status` does not allow. Worker type:
@@ -88,8 +80,9 @@ The worker sees the repository, not this conversation. The brief states:
 Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief
 as prompt, no `model`. Codex: the `gswitch-delegate` skill, with `--write`,
 `--scope` and `--verify`, at the rung's model and effort. Approval prompts
-(`sonnet-max`, Opus at high or above) are the owner's decision; if denied, stop
-and ask.
+(every Claude worker that costs more per attempt than Opus medium) are the
+owner's decision; if denied, stop and ask. Codex has no such prompt: never use
+Sol max without the owner's yes.
 
 ## 4. Check the result
 
@@ -106,6 +99,19 @@ Trust tool facts only; the worker's text is a claim.
   diff of the changed files yourself and say why in the report.
 - Read diffs only after a warning, a failed verify, or changes in the high-risk
   list, and then only those files.
+
+Record every attempt, pass or fail, before you report or escalate. This data
+replaces the benchmark's success rates over time, so never skip it:
+
+`router result ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --title
+"<short title>" --difficulty <trivial|small|moderate|hard|high-risk> --worker
+<router:<model>-<effort> | codex:<model>/<effort>> --step <start|escalation>
+--outcome <pass|fail> [--reason verify|review|scope|stopped|other]
+[--agent <agentId>] [--codex-job <job>] [--codex-thread <thread>]`
+
+Use one task id (for example `t1`, `t2`) for all attempts at the same task.
+Record the difficulty you judged at the start, even if the task turned out
+harder.
 
 Pass: report. Fail (verify failed or a serious review finding): next rung.
 

@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { projectKey, matchesScope } from "../scripts/router.mjs";
-import { models, efforts, workerNames, defaultAllowed } from "../scripts/workers.mjs";
+import { models, efforts, workerNames, defaultAllowed, costPerTask } from "../scripts/workers.mjs";
 
 const plugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repository = path.resolve(plugin, "../..");
@@ -160,7 +160,7 @@ test("approval and low usage apply across every generated worker", (t) => {
   for (const { short } of models) for (const effort of efforts) {
     const type = `router:${short}-${effort}`;
     const result = f.agent({ subagent_type: type, description: "Fix parser" });
-    const ask = (short === "sonnet" && effort === "max") || (short === "opus" && ["high", "xhigh", "max"].includes(effort));
+    const ask = costPerTask[`${short}-${effort}`] > costPerTask["opus-medium"];
     assert.equal(f.decision(result), ask ? "ask" : undefined, type);
     if (ask) assert.equal(result.hookSpecificOutput.permissionDecisionReason, `Approve ${type} for task: Fix parser`);
   }
@@ -284,12 +284,11 @@ test("Agent and Task permissions, fixed models, low usage, scope, approval and h
   assert.equal(f.decision(f.agent({ prompt: "SCOPE: \nTask" })), "deny");
   f.run(["allow", "opus", "high"]);
   assert.equal(f.decision(f.agent({ subagent_type: "router:opus-high", description: "Fix parser" })), "ask");
-  assert.match(f.agent({ subagent_type: "router:opus-high", description: "Fix parser" }).hookSpecificOutput.permissionDecisionReason, /Fix parser/);
   assert.match(f.agent({ subagent_type: "general-purpose" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
   assert.deepEqual(f.agent({ subagent_type: "Explore" }), {});
   assert.deepEqual(f.agent({ subagent_type: "Plan" }), {});
   assert.deepEqual(f.agent({}, { tool_name: "Task" }), {});
-  assert.equal(f.read("sessions/s1.json").pending.length, 3);
+  assert.equal(f.read("sessions/s1.json").pending.length, 2);
 });
 
 test("binding oldest matching launch, scope widening, edits, ignored files and finish", (t) => {
@@ -516,7 +515,7 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   assert.equal(call("router-dev:sonnet-max").hookSpecificOutput.permissionDecision, "ask");
   f.run(["allow", "opus", "high"], "", devScript);
   assert.equal(call("router-dev:opus-low").hookSpecificOutput.permissionDecision, "deny");
-  assert.equal(call("router-dev:opus-high").hookSpecificOutput.permissionDecision, "ask");
+  assert.equal(call("router-dev:opus-high").hookSpecificOutput?.permissionDecision, "ask");
   fs.writeFileSync(path.join(dev, "stale.md"), "stale");
   const rerun = spawnSync(process.execPath, [builder, "--no-install"], { cwd: f.project, env: f.env, encoding: "utf8", windowsHide: true });
   assert.equal(rerun.status, 0, rerun.stderr); assert.equal(fs.existsSync(path.join(dev, "stale.md")), false);

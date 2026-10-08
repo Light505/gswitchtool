@@ -126,3 +126,43 @@ Limits: differences of one or two points are noise; Opus below max and Luna
 below max have no CAI numbers, so their ladder places rest on the two II
 measures; plan usage limits count usage in their own way, which API cost only
 approximates.
+
+## Opus estimates for agent sessions
+
+The Coding Agent Index has Opus only at max. For Opus medium, high and xhigh,
+the router uses estimates:
+
+- Score: from each effort's II Terminal-Bench 4.0 result, read against the
+  Sonnet efforts whose II Terminal-Bench and CAI index are both known. Opus
+  medium ~60, high ~63, xhigh ~65.
+- Cost: II cost per task × Sonnet's CAI/II cost ratio at the same effort
+  (1.29 to 2.60) × 0.84 (Opus max's ratio is 0.84 of Sonnet max's, because Opus
+  uses fewer tokens per task). Opus medium ~$1.45, high ~$2.16, xhigh ~$4.82.
+
+Uncertainty is about ±30%. Replace them when AA publishes CAI numbers for Opus
+below max, or from the router's own results.
+
+## Default start per difficulty
+
+`scripts/router-ladder-calc.mjs` computes, for every possible start, the
+expected cost and time to solve a task: each attempt's cost plus $0.30 of
+orchestrator and review overhead, times the chance the task gets that far.
+Failures are 80% driven by difficulty (a task one worker fails is likely hard
+for the next) and 20% luck. Easier difficulties fail less often than the CAI's
+hard tasks: moderate ×0.5, small ×0.25, trivial ×0.1. The default is the
+cheapest start, or the fastest start within 10% of it. Expected cost per task:
+
+| Difficulty | `claude` | `mixed` | `codex` |
+| --- | --- | --- | --- |
+| Trivial | Haiku low, $0.82 | Haiku low, $0.80 | Luna max, $0.56 |
+| Small | Haiku low, $1.48 | Haiku low, $1.40 | Luna max, $0.68 |
+| Moderate | Haiku medium, $3.05 (cheapest Haiku low $2.83) | Haiku low, $2.56 | Luna max, $0.88 |
+| Hard | Sonnet low, $6.92 (cheapest Haiku low $6.71) | Sol low, $5.86 (cheapest Luna max $5.60) | Sol low, $1.38 (cheapest Luna max $1.27) |
+
+Expected costs in `claude` and `mixed` include the chance of reaching Sonnet
+max ($14.19), which dominates hard tasks. Starting moderate `claude` work at
+Opus medium costs $4.49 here and only becomes cheapest with about $3 of
+overhead per attempt. High-risk work is not in the calculation: it starts
+stronger (`claude` Opus medium, otherwise Sol xhigh) because a wrong change
+that passes the tests costs more there. The defaults hold for overhead between
+$0.25 and $0.50 and correlation between 0.5 and 0.8.

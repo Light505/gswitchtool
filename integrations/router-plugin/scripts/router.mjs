@@ -5,7 +5,8 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { models, efforts, workerNames, defaultAllowed } from "./workers.mjs";
+import { models, efforts, workerNames, defaultAllowed, needsApproval } from "./workers.mjs";
+import { appendResult, readResults, resultRecord, attemptRecord, aggregateStats, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -74,11 +75,6 @@ function claudeAllowed(value) {
 function allowedList(allowed = config().claudeAllowed) {
   return models.filter(({ short }) => allowed[short]?.length)
     .map(({ short }) => `${short} ${allowed[short].join(", ")}`).join(" · ") || "none";
-}
-function needsApproval(name) {
-  const [model, effort] = name.split("-");
-  return (model === "sonnet" && effort === "max") ||
-    (model === "opus" && efforts.indexOf(effort) >= efforts.indexOf("high"));
 }
 function config() {
   const value = readJSON(data("config.json"));
@@ -238,6 +234,25 @@ function hook(event, input) {
   const cwd = input.cwd || process.cwd();
   const sess = session(id);
   const state = resolved(id, sess.projectDir || cwd);
+  // Observe completions even when the owner turned routing off mid-attempt.
+  if (event === "PostToolUse" && ["Agent", "Task"].includes(input.tool_name) && isWorker(input.tool_input?.subagent_type)) {
+    const response = object(input.tool_response);
+    // input.agent_id identifies the caller, not the Agent tool's child.
+    const agentId = [response.agentId, response.agent_id].find((value) => typeof value === "string" && value) || null;
+    const worker = input.tool_input.subagent_type;
+    const bound = agentId ? sess.bindings[agentId] : undefined;
+    appendResult(data("results.jsonl"), attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd), agentId, worker,
+      scope: bound?.type === worker && Array.isArray(bound.scope) ? bound.scope : scopes(String(input.tool_input.prompt || "").match(/^\s*SCOPE:[ \t]*([^\r\n]+)$/m)?.[1]) }));
+    return {};
+  }
+  if (event === "SubagentStop" && isWorker(sess.bindings[input.agent_id]?.type)) {
+    const bound = sess.bindings[input.agent_id];
+    if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
+    saveSession(id, sess);
+    appendResult(data("results.jsonl"), attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
+      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }));
+    return {};
+  }
   if (event === "SessionStart") {
     const lines = state.mode.value === "off" ? [] : [routerLine(state)];
     if (fs.existsSync(wrapupFile(cwd))) lines.push(`Router: unfinished work saved; run node "${path.join(pluginRoot, "scripts", "router.mjs")}" wrapup show "${cwd}".`);
@@ -291,10 +306,6 @@ function hook(event, input) {
       saveSession(id, sess);
     }
     if (input.cwd) sharedDependencies(cwd, sess.projectDir);
-  }
-  if (event === "SubagentStop" && sess.bindings[input.agent_id]) {
-    if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...sess.bindings[input.agent_id], time: Date.now() });
-    saveSession(id, sess);
   }
   return {};
 }
@@ -450,6 +461,12 @@ function command(args, raw) {
   if (name === "check") return check(rest);
   if (name === "apply") return apply(rest);
   if (name === "usage") return usageLine();
+  if (name === "result") {
+    const record = resultRecord(rest, projectKey, pluginName);
+    appendResult(data("results.jsonl"), record);
+    return `Result: recorded ${record.task} ${record.worker} ${record.outcome}`;
+  }
+  if (name === "stats") return statsTable(aggregateStats(readResults(data("results.jsonl")), statsOptions(rest, comparable)));
   if (name === "statusline") return statusline(raw);
   if (name === "statusline-install" || name === "statusline-uninstall") return statuslineSettings(name === "statusline-install");
   if (name === "allow") {
