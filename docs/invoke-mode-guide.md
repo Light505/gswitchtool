@@ -264,6 +264,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 - **Open the conversation in Codex:** `codex resume <thread-id>`. Typing there
   continues it on the current account.
 - **Jobs in a Claude session:** `/codex:status` and `/codex:result <job-id>`.
+- **Invoke status:** `/codex:invoke-status` shows the same status Claude sees.
 
 ## 8. Troubleshooting
 
