@@ -28,7 +28,7 @@ import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
-import { collectReviewContext, ensureGitRepository, resolveReviewTarget } from "./lib/git.mjs";
+import { collectReviewContext, ensureGitRepository, resolveReviewTarget, unmatchedCodexPaths } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
 import {
@@ -1724,8 +1724,12 @@ async function handleInvoke(argv) {
           if (!scopedPatterns.some((pattern) => matchesScope(file.path, pattern))) result.warnings.push(`WARNING: changed outside --scope: ${file.path}`);
         }
       }
-      for (const file of getCodexChangedFiles(result.output)) {
-        if (!result.diff.files.some((changed) => changed.path === file)) result.warnings.push(`WARNING: Codex says changed but git shows unchanged: ${file}`);
+      // Codex names paths relative to the folder it ran in; git reports them from the repository root.
+      const cwdFromRoot = path.relative(gitBefore.root, actualCwd);
+      const cwdRelativeToRoot = cwdFromRoot === ".." || cwdFromRoot.startsWith(`..${path.sep}`) || path.isAbsolute(cwdFromRoot) ? "" : cwdFromRoot.split(path.sep).join("/");
+      const gitChangedPaths = result.diff.files.map((changed) => changed.path);
+      for (const file of unmatchedCodexPaths(getCodexChangedFiles(result.output), gitChangedPaths, cwdRelativeToRoot, gitBefore.root)) {
+        result.warnings.push(`WARNING: Codex says changed but git shows unchanged: ${file}`);
       }
       if (write && !result.diff.files.length) result.warnings.push("WARNING: write run changed nothing");
       if (!write && result.diff.files.length) result.warnings.push("WARNING: read-only run changed files");

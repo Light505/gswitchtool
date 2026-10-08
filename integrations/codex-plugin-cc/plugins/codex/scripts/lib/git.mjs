@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026): adds unmatchedCodexPaths for Invoke changed-file checks.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -344,4 +345,48 @@ export function collectReviewContext(cwd, target, options = {}) {
     collectionGuidance: buildAdversarialCollectionGuidance({ includeDiff }),
     ...details
   };
+}
+
+// Codex names paths relative to the folder it ran in, and may use brace groups,
+// "./", backslashes, or absolute paths inside the root. Returns the named entries
+// that git does not show as changed, exactly as Codex wrote them.
+export function unmatchedCodexPaths(namedPaths, gitPaths, cwdRelativeToRoot = "", root = "") {
+  const changed = new Set(gitPaths);
+  const normalizedRoot = String(root).replace(/\\/g, "/");
+  const rootPrefix = normalizedRoot === "/" ? "/" : normalizedRoot.replace(/\/+$/, "");
+  const insensitiveRoot = process.platform === "win32" || /^[a-z]:\//i.test(rootPrefix);
+  const normalizeRelative = (value) => {
+    const normalized = path.posix.normalize(value);
+    if (normalized === ".." || normalized.startsWith("../") || normalized.startsWith("/")) return null;
+    return normalized === "." ? "" : normalized;
+  };
+  const cwdPrefix = normalizeRelative(String(cwdRelativeToRoot).replace(/\\/g, "/").replace(/^\/+|\/+$/g, ""));
+  const matches = (candidate) => {
+    const relative = String(candidate).trim().replace(/\\/g, "/");
+    const absolute = relative.startsWith("/") || /^[a-z]:\//i.test(relative);
+    if (absolute) {
+      if (!rootPrefix) return false;
+      const prefix = rootPrefix === "/" ? "/" : `${rootPrefix}/`;
+      const startsWithRoot = insensitiveRoot
+        ? relative.toLowerCase().startsWith(prefix.toLowerCase())
+        : relative.startsWith(prefix);
+      if (!startsWithRoot) return false;
+      const rootRelative = normalizeRelative(rootPrefix === "/" ? relative.slice(1) : relative.slice(prefix.length));
+      return rootRelative !== null && changed.has(rootRelative);
+    }
+
+    const rootRelative = normalizeRelative(relative);
+    const cwdRelative = cwdPrefix === null ? null : normalizeRelative(path.posix.join(cwdPrefix, relative));
+    return (rootRelative !== null && changed.has(rootRelative)) || (cwdRelative !== null && changed.has(cwdRelative));
+  };
+  return namedPaths.filter((named) => !expandBraces(String(named)).every(matches));
+}
+
+// Expands brace groups such as src/{a,b}.ts into src/a.ts and src/b.ts.
+function expandBraces(value) {
+  const match = value.match(/\{([^{}]*)\}/);
+  if (!match) return [value];
+  const before = value.slice(0, match.index);
+  const after = value.slice(match.index + match[0].length);
+  return match[1].split(",").flatMap((alternative) => expandBraces(`${before}${alternative.trim()}${after}`));
 }
