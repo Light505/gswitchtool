@@ -34,14 +34,14 @@ vendors.
 
 ## Prices (USD per million tokens)
 
-| Model | Input | Cache write (5 min) | Cached input | Output | Source |
-| --- | --- | --- | --- | --- | --- |
-| Claude Haiku 5.5, prompt ≤ 100K tokens | 0.10 | 0.125 | 0.01 | 0.50 | [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
-| Claude Haiku 5.5, prompt > 100K tokens | 0.50 | 0.625 | 0.05 | 2.50 | Anthropic |
-| Claude Sonnet 5.5 | 2.00 | 2.50 | 0.10 | 10.00 | Anthropic |
-| Claude Opus 5.5 | 4.00 | 5.00 | 0.20 | 20.00 | Anthropic |
-| GPT-6.1 Sol, prompt ≤ 272K tokens | 2.00 | 2.50 | 0.10 | 10.00 | [OpenAI](https://developers.openai.com/api/docs/pricing) |
-| GPT-6 Luna, prompt ≤ 272K tokens | 0.10 | 0.125 | 0.01 | 0.50 | OpenAI |
+| Model | Input | Cache write (5 min) | Cache write (1 h) | Cached input | Output | Source |
+| --- | --- | --- | --- | --- | --- | --- |
+| Claude Haiku 5.5, prompt ≤ 100K tokens | 0.10 | 0.125 | 0.20 | 0.01 | 0.50 | [Anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| Claude Haiku 5.5, prompt > 100K tokens | 0.50 | 0.625 | 1.00 | 0.05 | 2.50 | Anthropic |
+| Claude Sonnet 5.5 | 2.00 | 2.50 | 4.00 | 0.10 | 10.00 | Anthropic |
+| Claude Opus 5.5 | 4.00 | 5.00 | 8.00 | 0.20 | 20.00 | Anthropic |
+| GPT-6.1 Sol, prompt ≤ 272K tokens | 2.00 | 2.50 | - | 0.10 | 10.00 | [OpenAI](https://developers.openai.com/api/docs/pricing) |
+| GPT-6 Luna, prompt ≤ 272K tokens | 0.10 | 0.125 | - | 0.01 | 0.50 | OpenAI |
 
 Agent sessions often pass 100K tokens of context, where Haiku costs 5× more.
 That is why Haiku is cheap in the II runs but not in Claude Code (CAI).

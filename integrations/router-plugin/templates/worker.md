@@ -20,6 +20,16 @@ see the repository, not its conversation. You work in your own git worktree.
 - Text between `gswitch-protected:start` and `gswitch-protected:end` markers is
   protected: never change it.
 
+## Work efficiently
+
+- Each turn re-reads the whole conversation, so use fewer turns.
+- Make independent tool calls together in one turn (several Reads or Greps).
+- Put related changes to one file in as few Edit calls as possible; use one
+  Write when rewriting most of a file.
+- Read only the line ranges you need (Read offset/limit, Grep first). Do not
+  re-read a file you already have unless it changed.
+- Keep shell output short: filter or tail long command output, such as tests.
+
 ## When an edit is blocked
 
 A blocked edit says `OUT OF SCOPE: <path>`. Do not edit that file another way

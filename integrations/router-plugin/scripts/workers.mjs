@@ -44,6 +44,13 @@ export const benchmarks = Object.freeze({
 });
 // Measured or estimated API USD per agent-session attempt.
 export const costPerTask = Object.freeze(Object.fromEntries(workerNames.map((name) => [name, benchmarks[name].cost])));
+// USD per million tokens, from the Prices table in docs/model-benchmarks.md.
+export const tokenPrices = Object.freeze({
+  "claude-haiku-5-5": { input: 0.10, cacheWrite: 0.125, cacheWrite1h: 0.20, cachedInput: 0.01, output: 0.50,
+    above100k: { input: 0.50, cacheWrite: 0.625, cacheWrite1h: 1.00, cachedInput: 0.05, output: 2.50 } },
+  "claude-sonnet-5-5": { input: 2.00, cacheWrite: 2.50, cacheWrite1h: 4.00, cachedInput: 0.10, output: 10.00 },
+  "claude-opus-5-5": { input: 4.00, cacheWrite: 5.00, cacheWrite1h: 8.00, cachedInput: 0.20, output: 20.00 }
+});
 export function needsApproval(name) {
   const id = benchmarkId(name) ?? name;
   if (/^codex:/.test(id)) return benchmarks[id]?.cost != null && benchmarks[id].cost > costPerTask["opus-medium"];

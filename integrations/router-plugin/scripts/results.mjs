@@ -1,7 +1,7 @@
 // Added by Light505 for gswitchtool (2026).
 import fs from "node:fs";
 import path from "node:path";
-import { efforts, workerNames, difficulties, kinds, failureReasons, workerFailures } from "./workers.mjs";
+import { efforts, workerNames, difficulties, kinds, failureReasons, workerFailures, tokenPrices } from "./workers.mjs";
 
 export { difficulties } from "./workers.mjs";
 const reasons = failureReasons;
@@ -152,10 +152,23 @@ export function transcriptTotals(file) {
   const usages = [...messages.values()].map((message) => object(message.usage));
   const sum = (field) => usages.reduce((total, usage) => total + (number(usage[field]) ? usage[field] : 0), 0);
   const inputTokens = sum("input_tokens"), cacheCreationTokens = sum("cache_creation_input_tokens"), cacheReadTokens = sum("cache_read_input_tokens"), outputTokens = sum("output_tokens");
+  let usd = null;
+  for (const message of messages.values()) {
+    if (!Object.hasOwn(tokenPrices, message.model)) { usd = null; break; }
+    const usage = object(message.usage), count = (field) => number(usage[field]) ? usage[field] : 0;
+    const input = count("input_tokens"), write = count("cache_creation_input_tokens"), read = count("cache_read_input_tokens");
+    const base = tokenPrices[message.model];
+    const price = input + write + read > 100_000 && base.above100k ? base.above100k : base;
+    const split = object(usage.cache_creation);
+    const hasSplit = number(split.ephemeral_5m_input_tokens) || number(split.ephemeral_1h_input_tokens);
+    const write5m = hasSplit ? firstNumber(split.ephemeral_5m_input_tokens, 0) : write;
+    const write1h = hasSplit ? firstNumber(split.ephemeral_1h_input_tokens, 0) : 0;
+    usd = (usd ?? 0) + (input * price.input + write5m * price.cacheWrite + write1h * price.cacheWrite1h + read * price.cachedInput + count("output_tokens") * price.output) / 1_000_000;
+  }
   return { durationMs: spans.length ? spans.reduce((total, span) => total + span, 0) : null,
     inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens,
     tokens: messages.size ? inputTokens + cacheCreationTokens + cacheReadTokens + outputTokens : null,
-    models: [...new Set([...messages.values()].map((message) => message.model).filter(text))] };
+    models: [...new Set([...messages.values()].map((message) => message.model).filter(text))], usd };
 }
 
 export function validResult(record) {
@@ -177,25 +190,26 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
     if (r.type !== "attempt" || !text(r.sessionId) || !text(r.project) || !text(r.worker) || !text(r.agentId)) continue;
     // Stop and tool completion describe one attempt. Transcript totals are cumulative, so the latest supplied value wins; an empty record never erases it.
     const key = identity(r), previous = telemetry.get(key) || {};
-    telemetry.set(key, { durationMs: firstNumber(r.durationMs, previous.durationMs), tokens: firstNumber(r.tokens, previous.tokens) });
+    telemetry.set(key, { durationMs: firstNumber(r.durationMs, previous.durationMs), tokens: firstNumber(r.tokens, previous.tokens), usd: firstNumber(r.usd, previous.usd) });
   }
   const groups = new Map();
   for (const r of records) {
     if (!validResult(r) || r.outcome === "blocked" || (project && normalizeProject(r.project) !== normalizeProject(project)) ||
         (since !== undefined && Date.parse(r.time) < now - since * 86400000)) continue;
     const key = JSON.stringify([r.worker, r.difficulty]);
-    const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, attempts: 0, passes: 0, durations: [], tokens: [], jobs: new Set() };
+    const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, attempts: 0, passes: 0, durations: [], tokens: [], usd: [], jobs: new Set() };
     group.attempts++;
     if (["pass", "unverified"].includes(r.outcome)) group.passes++;
     const attempt = text(r.agentId) ? telemetry.get(identity(r)) : undefined;
     if (number(attempt?.durationMs)) group.durations.push(attempt.durationMs);
     if (number(attempt?.tokens)) group.tokens.push(attempt.tokens);
+    if (number(attempt?.usd)) group.usd.push(attempt.usd);
     if (/^codex(?:-dev)?:/.test(r.worker) && text(r.codexJobId)) group.jobs.add(r.codexJobId);
     groups.set(key, group);
   }
   return [...groups.values()].sort((a, b) => a.worker.localeCompare(b.worker) || difficulties.indexOf(a.difficulty) - difficulties.indexOf(b.difficulty))
     .map((g) => ({ worker: g.worker, difficulty: g.difficulty, attempts: g.attempts, passes: g.passes,
-      successRate: g.passes / g.attempts, medianDurationMs: median(g.durations), medianTokens: median(g.tokens), linkedJobs: g.jobs.size }));
+      successRate: g.passes / g.attempts, medianDurationMs: median(g.durations), medianTokens: median(g.tokens), medianUsd: median(g.usd), linkedJobs: g.jobs.size }));
 }
 
 // Orchestrator edits are logged as results but are not worker attempts, so aggregateStats and validResult skip them.
@@ -214,9 +228,9 @@ export function statsOptions(args, normalizeProject) {
 }
 
 export function statsTable(groups) {
-  const rows = [["Worker", "Difficulty", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Codex jobs"],
+  const rows = [["Worker", "Difficulty", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Median USD", "Codex jobs"],
     ...groups.map((g) => [g.worker, g.difficulty, String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
-      String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
+      String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), number(g.medianUsd) ? g.medianUsd.toFixed(3) : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => row[i].length)));
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
 }

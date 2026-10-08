@@ -214,14 +214,15 @@ test("stats merges completion metrics without double counting and isolates reuse
   ];
   const rows = aggregateStats(records);
   assert.deepEqual(rows, [
-    { worker: "codex:gpt-6.1-sol/low", difficulty: "hard", attempts: 4, passes: 3, successRate: .75, medianDurationMs: null, medianTokens: null, linkedJobs: 2 },
-    { worker: "router:haiku-low", difficulty: "small", attempts: 3, passes: 2, successRate: 2 / 3, medianDurationMs: 200, medianTokens: 60, linkedJobs: 0 }
+    { worker: "codex:gpt-6.1-sol/low", difficulty: "hard", attempts: 4, passes: 3, successRate: .75, medianDurationMs: null, medianTokens: null, medianUsd: null, linkedJobs: 2 },
+    { worker: "router:haiku-low", difficulty: "small", attempts: 3, passes: 2, successRate: 2 / 3, medianDurationMs: 200, medianTokens: 60, medianUsd: null, linkedJobs: 0 }
   ]);
   fs.mkdirSync(f.data, { recursive: true });
   fs.writeFileSync(f.file, records.map((r) => JSON.stringify(r)).join("\n") + "\n{corrupt}\n");
   assert.equal(f.run(["stats"]), `${statsTable(rows)}\n`);
-  assert.match(f.run(["stats"]), /router:haiku-low\s+small\s+3\s+2\s+66.7%\s+200\s+60\s+-/);
-  assert.match(f.run(["stats"]), /codex:gpt-6.1-sol\/low\s+hard\s+4\s+3\s+75.0%\s+-\s+-\s+2/);
+  assert.match(f.run(["stats"]), /Median tokens\s+Median USD\s+Codex jobs/);
+  assert.match(f.run(["stats"]), /router:haiku-low\s+small\s+3\s+2\s+66.7%\s+200\s+60\s+-\s+-/);
+  assert.match(f.run(["stats"]), /codex:gpt-6.1-sol\/low\s+hard\s+4\s+3\s+75.0%\s+-\s+-\s+-\s+2/);
   assert.equal(aggregateStats([result(), attempt({ durationMs: 0, tokens: 0 })])[0].medianTokens, 0);
   // Project is not part of attempt matching: the same session, worker and agent ID still match.
   assert.deepEqual(aggregateStats([result(), attempt({ project: `${project}/other`, durationMs: 77, tokens: 9 })])[0].medianDurationMs, 77);
@@ -260,13 +261,47 @@ test("transcript totals count each message ID once, ignore bad lines and return 
     { type: "attachment", uuid: "x4", promptId: "p2", timestamp: at("20") }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n{corrupt}\n");
   assert.deepEqual(transcriptTotals(file), { durationMs: 20_000, inputTokens: 11, cacheCreationTokens: 9, cacheReadTokens: 33, outputTokens: 22,
-    tokens: 75, models: ["claude-haiku-5-5", "claude-sonnet-5-5"] });
+    tokens: 75, models: ["claude-haiku-5-5", "claude-sonnet-5-5"], usd: 0.000044225 });
   assert.equal(transcriptTotals(path.join(f.home, "missing.jsonl")), null);
   fs.writeFileSync(file, [
     { type: "assistant", uuid: "x", timestamp: at("01"), message: { id: "m", usage } },
     { type: "user", uuid: "meta", isMeta: true, timestamp: at("02"), message: { role: "user", content: "<system-reminder>..." } }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
   assert.equal(transcriptTotals(file), null);
+});
+
+test("transcript totals price each message using its model and Haiku prompt tier", (t) => {
+  const f = fixture(t), file = path.join(f.home, "prices.jsonl");
+  const totals = (messages) => {
+    fs.writeFileSync(file, [
+      { type: "user", message: { content: "brief" } },
+      ...messages.map((message, i) => ({ type: "assistant", message: { id: `m${i}`, ...message } }))
+    ].map((line) => JSON.stringify(line)).join("\n"));
+    return transcriptTotals(file);
+  };
+  const usage = { input_tokens: 10_000, cache_creation_input_tokens: 20_000, cache_read_input_tokens: 70_000, output_tokens: 1_000 };
+  const low = { model: "claude-haiku-5-5", usage };
+  const high = { model: "claude-haiku-5-5", usage: { ...usage, cache_read_input_tokens: 70_001 } };
+  // Exactly 100K stays in the lower tier; cache writes and reads count toward the prompt.
+  assert.equal(totals([low]).usd, 0.0047);
+  assert.ok(Math.abs(totals([high]).usd - 0.02350005) < 1e-12);
+  assert.ok(Math.abs(totals([low, high]).usd - (0.0047 + 0.02350005)) < 1e-12);
+  assert.equal(totals([{ model: "unknown", usage }]).usd, null);
+  assert.equal(totals([{ usage }]).usd, null);
+  assert.equal(totals([]).usd, null);
+  assert.equal(totals([low, { model: "unknown", usage }]).usd, null);
+  assert.equal(totals([{ model: "unknown", usage }, low]).usd, null);
+  assert.equal(totals([low, { usage }]).usd, null);
+  const split = { ephemeral_5m_input_tokens: 5_000, ephemeral_1h_input_tokens: 15_000 };
+  const splitLow = { ...low, usage: { ...usage, cache_creation: split } };
+  assert.equal(totals([splitLow]).usd, 0.005825);
+  assert.ok(Math.abs(totals([{ ...high, usage: { ...high.usage, cache_creation: split } }]).usd - 0.02912505) < 1e-12);
+  assert.equal(totals([{ model: "claude-sonnet-5-5", usage: splitLow.usage }]).usd, 0.1095);
+  assert.equal(totals([{ model: "claude-opus-5-5", usage: splitLow.usage }]).usd, 0.219);
+  // Without the split, all writes retain the 5-minute rate.
+  assert.equal(totals([{ ...low, usage: { ...usage, cache_creation: {} } }]).usd, 0.0047);
+  assert.equal(totals([{ model: "claude-sonnet-5-5", usage }]).usd, 0.087);
+  assert.equal(totals([{ model: "claude-opus-5-5", usage }]).usd, 0.174);
 });
 
 test("transcript totals measure workers that share an orchestrator promptId independently", (t) => {
@@ -297,7 +332,7 @@ test("transcript totals exclude idle time between a stop and a coordinator resum
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
   assert.deepEqual(transcriptTotals(file), {
     durationMs: 15_000, inputTokens: 4, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 6,
-    tokens: 10, models: ["claude-haiku-5-5"]
+    tokens: 10, models: ["claude-haiku-5-5"], usd: 0.0000034
   });
 });
 
@@ -327,13 +362,18 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
   f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
   const r = readResults(f.file)[0];
   assert.equal(r.durationMs, 7000); assert.equal(r.tokens, 60); assert.deepEqual(r.models, ["claude-haiku-5-5"]);
+  assert.equal(r.usd, 0.000022);
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /brief|resume/);
   const base = { type: "attempt", time, sessionId: "s1", project: projectKey(f.project), worker: "router:haiku-low", agentId: "a5" };
   const result = { type: "result", time, sessionId: "s1", project: projectKey(f.project), task: "t1", worker: "router:haiku-low", difficulty: "small", outcome: "pass", agentId: "a5" };
   // Each stop records cumulative totals, so the latest value wins; a record without numbers keeps it.
-  const records = [result, { ...base, durationMs: 1000, tokens: 10 }, { ...base, durationMs: 1500, tokens: 15 }, { ...base, durationMs: 1500, tokens: 15 }, base];
+  const records = [result, { ...base, durationMs: 1000, tokens: 10, usd: 0.1 }, { ...base, durationMs: 1500, tokens: 15, usd: 0.2 }, { ...base, durationMs: 1500, tokens: 15 }, base];
   assert.equal(aggregateStats(records)[0].medianDurationMs, 1500);
   assert.equal(aggregateStats(records)[0].medianTokens, 15);
+  assert.equal(aggregateStats(records)[0].medianUsd, 0.2);
+  assert.match(statsTable(aggregateStats(records)), /15\s+0\.200\s+-$/);
+  assert.match(statsTable(aggregateStats([result, { ...base, usd: 0.0047 }])), /0\.005\s+-$/);
+  assert.equal(aggregateStats([result, { ...base, usd: 0 }])[0].medianUsd, 0);
   assert.equal(aggregateStats([{ ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" }], { normalizeProject: projectKey })[0].worker, "codex-dev:gpt-6.1-sol/low");
   const codexDev = aggregateStats([
     { ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" },
@@ -341,7 +381,7 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
     { ...result, task: "t2", worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j2" }
   ]);
   assert.equal(codexDev[0].linkedJobs, 2);
-  assert.match(statsTable(codexDev), /codex-dev:gpt-6\.1-sol\/low\s+small\s+3\s+3\s+100\.0%\s+-\s+-\s+2$/);
+  assert.match(statsTable(codexDev), /codex-dev:gpt-6\.1-sol\/low\s+small\s+3\s+3\s+100\.0%\s+-\s+-\s+-\s+2$/);
   assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router-dev").worker, "codex-dev:gpt-6.1-sol/low");
   assert.throws(() => resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router"), /Invalid worker/);
 });
