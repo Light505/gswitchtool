@@ -328,7 +328,10 @@ It builds **GSwitch Claude Tool (Dev)** and opens it the way the Start menu
 would. Dev has its own accounts and settings in `~/.gswitchtool-dev` and Codex
 home in `~/.codex-dev`; sign in to your accounts again in Dev. The installed
 app can stay open. When you are done testing,
-`pnpm run test:dev -- --done` closes only the dev build.
+`pnpm run test:dev -- --done` closes only the dev build. Read-only Codex runs
+(reviews) cannot run commands in Dev: `~/.codex-dev` has no elevated Windows
+sandbox setup, which needs an administrator prompt and shares Windows sandbox
+accounts with your everyday Codex. Test read-only runs against the installed app.
 
 **The app, while changing code.** On `dev`, run:
 
