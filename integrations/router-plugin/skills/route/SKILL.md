@@ -52,10 +52,10 @@ Workers: Claude `router:<model>-<effort>`; Codex `gpt-6-luna` max and
 `gpt-6.1-sol` low, medium or xhigh through `gswitch-delegate`.
 
 Why these: each default has the lowest expected total cost for its difficulty
-(failed attempts and escalations included, about $0.30 of orchestrator and
-review overhead per attempt), or is within 10% of it and faster. Cheap first
-attempts pay off because a failure costs little: Haiku low is $0.14 against
-$14.19 for Sonnet max. The numbers and the method are in `docs/model-benchmarks.md`
+(failed attempts and escalations included, about USD 0.30 of orchestrator
+and review overhead per attempt), or is within 10% of it and faster. Cheap first
+attempts pay off because a failure costs little: Haiku low is USD 0.14 against
+USD 14.19 for Sonnet max. The numbers and the method are in `docs/model-benchmarks.md`
 of the GSwitch repository. The owner may name a different start for a task;
 follow it.
 
