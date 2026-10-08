@@ -399,9 +399,12 @@ It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. Dev
 uses its own accounts and settings in `~/.gswitchtool-dev` and Codex home in
 `~/.codex-dev`; sign in again there. The installed app can run at the same time.
 The dev plugin is `codex-dev`; use `/codex-dev:gswitch-invoke` and
-`/codex-dev:gswitch-review` to send tasks to the Dev build. After a plugin change,
-`node scripts/plugin-dev.mjs` rebuilds and updates `codex-dev` in Claude Code
-(start a new Claude Code session to use it).
+`/codex-dev:gswitch-review` to send tasks to the Dev build. The Dev plugins are
+silent in normal sessions. Type `/codex-dev:dev-on` (or `/router-dev:dev-on`) in a
+session to turn them on for that session only; their hook lines are then marked
+`[Dev]`. After a plugin change, `pnpm run plugin:dev` (`node scripts/plugin-dev.mjs`)
+rebuilds and updates `codex-dev` and `router-dev` in Claude Code and enables them
+again (start a new Claude Code session to use it).
 
 **The plugin.** Start Claude Code from a terminal with the repository's copy of
 the plugin instead of the installed one. In the repository folder:

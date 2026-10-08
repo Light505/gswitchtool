@@ -288,7 +288,9 @@ Claude accounts, and hitting the limit stops the whole session.
 
 `pnpm run plugin:dev` also builds `router-dev`, which uses `codex-dev` and
 `~/.gswitchtool-router-dev/` for runtime records and reads setup from
-`~/.gswitchtool-dev/claude-setup.json`. Not provable by unit tests and checked
+`~/.gswitchtool-dev/claude-setup.json`. The Dev plugins are silent until you type
+`/router-dev:dev-on` (or `/codex-dev:dev-on`) in a session; then only that session
+gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins. Not provable by unit tests and checked
 by hand in a real session: hook inputs for subagents, worktree isolation, the approval
 prompt for workers above Opus medium's cost, status line support in the desktop app, and Codex's
 behavior after a declined file change.

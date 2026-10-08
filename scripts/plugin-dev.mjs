@@ -13,6 +13,51 @@ const home = process.env.USERPROFILE || process.env.HOME || os.homedir();
 const destination = path.join(home, ".gswitchtool-dev-plugin");
 const pluginDestination = path.join(destination, "plugins", "codex-dev");
 const noInstall = process.argv.includes("--no-install");
+const devGate = path.join(root, "scripts", "lib", "dev-gate.mjs");
+const devOnBody = "Dev plugins are on for this session. Reply in one line that they are on and that [Dev] lines will appear from the next message.";
+// The /dev-on command text for a Dev plugin; skills also carry a name line.
+const devOnText = (name) => `---\n${name ? `name: ${name}\n` : ""}description: Turn on the Dev plugins (codex-dev and router-dev) for this session only.\ndisable-model-invocation: true\n---\n\n<!-- Added by Light505 for gswitchtool (2026). -->\n\n${devOnBody}\n`;
+const devSessionPrefix = "Only in a Dev test session (a [Dev] line is present). ";
+
+// Hooks run through dev-gate.mjs, which stays silent until /dev-on in the session.
+function gateHooks(pluginRoot) {
+  const hooksPath = path.join(pluginRoot, "hooks", "hooks.json");
+  const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+  for (const groups of Object.values(hooks.hooks)) {
+    for (const group of groups) {
+      for (const hook of group.hooks) {
+        const match = /^node "\$\{CLAUDE_PLUGIN_ROOT\}\/(.+)$/.exec(hook.command ?? "");
+        if (!match) throw new Error(`Unexpected hook command in ${hooksPath}: ${hook.command}`);
+        hook.command = `node "\${CLAUDE_PLUGIN_ROOT}/dev-gate.mjs" "\${CLAUDE_PLUGIN_ROOT}/${match[1]}`;
+      }
+    }
+  }
+  writeFileSync(hooksPath, `${JSON.stringify(hooks, null, 2)}\n`);
+}
+
+function prefixDescription(file) {
+  const text = readFileSync(file, "utf8").replace(/^description: (["']?)/m, (match, quote) => `description: ${quote}${devSessionPrefix}`);
+  writeFileSync(file, text);
+}
+
+// Claude Code asks for an enable after install or update; "already enabled" is success.
+function enable(claude, name) {
+  const run = spawnSync(claude, ["plugin", "enable", "--scope", "user", "--json", `${name}@gswitchtool-dev`], {
+    cwd: root,
+    encoding: "utf8",
+    shell: claude === "claude",
+    windowsHide: true
+  });
+  if (run.status === 0) {
+    console.log(`Enabled ${name}@gswitchtool-dev.`);
+    return;
+  }
+  if (/"alreadyInGoalState"\s*:\s*true/.test(`${run.stdout || ""}${run.stderr || ""}`)) {
+    console.log(`${name}@gswitchtool-dev already enabled.`);
+    return;
+  }
+  throw new Error((run.stderr || run.error?.message || `Claude Code exited with ${run.status}`).trim());
+}
 
 function command(claude, args) {
   const run = spawnSync(claude, args, {
@@ -47,6 +92,11 @@ writeFileSync(
   path.join(pluginDestination, "gswitch-target.json"),
   `${JSON.stringify({ dataDir: ".gswitchtool-dev", appName: "GSwitch Claude Tool (Dev)" }, null, 2)}\n`
 );
+cpSync(devGate, path.join(pluginDestination, "dev-gate.mjs"));
+gateHooks(pluginDestination);
+prefixDescription(path.join(pluginDestination, "skills", "gswitch-delegate", "SKILL.md"));
+mkdirSync(path.join(pluginDestination, "commands"), { recursive: true });
+writeFileSync(path.join(pluginDestination, "commands", "dev-on.md"), devOnText().replaceAll("\n", "\r\n"));
 
 for (const area of ["commands", "skills", "agents"]) {
   const areaPath = path.join(pluginDestination, area);
@@ -110,6 +160,11 @@ function rewriteRouterMarkdown(directory) {
   }
 }
 rewriteRouterMarkdown(routerDestination);
+cpSync(devGate, path.join(routerDestination, "dev-gate.mjs"));
+gateHooks(routerDestination);
+prefixDescription(path.join(routerDestination, "skills", "route", "SKILL.md"));
+mkdirSync(path.join(routerDestination, "skills", "dev-on"), { recursive: true });
+writeFileSync(path.join(routerDestination, "skills", "dev-on", "SKILL.md"), devOnText("dev-on").replaceAll("\n", "\r\n"));
 mkdirSync(marketplaceDir, { recursive: true });
 writeFileSync(
   path.join(marketplaceDir, "marketplace.json"),
@@ -151,8 +206,11 @@ if (marketplaces.includes("gswitchtool-dev")) {
   command(claude, ["plugin", "install", "codex-dev@gswitchtool-dev"]);
   console.log("Installed Claude Code plugin codex-dev@gswitchtool-dev.");
 }
+enable(claude, "codex-dev");
 const installedPlugins = command(claude, ["plugin", "list"]);
 const routerAction = installedPlugins.includes("router-dev") ? "update" : "install";
 command(claude, ["plugin", routerAction, "router-dev@gswitchtool-dev"]);
 console.log(`${routerAction === "update" ? "Updated" : "Installed"} Claude Code plugin router-dev@gswitchtool-dev.`);
+enable(claude, "router-dev");
 console.log("Start a new Claude Code session to use the updated codex-dev and router-dev plugins.");
+console.log("Dev plugins are on but silent until you type /router-dev:dev-on in a session.");
