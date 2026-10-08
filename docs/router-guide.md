@@ -196,6 +196,11 @@ approval is denied, or recovery needs an outside fix or an owner decision.
 - LOW usage, Claude model overrides, scope and worktree-gone edit blocks.
 - A plan is required; a passed or unverified task cannot launch again; a failed worker cannot
   launch again for the same task, except a Codex thread resumed for repair.
+- Every attempt is recorded before the next one starts: a new Claude worker or
+  TASK-tagged Codex run on a task is refused while an earlier attempt on it
+  has no result. Codex runs are counted by a hook after the command starts;
+  Claude workers when they start. Verify and apply failures of Claude workers
+  are recorded by `router finish` itself.
 - Approval prompts for a worker below the floor, attempts after 3 failures,
   and workers above Opus medium's cost.
 
@@ -205,6 +210,11 @@ approval is denied, or recovery needs an outside fix or an owner decision.
 - Repairs through SendMessage; only the owner check is enforced there.
 - Putting the `TASK:` line in a Codex brief; a Codex invoke without one is not
   checked against the plan.
+- One attempt at a time per task. Two launches on the same task started at
+  the same moment can both pass the record-before-relaunch check.
+- After the owner denies a worker's approval prompt, its queued launch stays;
+  a later launch of the same worker type may take over its task and scope.
+  Start the next worker of that type only after the owner has decided.
 - Choosing among candidates.
 
 ## How the defaults were chosen
@@ -308,17 +318,25 @@ The final report lists every scope request and who decided it.
 
 ## After each worker
 
-1. A script runs the verify command and reports git facts and scope warnings
-   in the same format as `invoke` (for Codex, `invoke` already did this).
-   Untracked files that are identical to the main worktree's copy (Claude Code
-   copies `.claude/settings.local.json` into every worker worktree) are not
-   counted as worker changes and are skipped by `apply`.
-2. Review: `gswitch-review` runs in `mixed` and `codex` mode. In `claude` mode it
-   runs when the review setting is on (default) and Invoke Mode is on; otherwise
-   the orchestrator reviews the diff itself, and the report says why.
-3. Record the outcome and step. A fail needs a reason: run `router plan` again
-   and repair, retry, escalate or ask the owner according to the cause. Report
-   passes, unverified work and blocks with the evidence.
+1. Claude worker: one call, `router finish --agent <id> [--verify <cmd>]`, runs
+   the verify command and reports git facts and scope warnings in the same
+   format as `invoke`, then applies a clean result to the working tree. A
+   failed verify or apply is recorded as a failure by the script itself, and
+   the worktree is kept for a repair; out-of-scope changes are not applied and
+   wait for the orchestrator's decision. (For Codex, `invoke` already did the
+   checks.) Untracked files that are identical to the main worktree's copy
+   (Claude Code copies `.claude/settings.local.json` into every worker
+   worktree) are not counted as worker changes and are skipped.
+2. Review: `gswitch-review` runs after non-trivial changes in `mixed` and
+   `codex` mode, with the same rule as the review skill (typos, comments,
+   formatting, renames, one-line fixes and text-only files are skipped and the
+   report says so). In `claude` mode it runs when the review setting is on
+   (default) and Invoke Mode is on; otherwise the orchestrator reviews the diff
+   itself, and the report says why.
+3. The orchestrator records the outcome it decided (pass, a review failure, or
+   any cause the script could not see). After a failure, `router result`
+   prints the recovery and the next candidates. Report passes, unverified work
+   and blocks with the evidence.
 
 The report says what changed, which worker did it (model and effort), every
 escalation, scope requests, review result, and what was not tested.

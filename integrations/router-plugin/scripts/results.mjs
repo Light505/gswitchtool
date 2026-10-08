@@ -91,7 +91,7 @@ export function planRecord(args, normalizeProject) {
   if (!difficulties.includes(f["--difficulty"])) throw new Error(`Invalid difficulty. Valid values: ${difficulties.join(", ")}`);
   if (f["--title"] && [...f["--title"]].length > 120) throw new Error("Title must be at most 120 characters");
   return { type: "plan", time: new Date().toISOString(), sessionId, project: normalizeProject(directory),
-    task: f["--task"], kind: f["--kind"], difficulty: f["--difficulty"], title: f["--title"] ?? null };
+    task: f["--task"], kind: f["--kind"], difficulty: f["--difficulty"], title: f["--title"] ?? null, codex: f["--codex"] ?? null };
 }
 export function taskState(records, sessionId, task) {
   const matching = records.filter((r) => r.sessionId === sessionId && r.task === task);

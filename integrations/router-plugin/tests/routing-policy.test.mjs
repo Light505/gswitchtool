@@ -239,8 +239,130 @@ test("Bash owner and cost checks, nested-agent denial and hook error behavior", 
   assert.equal(reason(f.bash(invokeCommand("", false), { agent_id: "a1" })), "Router workers cannot start other agents.");
   fs.mkdirSync(path.join(f.project, "bad.txt"));
   const cmd = invokeCommand("--prompt-file bad.txt", false);
-  assert.match(reason(f.bash(cmd, { agent_id: "unbound" })), /^Router error:/);
+  assert.deepEqual(f.bash(cmd, { agent_id: "unbound" }), {});
   assert.deepEqual(f.bash(cmd), {});
+});
+
+test("Claude relaunch waits for a result from a started worker", (t) => {
+  const f = fixture(t); f.plan();
+  assert.deepEqual(f.agent(), {}); assert.deepEqual(f.agent(), {});
+  f.hook(undefined, undefined, { agent_id: "a1", agent_type: "router:haiku-low" }, "SubagentStart");
+  const message = "Record the result of the previous attempt on task t1 (router:haiku-low) with router result first.";
+  assert.equal(reason(f.agent("router:sonnet-low")), message);
+  f.hook(undefined, undefined, { agent_id: "a1" }, "SubagentStop");
+  f.result("orchestrator", "tool");
+  assert.equal(reason(f.agent("router:sonnet-low")), message);
+  f.result("router:haiku-low", "tool", "fail", ["--agent", "a1"]);
+  assert.deepEqual(f.agent("router:sonnet-low"), {});
+  assert.deepEqual(f.hook("SendMessage", { to: "a1" }), {});
+});
+
+test("Codex completions record TASK invokes and gate fresh and resumed launches", (t) => {
+  const f = fixture(t, "codex"); f.plan("small", ["--codex", codex]);
+  const post = (command) => f.hook("Bash", { command }, {}, "PostToolUse");
+  assert.deepEqual(post(invokeCommand("", false)), {});
+  assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
+  assert.deepEqual(f.bash(invokeCommand()), {});
+  assert.deepEqual(post(invokeCommand()), {});
+  const launches = () => JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8")).codexLaunches;
+  assert.deepEqual(launches().map(({ task, worker }) => ({ task, worker })), [{ task: "t1", worker: "codex:gpt-6.1-sol/low" }]);
+  assert.equal(typeof launches()[0].time, "number");
+  for (const flags of ["", "--resume-thread thread-1"]) assert.equal(reason(f.bash(invokeCommand(flags))), "Record the result of the previous attempt on task t1 (codex:gpt-6.1-sol/low) with router result first.");
+  f.result("codex:gpt-6.1-sol/low", "tool");
+  assert.deepEqual(f.bash(invokeCommand("--resume-thread thread-1")), {});
+  fs.writeFileSync(path.join(f.project, "brief.txt"), "TASK: t1");
+  assert.deepEqual(post(invokeCommand("--resume-thread thread-1 --prompt-file brief.txt", false)), {});
+  assert.equal(permission(f.bash(invokeCommand("--resume-thread thread-1"))), "deny");
+  assert.equal(launches().length, 2);
+  f.setup("off"); post(invokeCommand()); assert.equal(launches().length, 2);
+});
+
+test("unrelated Bash completion bypasses broken storage and the lock", (t) => {
+  const f = fixture(t); fs.writeFileSync(f.data, "broken");
+  for (const command of ["node other.mjs", "node codex-companion.mjs invoke-status\nTASK: t1", invokeCommand("", false)]) assert.deepEqual(f.hook("Bash", { command }, {}, "PostToolUse"), {});
+  fs.unlinkSync(f.data); f.write("sessions/s1.json", {});
+  fs.mkdirSync(path.join(f.data, "state.lock"));
+  assert.deepEqual(f.hook("Bash", { command: "git status" }, {}, "PostToolUse"), {});
+});
+
+test("failed Bash invokes record launches and enforce the same relaunch gate", (t) => {
+  const f = fixture(t, "codex"); f.plan();
+  const failure = (command) => f.hook("Bash", { command }, {}, "PostToolUseFailure");
+  assert.deepEqual(failure(invokeCommand("", false)), {});
+  assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
+  assert.deepEqual(failure(invokeCommand()), {});
+  const launches = JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8")).codexLaunches;
+  assert.equal(launches.length, 1); assert.equal(launches[0].task, "t1");
+  assert.equal(launches[0].worker, "codex:gpt-6.1-sol/low"); assert.equal(typeof launches[0].time, "number");
+  assert.match(reason(f.bash(invokeCommand("--resume-thread thread-1"))), /Record the result of the previous attempt/);
+  f.result("codex:gpt-6.1-sol/low", "tool");
+  assert.deepEqual(f.bash(invokeCommand("--resume-thread thread-1")), {});
+  f.setup("off"); failure(invokeCommand());
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.data, "sessions/s1.json"), "utf8")).codexLaunches.length, 1);
+  fs.unlinkSync(path.join(f.data, "sessions/s1.json"));
+  fs.rmSync(f.data, { recursive: true, force: true }); fs.writeFileSync(f.data, "broken");
+  assert.deepEqual(failure("git status"), {});
+});
+
+test("only a result at or after the latest launch permits another attempt", (t) => {
+  const f = fixture(t, "codex"); f.plan();
+  const now = Date.now(), worker = "codex:gpt-6.1-sol/low";
+  const result = { type: "result", sessionId: "s1", task: "t1", worker, outcome: "fail", reason: "tool" };
+  appendResult(f.file, { ...result, time: new Date(now - 5000).toISOString() });
+  // A SendMessage repair produces another result without creating a launch.
+  appendResult(f.file, { ...result, outcome: "blocked", time: new Date(now - 3000).toISOString() });
+  f.write("sessions/s1.json", { bindings: { old: { type: "router:haiku-low", task: "t1" } },
+    codexLaunches: [{ task: "t1", worker, time: now - 1000 }] });
+  for (const r of [{ ...result, worker: "orchestrator" }, { ...result, task: "t2" }, { ...result, sessionId: "s2" }]) appendResult(f.file, { ...r, time: new Date(now).toISOString() });
+  const message = "Record the result of the previous attempt on task t1 (codex:gpt-6.1-sol/low) with router result first.";
+  assert.equal(reason(f.bash(invokeCommand())), message);
+  assert.equal(reason(f.bash(invokeCommand("--resume-thread thread-1"))), message);
+  f.result(worker, "tool"); assert.deepEqual(f.bash(invokeCommand()), {});
+  // Equality qualifies, and a newer Claude binding wins over older Codex launches.
+  f.write("sessions/s1.json", { bindings: { latest: { type: "router:sonnet-low", task: "t1", time: now + 86400000 } }, codexLaunches: [{ task: "t1", worker, time: now - 1000 }] });
+  assert.match(reason(f.bash(invokeCommand())), /task t1 \(router:sonnet-low\)/);
+  appendResult(f.file, { ...result, outcome: "blocked", time: new Date(now + 86400000).toISOString() });
+  assert.deepEqual(f.bash(invokeCommand()), {});
+});
+
+test("invoke detection requires an executed command boundary", (t) => {
+  const f = fixture(t, "codex");
+  const mention = 'echo "node codex-companion.mjs invoke --model gpt-6.1-sol --effort low"\nTASK: t1';
+  for (const command of [mention, "rg 'codex-companion.mjs invoke'\nTASK: t1", "rg 'node codex-companion.mjs invoke'\nTASK: t1"]) {
+    for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) assert.deepEqual(f.hook("Bash", { command }, {}, event), {});
+  }
+  assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
+  assert.equal(fs.existsSync(f.file), false);
+  for (const prefix of ["", "  ", "echo ready\n ", "echo ready; ", "true && ", "false || ", "echo ready | ", "( "]) {
+    assert.equal(reason(f.bash(prefix + invokeCommand())), "Run router plan for task t1 first.");
+  }
+});
+
+test("unreadable invoke prompt files return no task and record nothing", (t) => {
+  const f = fixture(t, "codex");
+  fs.mkdirSync(path.join(f.project, "directory.txt"));
+  for (const file of ["missing.txt", "directory.txt"]) {
+    for (const event of ["PreToolUse", "PostToolUse", "PostToolUseFailure"]) assert.deepEqual(f.hook("Bash", { command: invokeCommand(`--prompt-file ${file}`, false) }, {}, event), {});
+  }
+  assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
+  assert.equal(fs.existsSync(f.file), false);
+  assert.equal(fs.existsSync(path.join(f.data, "router.log")), false);
+});
+
+test("failure prints the stored plan view without a new plan; pass stays one line", (t) => {
+  const f = fixture(t, "codex");
+  assert.equal(f.result("codex:gpt-6-luna/max", "tool"), "Result: recorded t1 codex:gpt-6-luna/max fail\n");
+  f.plan("small", ["--codex", "gpt-6.1-sol:low,medium"]);
+  const out = f.result("codex:gpt-6-luna/max", "tool");
+  assert.match(out, /^Result: recorded t1 codex:gpt-6-luna\/max fail\nPlan t1: implement, small/);
+  assert.match(out, /Failed: .*Next after tool:/s);
+  assert.match(out, /Candidates \(cheapest first\):\n  codex:gpt-6.1-sol\/low/);
+  assert.doesNotMatch(out, /Codex workers not listed/);
+  assert.match(out, /Brief lines: TASK: t1/);
+  assert.match(f.result("codex:gpt-6-luna/max", "tool"), /Owner check: ask the owner before attempt 4/);
+  assert.equal(readResults(f.file).filter((r) => r.type === "plan").length, 1);
+  assert.equal(taskState(readResults(f.file), "s1", "t1").plan.codex, "gpt-6.1-sol:low,medium");
+  assert.equal(f.result("codex:gpt-6.1-sol/low", null, "pass"), "Result: recorded t1 codex:gpt-6.1-sol/low pass\n");
 });
 
 test("SendMessage asks only for bound, unfinished tasks at three failures, without lock", (t) => {

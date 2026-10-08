@@ -376,9 +376,10 @@ test("concurrent result commands append complete independent records", async (t)
 
 test("PostToolUse registration and stats skill preserve explicit user invocation", () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(plugin, "hooks/hooks.json"), "utf8")).hooks;
-  assert.equal(hooks.PostToolUse.length, 1);
-  assert.equal(hooks.PostToolUse[0].matcher, "^(Agent|Task)$");
-  assert.match(hooks.PostToolUse[0].hooks[0].command, /hook PostToolUse$/);
+  assert.deepEqual(hooks.PostToolUse.map((h) => h.matcher), ["^Bash$", "^(Agent|Task)$"]);
+  for (const entry of hooks.PostToolUse) assert.match(entry.hooks[0].command, /hook PostToolUse$/);
+  assert.equal(hooks.PostToolUseFailure[0].matcher, "^Bash$");
+  assert.match(hooks.PostToolUseFailure[0].hooks[0].command, /hook PostToolUseFailure$/);
   assert.match(hooks.PreToolUse[0].hooks[0].command, /hook PreToolUse$/);
   const skill = fs.readFileSync(path.join(plugin, "skills/stats/SKILL.md"), "utf8");
   assert.match(skill, /^---\r?\nname: stats\r?\n/);

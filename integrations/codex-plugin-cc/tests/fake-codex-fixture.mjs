@@ -508,7 +508,7 @@ rl.on("line", (line) => {
 	          effort: message.params.effort ?? null,
 	          cwd: process.cwd(),
 	          nodeModulesLinked: fs.lstatSync(path.join(process.cwd(), "node_modules"), { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
-	          readme: fs.readFileSync(path.join(process.cwd(), "README.md"), "utf8"),
+	          readme: fs.existsSync(path.join(process.cwd(), "README.md")) ? fs.readFileSync(path.join(process.cwd(), "README.md"), "utf8") : null,
 	          prompt
 	        };
 	        saveState(state);

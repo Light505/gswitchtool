@@ -47,7 +47,7 @@ model call):
 A product decision or unclear requirement is not a task for a worker: ask the
 owner first.
 
-Then run, once per task (and again after each failure):
+Then run, once per task (again only to change its classification):
 
 `router plan ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --kind
 <kind> --difficulty <difficulty> --title "<short title>" [--codex
@@ -103,15 +103,21 @@ max, Sol max). If the owner denies it, stop and ask.
 
 Trust tool facts only; the worker's text is a claim.
 
-- Claude worker: its result names the worktree when it changed files. Run
-  `router check --cwd <worktree> --scope <globs> [--verify <cmd>]`, then
-  `router apply --worktree <worktree> --cwd "${CLAUDE_PROJECT_DIR}"`. If
-  apply prints `Worktree kept: <dir> — <reason>`, tell the owner the path and
-  reason; do not delete it.
+- Claude worker: run `router finish ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}"
+  --agent <agentId> [--verify <cmd>]`. It runs verify and the git and scope
+  check on the worker's worktree. A clean result is applied; a failed verify or
+  apply is recorded as a failure for you, and the worktree is kept for a repair.
+  After out-of-scope changes it applies nothing: decide them (section 6). If it
+  prints `Worktree kept: <dir> — <reason>`, tell the owner the path and reason;
+  do not delete it. (`router check` and `router apply` still exist for manual
+  use.)
 - Codex: `invoke` already reports verify, git facts and warnings.
-- Review: run `gswitch-review` in `mixed` and `codex`. In `claude`, run it
-  when the Router line says review on and Invoke Mode is on; otherwise read the
-  diff of the changed files yourself and say why in the report.
+- Review: same rule as the `gswitch-review` skill. Run it after non-trivial
+  changes in `mixed` and `codex`; skip it for typos, comments, formatting,
+  renames, one-line fixes and text-only files, and say so in the report. In
+  `claude`, run it when the Router line says review on and Invoke Mode is on;
+  otherwise read the diff of the changed files yourself and say why in the
+  report.
 - Read diffs only after a warning, a failed verify, or changes in the high-risk
   list, and then only those files.
 
@@ -125,9 +131,11 @@ Decide the outcome from tool facts:
   read the change. Say so in the report.
 - `blocked`: cannot go on without an outside fix or an owner decision.
 
-Record every attempt before you report or recover. The hooks count these
-records, and this data replaces the benchmark's success rates over time, so
-never skip it:
+Record every attempt before you report or recover; `router finish` already
+recorded verify and apply failures, so do not record those again. The hooks
+count these records, and the next worker or Codex launch on a task is refused
+until every earlier attempt on it has a result. This data also replaces the
+benchmark's success rates over time:
 
 `router result ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --title
 "<short title>" --difficulty <difficulty> --worker <router:<model>-<effort> |
@@ -136,7 +144,11 @@ codex:<model>/<effort> | orchestrator> --step <start|escalation|repair|retry>
 <agentId>] [--codex-job <job>] [--codex-thread <thread>]`
 
 A `fail` needs a reason (section 5). Record the difficulty you judged at the
-start, even if the task turned out harder.
+start, even if the task turned out harder. When `router finish` says the worker
+changed nothing, record `pass` if nothing was needed, otherwise `fail` with the
+cause. When GSwitch refused a Codex run before it started (`MODEL_NOT_ALLOWED`,
+`INVOKE_MODE_DISABLED` and similar codes), record it as `blocked` with reason
+`tool`; it does not count as a failed attempt.
 
 Use `--worker orchestrator` when you made the edit yourself (the "Yourself"
 cases or an owner-requested direct edit). Omit `--agent` and `--codex-*`. Never
@@ -146,9 +158,10 @@ success rates.
 ## 5. Recover from a failure
 
 Find the cause from the evidence (verify output, review finding, the worker's
-`STOPPED:` line, `invoke` codes, apply output), record it as the reason, then
-run `router plan` again. It prints the recovery for that reason and the new
-candidates. The reasons:
+`STOPPED:` line, `invoke` codes, apply output) and record it as the reason.
+After a failure, `router result` (and `router finish`) print the recovery for
+that reason and the new candidates, so no separate `router plan` is needed. The
+reasons:
 
 | Reason | Means | Recovery |
 | --- | --- | --- |
