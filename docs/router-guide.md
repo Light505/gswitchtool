@@ -69,8 +69,8 @@ global default). Session choices live in `sessions/<session id>.json` and are
 removed after 7 days. A hook adds one line with the current mode to every
 message, so the mode survives long sessions and summaries.
 
-- Start the Claude Code session in the repository folder itself. The router uses the session's project folder (`CLAUDE_PROJECT_DIR`) for worktrees, `router apply` and the results log. Changing the folder later in the session does not change it. A folder that is not a git repository breaks worker worktrees.
-- Set `"worktree": { "baseRef": "head" }` in the project's Claude Code settings. Without it, Claude Code starts each worker's worktree from the remote's default branch (`origin/HEAD`, usually `main`), not from the branch you are on.
+- Start the Claude Code session in the repository folder itself. The router uses the session's project folder (`CLAUDE_PROJECT_DIR`) for worktrees, `router apply` and the results log. Changing the folder later in the session does not change it. A folder that is not a git repository cannot be used for worker worktrees: the router ignores it for dependency links, and `/router:mode` warns that the session should start in the repository folder.
+- Set `"worktree": { "baseRef": "head" }` in the project's Claude Code settings. Without it, Claude Code starts each worker's worktree from the remote's default branch (`origin/HEAD`, usually `main`), not from the branch you are on. When a mode is on, `/router:mode` and the session start warn if it is missing. The router reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the project; the later file wins.
 - The Claude Code desktop app does not run status line commands, so the router's Claude 5h usage stays "unknown" there and the 30% rule cannot apply. It works in the terminal CLI.
 
 ## Workers
@@ -210,6 +210,13 @@ files never count as out of scope.
   afterwards by the `WARNING: changed outside --scope` line and undone unless
   approved.
 
+The hook fails closed for workers: if the router itself errors, or a worker has
+no recorded scope, the worker's edit is denied; only the orchestrator's own
+edits stay allowed so a broken router never locks the owner out. Claude Code
+deletes a worker's worktree when its run changed nothing, and a resumed worker
+would then edit the main checkout, so such edits are denied (`WORKTREE GONE`)
+and the orchestrator starts a new worker instead of resuming.
+
 A blocked worker stops and returns a scope request: file, reason, intended
 change. The orchestrator then:
 
@@ -227,6 +234,9 @@ The final report lists every scope request and who decided it.
 
 1. A script runs the verify command and reports git facts and scope warnings
    in the same format as `invoke` (for Codex, `invoke` already did this).
+   Untracked files that are identical to the main worktree's copy (Claude Code
+   copies `.claude/settings.local.json` into every worker worktree) are not
+   counted as worker changes and are skipped by `apply`.
 2. Review: `gswitch-review` runs in `mixed` and `codex` mode. In `claude` mode it
    runs when the review setting is on (default) and Invoke Mode is on; otherwise
    the orchestrator reviews the diff itself, and the report says why.

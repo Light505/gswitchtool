@@ -218,6 +218,9 @@ test("stats merges completion metrics without double counting and isolates reuse
   assert.match(f.run(["stats"]), /router:haiku-low\s+small\s+3\s+2\s+66.7%\s+200\s+60\s+-/);
   assert.match(f.run(["stats"]), /codex:gpt-6.1-sol\/low\s+hard\s+4\s+3\s+75.0%\s+-\s+-\s+2/);
   assert.equal(aggregateStats([result(), attempt({ durationMs: 0, tokens: 0 })])[0].medianTokens, 0);
+  // Project is not part of attempt matching: the same session, worker and agent ID still match.
+  assert.deepEqual(aggregateStats([result(), attempt({ project: `${project}/other`, durationMs: 77, tokens: 9 })])[0].medianDurationMs, 77);
+  assert.deepEqual(aggregateStats([result(), attempt({ project: `${project}/other`, durationMs: 77, tokens: 9 })])[0].medianTokens, 9);
 });
 
 test("stats filters by normalized project and elapsed days and validates options", (t) => {

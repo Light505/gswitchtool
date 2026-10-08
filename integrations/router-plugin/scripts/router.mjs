@@ -173,11 +173,29 @@ function walkDirectories(root, visit, depth = 1) {
     else walkDirectories(full, visit, depth + 1);
   }
 }
+// Claude Code copies untracked .claude/settings.local.json into worker worktrees; identical copies are not worker changes.
+function identicalCopy(main, worker, file) {
+  if (!main || comparable(main) === comparable(worker)) return false;
+  try { return fs.readFileSync(path.join(main, file)).equals(fs.readFileSync(path.join(worker, file))); }
+  catch { return false; }
+}
+const baseRefWarning = `Router warning: set "worktree": { "baseRef": "head" } in .claude/settings.local.json so workers start from your current branch.`;
+function worktreeBaseRef(directory) {
+  return [path.join(home, ".claude", "settings.json"), path.join(directory, ".claude", "settings.json"), path.join(directory, ".claude", "settings.local.json")]
+    .reduce((ref, file) => object(readJSON(file)).worktree?.baseRef ?? ref, undefined);
+}
+function isRepository(directory) {
+  try { layout(directory); return true; }
+  catch { return false; }
+}
 function sharedDependencies(cwd, projectDir) {
   const current = mainWorktree(cwd);
   if (projectDir) {
-    const parent = layout(projectDir);
-    if (comparable(parent.common) === comparable(current.common)) current.main = parent.root;
+    // A session folder outside any repository is ignored; the worker's own repository is used.
+    try {
+      const parent = layout(projectDir);
+      if (comparable(parent.common) === comparable(current.common)) current.main = parent.root;
+    } catch {}
   }
   if (!current.registered || comparable(current.root) === comparable(current.main)) return;
   function link(source) {
@@ -257,6 +275,7 @@ function hook(event, input) {
   }
   if (event === "SessionStart") {
     const lines = state.mode.value === "off" ? [] : [routerLine(state)];
+    if (state.mode.value !== "off" && worktreeBaseRef(cwd) !== "head") lines.push(baseRefWarning);
     if (fs.existsSync(wrapupFile(cwd))) lines.push(`Router: unfinished work saved; run node "${path.join(pluginRoot, "scripts", "router.mjs")}" wrapup show "${cwd}".`);
     const model = typeof input.model === "string" ? input.model : input.model?.id;
     if (state.mode.value !== "off" && model && !/opus/i.test(model)) lines.push("Router warning: use an Opus model for the orchestrator.");
@@ -270,7 +289,9 @@ function hook(event, input) {
   if (state.mode.value === "off") return {};
   if (event === "PreToolUse" && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(input.tool_name)) {
     const bound = sess.bindings[input.agent_id];
-    if (!bound) return {};
+    if (!bound) return isWorker(input.agent_type) ? decision("deny", "Router has no scope for this worker; stop and report.") : {};
+    // Claude Code deletes an unchanged worker's worktree; a resume then runs in the main checkout.
+    if (bound.cwd && !fs.existsSync(bound.cwd)) return decision("deny", `WORKTREE GONE: ${bound.cwd} no longer exists, so this edit would land in the main checkout. Do not edit; stop and tell the orchestrator to start a new worker.`);
     const file = input.tool_input?.file_path || input.tool_input?.notebook_path;
     if (!file) return decision("deny", "OUT OF SCOPE: missing file path. Stop and return a SCOPE REQUEST.");
     const edit = relativeEdit(bound.cwd || cwd, file);
@@ -332,7 +353,9 @@ function check(args) {
     const [added, deleted, ...name] = line.split("\t");
     return { path: name.join("\t"), added: Number(added) || 0, deleted: Number(deleted) || 0 };
   });
+  const main = mainWorktree(root).main;
   for (const file of gitText(root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean)) {
+    if (identicalCopy(main, root, file)) continue;
     const buffer = fs.readFileSync(path.join(root, file));
     const text = buffer.toString("utf8");
     facts.push({ path: file, added: buffer.includes(0) || !text ? 0 : text.split(/\r?\n/).length - (text.endsWith("\n") ? 1 : 0), deleted: 0 });
@@ -363,6 +386,8 @@ function apply(args) {
     const mainEnv = { ...process.env, GIT_INDEX_FILE: path.join(temporary, "main-index") };
     gitText(worker.root, ["read-tree", "HEAD"], { env: workerEnv });
     gitText(worker.root, ["add", "-A"], { env: workerEnv });
+    const copies = gitText(worker.root, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter((file) => file && identicalCopy(main.root, worker.root, file));
+    if (copies.length) gitText(worker.root, ["rm", "--cached", "-q", "--", ...copies], { env: workerEnv });
     const changed = gitText(worker.root, ["diff", "--cached", "--name-only", "--no-renames", "-z", base], { env: workerEnv }).split("\0").filter(Boolean);
     const patch = git(worker.root, ["diff", "--cached", "--binary", "--no-renames", "--full-index", base], { env: workerEnv, encoding: null });
     if (patch.status !== 0) throw new Error("could not capture worker changes");
@@ -419,12 +444,14 @@ async function statusline(raw) {
     if (fs.existsSync(data("usage.json")) && !usage()) fs.rmSync(data("usage.json"), { force: true });
   });
   const command = config().statusLineCommand;
-  if (typeof command === "string" && command) {
+  if (typeof command === "string" && command && !isRouterCommand(command)) {
     const result = spawnSync(command, { shell: true, windowsHide: true, input: raw, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     return result.stdout || "";
   }
   return `${routerLine(resolved(input.session_id, input.workspace?.project_dir || input.cwd || input.workspace?.current_dir || process.cwd()))}\n`;
 }
+// Any router command, including one from an older plugin path (for example after a plugin update).
+const isRouterCommand = (command) => typeof command === "string" && /router\.mjs"?\s+statusline\s*$/.test(command);
 function statuslineSettings(install) {
   const file = path.join(home, ".claude", "settings.json");
   const exists = fs.existsSync(file);
@@ -433,16 +460,23 @@ function statuslineSettings(install) {
   const settings = object(JSON.parse(raw.replace(/^\uFEFF/, "")));
   const cfg = config();
   const command = `node "${path.join(pluginRoot, "scripts", "router.mjs").replace(/\\/g, "/")}" statusline`;
-  if (install && settings.statusLine?.command === command) return "Router status line already installed";
-  if (!install && settings.statusLine?.command !== command) return "Router status line is not installed; settings unchanged";
+  const current = settings.statusLine?.command;
+  if (install && current === command) return "Router status line already installed";
+  if (!install && !isRouterCommand(current)) return "Router status line is not installed; settings unchanged";
   if (exists) {
     fs.mkdirSync(data("backups"), { recursive: true });
     fs.writeFileSync(data("backups", `settings-${Date.now()}-${randomUUID()}.json`), raw, { mode: 0o600 });
   }
   if (install) {
-    cfg.statusLinePrevious = settings.statusLine ?? null;
-    if (typeof settings.statusLine?.command === "string") cfg.statusLineCommand = settings.statusLine.command;
-    else delete cfg.statusLineCommand;
+    // A router command is replaced, never saved as the previous status line.
+    if (!isRouterCommand(current)) {
+      cfg.statusLinePrevious = settings.statusLine ?? null;
+      if (typeof current === "string") cfg.statusLineCommand = current;
+      else delete cfg.statusLineCommand;
+    }
+    // Drop a router command that an earlier install saved as the previous status line.
+    if (isRouterCommand(cfg.statusLinePrevious?.command)) cfg.statusLinePrevious = null;
+    if (isRouterCommand(cfg.statusLineCommand)) delete cfg.statusLineCommand;
     atomicJSON(data("config.json"), cfg);
     settings.statusLine = { type: "command", command };
   } else {
@@ -495,7 +529,10 @@ function command(args, raw) {
       if (!reviews.includes(value)) throw new Error("review requires on|off");
       sess.claudeOnlyReview = value; saveSession(id, sess);
     }
-    return routerLine(resolved(id, directory));
+    const lines = [routerLine(resolved(id, directory))];
+    if (name === "mode" && !isRepository(projectKey(directory))) lines.push(`Router warning: ${projectKey(directory)} is not a git repository; start the session in the repository folder.`);
+    if (name === "mode" && modes.includes(value) && value !== "off" && worktreeBaseRef(projectKey(directory)) !== "head") lines.push(baseRefWarning);
+    return lines.join("\n");
   }
   if (name === "default") {
     const [directory, ...words] = rest;
@@ -545,15 +582,20 @@ function command(args, raw) {
 async function main() {
   const args = process.argv.slice(2);
   const isHook = args[0] === "hook";
+  let input = {};
   try {
     const raw = ["hook", "statusline"].includes(args[0]) ? fs.readFileSync(0, "utf8") : "";
+    // Parsed before the lock so a lock timeout can still deny a worker's edit.
+    if (isHook) try { input = object(JSON.parse(raw || "{}")); } catch {}
     // Git and verification operations have private indexes and need no state lock.
     const output = ["check", "apply", "usage", "statusline"].includes(args[0]) ? await command(args, raw) : await locked(() => command(args, raw));
     process.stdout.write(args[0] === "statusline" ? output : `${output}\n`);
   } catch (error) {
     if (isHook) {
       try { fs.mkdirSync(dataDir, { recursive: true }); fs.appendFileSync(data("router.log"), `${new Date().toISOString()} ${args[1]}: ${error instanceof SyntaxError ? "Invalid hook JSON" : error.message}\n`); } catch {}
-      process.stdout.write("{}\n");
+      // Fail closed for subagents; the orchestrator stays fail-open so a broken router never locks the owner out.
+      const worker = args[1] === "PreToolUse" && typeof input.agent_id === "string" && input.agent_id;
+      process.stdout.write(`${worker ? JSON.stringify(decision("deny", `Router error: ${error.message}. Do not edit; stop and report this error.`)) : "{}"}\n`);
     } else { process.stderr.write(`Router: ${error.message}\n`); process.exitCode = 1; }
   }
 }

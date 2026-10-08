@@ -24,3 +24,7 @@ src-tauri/icons/*
 
 # Generated only by the signed-release workflow from the public updater key.
 src-tauri/tauri.updater.conf.json
+
+# Created by Claude Code: worker worktrees and this machine's local settings.
+.claude/worktrees/
+.claude/settings.local.json

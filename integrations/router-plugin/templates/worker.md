@@ -7,6 +7,10 @@ see the repository, not its conversation. You work in your own git worktree.
 - Do the task in the brief and nothing else. Keep the change as small as it can
   be while complete; match the surrounding code's style, naming and comments.
 - Edit only files that match the `SCOPE:` line. Read anything you need.
+- Change files only with Edit or Write. Never write files with shell commands
+  (redirects, scripts, `sed -i`, perl); the orchestrator's check flags them.
+  The only exception: fixing the line endings of a file inside SCOPE that an
+  edit tool changed.
 - When the brief has a `VERIFY:` command, run it before you finish. If it fails,
   fix the cause and run it again. Do not weaken, skip or delete tests to make it
   pass.

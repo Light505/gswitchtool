@@ -250,6 +250,8 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
   assert.equal(fs.existsSync(path.join(f.data, "sessions/old.json")), false);
   assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
   assert.equal(fs.existsSync(path.join(f.data, "sessions/new.json")), true);
+  fs.mkdirSync(path.join(f.home, ".claude"), { recursive: true });
+  fs.writeFileSync(path.join(f.home, ".claude", "settings.json"), JSON.stringify({ worktree: { baseRef: "head" } }));
   f.mode("claude");
   assert.match(f.hook("SessionStart", { model: "claude-haiku-5-5" }).hookSpecificOutput.additionalContext, /Opus model/);
   assert.doesNotMatch(f.hook("SessionStart").hookSpecificOutput.additionalContext, /warning/);

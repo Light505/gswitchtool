@@ -131,7 +131,10 @@ A blocked worker ends with `SCOPE REQUEST: <path> — <why> — <intended change
 - Approve yourself when the file is closely tied to the task and low risk (a
   matching test, a type file, the same module). Claude worker:
   `router scope ${CLAUDE_SESSION_ID} <agentId> --add <globs>`, then resume the
-  worker. Codex: resume the same thread with the wider `--scope`.
+  worker only if its worktree still exists. If it is gone (Claude Code deletes
+  it when the worker's run changed nothing), start a new worker with the wider
+  scope and the previous report instead of resuming. Codex: resume the same
+  thread with the wider `--scope`.
 - Ask the owner when the file is on the high-risk list; is config, build, CI or
   release; means deleting files or changing protected text; is outside the
   repository; or makes the scope much wider.
