@@ -4,13 +4,13 @@
     "name": "Light505"
   },
   "metadata": {
-    "version": "1.0.6-gswitchtool.17",
+    "version": "1.0.6-gswitchtool.18",
     "description": "Claude Code plugins for GSwitch Claude Tool: the Codex plugin (a modified copy of OpenAI's codex-plugin-cc) and the optional router plugin."
   },
   "plugins": [
     {
       "name": "codex",
-      "version": "1.0.6-gswitchtool.17",
+      "version": "1.0.6-gswitchtool.18",
       "description": "GSwitch Codex plugin: Claude Code sends Codex reviews and tasks to the GSwitch Claude Tool app, which runs them under your Invoke Mode rules. Modified from OpenAI's codex-plugin-cc (Apache-2.0).",
       "author": {
         "name": "OpenAI; modified by Light505"
