@@ -36,6 +36,8 @@ pub struct Endpoint {
     coordinator: Arc<Coordinator>,
     worker_file: PathBuf,
     published_pids: Mutex<Vec<u32>>,
+    /// The Codex home workers use; `None` resolves it as Codex does.
+    codex_home: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +79,7 @@ pub fn start(
         coordinator,
         worker_file: config_dir.join(WORKERS_FILE),
         published_pids: Mutex::new(Vec::new()),
+        codex_home: None,
     });
     storage::write_json_atomic(
         &endpoint.worker_file,
@@ -147,6 +150,13 @@ pub(crate) async fn handle_line(line: &str, endpoint: &Endpoint, connection: u64
 }
 
 impl Endpoint {
+    fn codex_home(&self) -> Result<PathBuf, String> {
+        match &self.codex_home {
+            Some(home) => Ok(home.clone()),
+            None => crate::codex::codex_home(),
+        }
+    }
+
     fn publish_worker_pids(&self) {
         let Ok(mut previous) = self.published_pids.lock() else {
             return;
@@ -214,7 +224,7 @@ async fn dispatch(
                 "allowed_invocation_profiles": profiles,
                 "task_defaults": settings.task_defaults,
                 "workers_running": running,
-                "codex_home": crate::codex::codex_home()?.display().to_string(),
+                "codex_home": endpoint.codex_home()?.display().to_string(),
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
                 "max_concurrent_tasks": settings.max_concurrent_tasks,
@@ -230,6 +240,13 @@ async fn dispatch(
             let model = text("model")?;
             let reasoning_effort = text("reasoning_effort")?;
             validate(endpoint, &model, &reasoning_effort)?;
+            let codex_home = endpoint.codex_home()?;
+            // Without credentials Codex fails only after it starts. GSwitch
+            // does not sign in for the user; it checks the file exists, and
+            // treats a store it cannot check as signed in.
+            if crate::codex::signed_out(&codex_home).unwrap_or(false) {
+                return Err("CODEX_SIGNED_OUT".to_string());
+            }
             let lease_id = coordinator.open_lease(
                 connection,
                 LeaseRequest {
@@ -248,7 +265,7 @@ async fn dispatch(
             );
             Ok(json!({
                 "lease_id": lease_id,
-                "codex_home": crate::codex::codex_home()?.display().to_string(),
+                "codex_home": codex_home.display().to_string(),
             }))
         }
         "run_begin" => {
@@ -541,12 +558,17 @@ mod tests {
             poll: Duration::from_millis(5),
             preference_interval: Duration::ZERO,
         };
+        // A signed-in Codex home: the file store with a credential file.
+        let codex_home = dir.join("codex-home");
+        std::fs::create_dir_all(&codex_home).expect("Codex home");
+        std::fs::write(codex_home.join("auth.json"), "{}").expect("auth file");
         Endpoint {
             token: TOKEN.into(),
             coordinator: Coordinator::new(Arc::new(FixedOps(invoke.clone())), timings),
             invoke,
             worker_file: dir.join(WORKERS_FILE),
             published_pids: Mutex::new(Vec::new()),
+            codex_home: Some(codex_home),
         }
     }
 
@@ -628,7 +650,7 @@ mod tests {
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
                 "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
                 "workers_running": 0,
-                "codex_home": crate::codex::codex_home().expect("Codex home").display().to_string(),
+                "codex_home": dir.join("codex-home").display().to_string(),
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
                 "max_concurrent_tasks": 2,
@@ -681,6 +703,47 @@ mod tests {
     }
 
     #[test]
+    fn lease_open_refuses_while_codex_is_signed_out_of_the_file_store() {
+        let dir = temp_dir("signed-out");
+        let endpoint = endpoint(&dir, true);
+        let home = dir.join("codex-home");
+        let open = || {
+            call(
+                &request(
+                    "lease_open",
+                    json!({"model": "model-a", "reasoning_effort": "high"}),
+                ),
+                &endpoint,
+            )
+        };
+        std::fs::remove_file(home.join("auth.json")).expect("sign out");
+        let refused = open();
+        assert_eq!(refused["error"], json!({ "code": "CODEX_SIGNED_OUT" }));
+        assert!(refused.get("result").is_none());
+        assert_eq!(endpoint.coordinator.status().0, 0);
+
+        // A store GSwitch cannot check is not refused.
+        for store in ["keyring", "auto", "something-new"] {
+            std::fs::write(
+                home.join("config.toml"),
+                format!("cli_auth_credentials_store = \"{store}\"\n"),
+            )
+            .expect("config");
+            assert!(open().get("result").is_some(), "{store}");
+        }
+
+        std::fs::write(
+            home.join("config.toml"),
+            "cli_auth_credentials_store = \"file\"\n",
+        )
+        .expect("config");
+        assert_eq!(open()["error"]["code"], "CODEX_SIGNED_OUT");
+        std::fs::write(home.join("auth.json"), "{}").expect("sign in");
+        assert!(open().get("result").is_some());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_worker_run_is_registered_and_reported_in_status() {
         let dir = temp_dir("lease");
         let endpoint = endpoint(&dir, true);
@@ -693,10 +756,7 @@ mod tests {
         );
         assert_eq!(
             opened["result"]["codex_home"],
-            crate::codex::codex_home()
-                .expect("Codex home")
-                .display()
-                .to_string()
+            dir.join("codex-home").display().to_string()
         );
         let lease = opened["result"]["lease_id"]
             .as_str()
@@ -934,6 +994,7 @@ mod tests {
             coordinator: Coordinator::new(ops.clone(), Timings::default()),
             worker_file: dir.join(WORKERS_FILE),
             published_pids: Mutex::new(Vec::new()),
+            codex_home: base.codex_home.clone(),
         });
         let path = endpoint_path(&dir);
         storage::write_json_atomic(

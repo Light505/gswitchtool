@@ -62,17 +62,29 @@ pub fn credential_store_mode(codex_home: &Path) -> Result<CredentialStoreMode, S
 
 pub fn runtime_info() -> Result<RuntimeInfo, String> {
     let home = codex_home()?;
-    let auth_file_exists = match fs::metadata(home.join("auth.json")) {
-        Ok(metadata) => metadata.is_file(),
-        Err(error) if error.kind() == ErrorKind::NotFound => false,
-        Err(_) => return Err("Unable to inspect Codex credentials".to_string()),
-    };
-
     Ok(RuntimeInfo {
         codex_home: home.display().to_string(),
-        auth_file_exists,
+        auth_file_exists: auth_file_exists(&home)?,
         credential_store: credential_store_mode(&home)?,
     })
+}
+
+/// Checks only that the credential file exists; never reads it.
+fn auth_file_exists(codex_home: &Path) -> Result<bool, String> {
+    match fs::metadata(auth_path(codex_home)) {
+        Ok(metadata) => Ok(metadata.is_file()),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(_) => Err("Unable to inspect Codex credentials".to_string()),
+    }
+}
+
+/// Codex keeps its credentials in `auth.json` and that file is missing. Other
+/// stores cannot be checked without reading credentials, so they never count.
+pub fn signed_out(codex_home: &Path) -> Result<bool, String> {
+    Ok(
+        credential_store_mode(codex_home)? == CredentialStoreMode::File
+            && !auth_file_exists(codex_home)?,
+    )
 }
 
 pub fn auth_path(codex_home: &Path) -> PathBuf {

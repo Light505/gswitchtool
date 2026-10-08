@@ -162,7 +162,7 @@ function saveImportLedger(ledger) {
   fs.writeFileSync(ledgerPath, JSON.stringify(ledger, null, 2));
 }
 
-function emitTurnCompleted(threadId, turnId, item) {
+function emitTurnCompleted(threadId, turnId, item, status = "completed") {
   const items = Array.isArray(item) ? item : [item];
   send({ method: "turn/started", params: { threadId, turn: buildTurn(turnId) } });
   for (const entry of items) {
@@ -173,7 +173,7 @@ function emitTurnCompleted(threadId, turnId, item) {
       send({ method: "item/completed", params: { threadId, turnId, item: entry.completed } });
     }
   }
-  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, "completed") } });
+  send({ method: "turn/completed", params: { threadId, turn: buildTurn(turnId, status) } });
 }
 
 function emitTurnCompletedLater(threadId, turnId, item, delayMs) {
@@ -331,7 +331,9 @@ rl.on("line", (line) => {
       }
     }
     const finalText = process.env.GSWITCH_TEST_APPROVAL_ANSWER || "Changed: none";
-    emitTurnCompleted(threadId, turnId, [{ completed: { type: "agentMessage", id: "answer_" + turnId, phase: "final_answer", text: finalText } }]);
+    // Like Codex, "cancel" declines the change and interrupts the turn.
+    const status = message.result?.decision === "cancel" ? "interrupted" : "completed";
+    emitTurnCompleted(threadId, turnId, [{ completed: { type: "agentMessage", id: "answer_" + turnId, phase: "final_answer", text: finalText } }], status);
     return;
   }
 

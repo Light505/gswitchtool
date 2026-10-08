@@ -55,7 +55,7 @@ export interface CodexAppServerClientOptions {
   brokerEndpoint?: string;
   disableBroker?: boolean;
   reuseExistingBroker?: boolean;
-  onFileChangeApproval?: (changes: Extract<ThreadItem, { type: "fileChange" }>["changes"], params: { itemId: string; threadId: string; turnId: string; reason?: string | null; grantRoot?: string | null }) => "accept" | "decline";
+  onFileChangeApproval?: (changes: Extract<ThreadItem, { type: "fileChange" }>["changes"], params: { itemId: string; threadId: string; turnId: string; reason?: string | null; grantRoot?: string | null }) => "accept" | "decline" | "cancel";
 }
 
 export interface AppServerMethodMap {

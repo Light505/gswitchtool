@@ -377,7 +377,9 @@ export function unmatchedCodexPaths(namedPaths, gitPaths, cwdRelativeToRoot = ""
 
     const rootRelative = normalizeRelative(relative);
     const cwdRelative = cwdPrefix === null ? null : normalizeRelative(path.posix.join(cwdPrefix, relative));
-    return (rootRelative !== null && changed.has(rootRelative)) || (cwdRelative !== null && changed.has(cwdRelative));
+    if ((rootRelative !== null && changed.has(rootRelative)) || (cwdRelative !== null && changed.has(cwdRelative))) return true;
+    // A bare file name counts when exactly one changed path has that base name.
+    return !relative.includes("/") && [...changed].filter((file) => path.posix.basename(file) === relative).length === 1;
   };
   return namedPaths.filter((named) => !expandBraces(String(named)).every(matches));
 }

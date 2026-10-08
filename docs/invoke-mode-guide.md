@@ -188,7 +188,7 @@ the tool rather than from Codex:
 | `Changed files (git): …` | What git shows changed during the run, with lines added and removed. |
 | `Verify: passed` / `Verify: FAILED` | The test command Claude named, run by the tool after Codex finished. On a failure Codex gets one automatic retry in the same thread; after that, Claude takes over. |
 | `SCOPE REQUEST: …` / `Scope: n change(s) declined` | Files Codex was stopped from changing, with its reason when given, and how many paths were declined. Claude decides whether to resume the same thread with a wider scope. |
-| `WARNING: …` | Something does not add up, such as a file Codex says it changed that git shows unchanged. With `--write` and `--scope`, edits outside `--scope` are declined before they happen; shell edits are still caught afterwards by `WARNING: changed outside --scope`. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
+| `WARNING: …` | Something does not add up, such as a file Codex says it changed that git shows unchanged. With `--write` and `--scope`, the run stops at the first edit outside `--scope`, before it happens, and reports it as a `SCOPE REQUEST` (verify is skipped); shell edits are still caught afterwards by `WARNING: changed outside --scope`. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
 | `Full answer: …` | A long answer was shortened; the whole answer is in that file. |
 | `Worktree: applied …` / `Worktree kept: …` | When Claude runs two editing tasks at once, each works in its own copy of the repository, and the result is copied back into your working tree. A kept copy (a conflict that could not be resolved, or a failed test) is left for you with its reason; nothing in your working tree changes. The copies share your real `node_modules` and Rust build folder (so nothing is reinstalled), which means an install inside a copy changes those shared folders, just as it would in your working tree. |
 
@@ -271,6 +271,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 | --- | --- |
 | `GSWITCH_UNAVAILABLE` | Open GSwitch Claude Tool. |
 | `INVOKE_MODE_DISABLED` | Switch GSwitch to **Invoke**, or keep working without Codex. |
+| `CODEX_SIGNED_OUT` | GSwitch shows **Codex is signed out**, so no run starts. Press **Switch** on an account allowed in Invoke Mode, then tell Claude to try again. |
 | `MODEL_NOT_ALLOWED` / `REASONING_NOT_ALLOWED` | Claude asked for something you did not tick. It should choose again from your list; tick more in Invoke settings if needed. |
 | `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or **Invoke Mode paused** | No allowed account has Codex usage left, so Claude paused. Wait for the reset, or allow another account and choose **Resume now**; then tell Claude to continue. |
 | `USAGE_LIMIT_EXCEEDED` | Codex ran out on several accounts in a row during one task, so Claude paused. Tell Claude to continue when usage is available. |

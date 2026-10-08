@@ -1445,10 +1445,11 @@ function matchesScope(file, pattern) {
   return new RegExp(`${expression}$`).test(file);
 }
 
-function scopeApproval(root, patterns, declined) {
+function scopeApproval(root, patterns, declined, onCancel = null) {
   return (changes, params) => {
     if (!Array.isArray(changes) || !changes.length) return "decline";
     let allowed = true;
+    let outside = false;
     for (const change of changes) {
       if (typeof change?.path !== "string" || !change.path) { allowed = false; continue; }
       // A rename changes both its source and its destination.
@@ -1458,10 +1459,15 @@ function scopeApproval(root, patterns, declined) {
         const inside = relative && relative !== ".." && !relative.startsWith("../") && !path.isAbsolute(relative);
         if (inside && (patterns.some((pattern) => matchesScope(relative, pattern)) || git(root, ["check-ignore", "-q", "--", relative]).status === 0)) continue;
         allowed = false;
+        outside = true;
         declined.set(relative || target, params.reason ?? null);
       }
     }
-    return allowed ? "accept" : "decline";
+    if (allowed) return "accept";
+    if (!outside) return "decline";
+    // "cancel" also interrupts the turn, so Codex cannot work around the decline.
+    onCancel?.();
+    return "cancel";
   };
 }
 
@@ -1544,6 +1550,7 @@ function renderInvokeResult(result) {
     for (const request of result.scopeRequests) lines.push(`SCOPE REQUEST: ${request.path}${request.reason ? ` — ${request.reason}` : ""}`);
     lines.push(`Scope: ${result.scopeRequests.length} change(s) declined`);
   }
+  if (result.verifySkipped) lines.push("Verify: skipped (the run stopped for a scope request)");
   if (result.verify) {
     if (result.verify.passed && result.verify.retries) lines.push("Verify: passed after 1 retry");
     else if (result.verify.passed) lines.push(`Verify: passed (${result.verify.command}, ${result.verify.durationSeconds}s)`);
@@ -1604,6 +1611,7 @@ async function handleInvoke(argv) {
   const scopedPatterns = (Array.isArray(options.scope) ? options.scope : options.scope ? [options.scope] : [])
     .flatMap((scope) => String(scope).split(",")).map((scope) => scope.trim()).filter(Boolean);
   const declined = new Map();
+  let scopeCancels = 0;
   const scopedWrite = write && scopedPatterns.length > 0;
   const useWorktree = Boolean(options.worktree || options["worktree-dir"]);
   const base = { model, reasoningEffort: effort, write };
@@ -1700,10 +1708,11 @@ async function handleInvoke(argv) {
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
     const gitBefore = snapshotGit(actualCwd);
     const protectedBefore = write && gitBefore ? protectedTextSnapshot(gitBefore.root) : null;
-    const onFileChangeApproval = scopedWrite ? scopeApproval(gitBefore?.root ?? runWorkspaceRoot, scopedPatterns, declined) : null;
+    const onFileChangeApproval = scopedWrite ? scopeApproval(gitBefore?.root ?? runWorkspaceRoot, scopedPatterns, declined, () => { scopeCancels += 1; }) : null;
+    const countScopeCancels = () => scopeCancels;
     const result = await runInvokeWithFailover({
       base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
-      onFileChangeApproval, scopedPatterns,
+      onFileChangeApproval, scopedPatterns, countScopeCancels,
       verifyCommand: options.verify ? String(options.verify) : null
     });
     if (result.jobId && result.output) {
@@ -1735,9 +1744,9 @@ async function handleInvoke(argv) {
       if (!write && result.diff.files.length) result.warnings.push("WARNING: read-only run changed files");
     }
     if (worktreeState) {
-      const statusAllowsApply = result.status === "completed" && (!result.verify || result.verify.passed) && !invokeInterrupted && !protectedChanged.length;
+      const statusAllowsApply = result.status === "completed" && (!result.verify || result.verify.passed) && !result.scopeStopped && !invokeInterrupted && !protectedChanged.length;
       if (!statusAllowsApply) {
-        const reason = protectedChanged.length ? "protected text changed" : invokeInterrupted || result.code === "STOPPED_BY_USER" ? "interrupted or stopped" : result.verify?.passed === false ? "verification failed" : "run did not complete";
+        const reason = protectedChanged.length ? "protected text changed" : invokeInterrupted || result.code === "STOPPED_BY_USER" ? "interrupted or stopped" : result.scopeStopped ? "stopped for a scope request" : result.verify?.passed === false ? "verification failed" : "run did not complete";
         result.worktree = { applied: false, conflictsResolved: false, keptAt: worktreeState.worktree, reason };
         result.warnings.push(`WARNING: worktree kept: ${reason}`);
       } else {
@@ -1766,7 +1775,7 @@ async function handleInvoke(argv) {
               const conflictPrompt = `The user's tree changed while you worked. Resolve the merge conflicts listed below, keeping both sides' intent. Do not touch other files.\n\nConflicting files:\n${files.map((file) => `- ${file}`).join("\n")}`;
               const resumed = await runInvokeWithFailover({
                 base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
-                onFileChangeApproval, scopedPatterns,
+                onFileChangeApproval, scopedPatterns, countScopeCancels,
                 prompt: conflictPrompt, resumeThreadId: result.threadId
               });
               result.failovers += resumed.failovers;
@@ -1854,7 +1863,7 @@ async function handleInvoke(argv) {
  * exhausted, GSwitch alone switches accounts; this worker then resumes the same
  * thread with the same model, effort, sandbox, and working directory.
  */
-async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null, onFileChangeApproval = null, scopedPatterns = [] }) {
+async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null, onFileChangeApproval = null, scopedPatterns = [], countScopeCancels = () => 0 }) {
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
@@ -1888,6 +1897,8 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
 
     let execution = null;
     let runError = null;
+    const scopeCancelsBefore = countScopeCancels();
+    const stoppedForScope = () => countScopeCancels() > scopeCancelsBefore;
     try {
       execution = await runTrackedJob(
         job,
@@ -1915,7 +1926,10 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
                 session.request("run_thread", { lease_id: leaseId, thread_id: reported }).catch(() => {});
               }
             }
-          }),
+          }).then((run) =>
+            // A turn interrupted by a scope cancel ended as intended: it is a result, not a failure.
+            run.exitStatus !== 0 && !run.payload.error && stoppedForScope() ? { ...run, exitStatus: 0 } : run
+          ),
         { logFile }
       );
     } catch (error) {
@@ -1938,9 +1952,27 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
 
     // Acceptance testing only: treat the first finished turn as a usage limit so
     // a real failover can be exercised without exhausting an account.
+    const scopeStopped = execution?.exitStatus === 0 && stoppedForScope();
     const simulatedLimit =
-      process.env[SIMULATE_USAGE_LIMIT_ENV] === "1" && failovers === 0 && execution?.exitStatus === 0;
+      process.env[SIMULATE_USAGE_LIMIT_ENV] === "1" && failovers === 0 && execution?.exitStatus === 0 && !scopeStopped;
     if (execution?.exitStatus === 0 && !simulatedLimit) {
+      // The run stopped at an out-of-scope edit; its scope requests are the result.
+      if (scopeStopped) {
+        return {
+          ...base,
+          status: "completed",
+          code: null,
+          message: null,
+          jobId: job.id,
+          threadId,
+          failovers,
+          scopeStopped: true,
+          verifySkipped: Boolean(verifyCommand),
+          verify: null,
+          output: execution.payload.rawOutput,
+          touchedFiles: [...touched]
+        };
+      }
       if (verifyCommand) {
         verifyResult = await runVerification(verifyCommand, cwd);
         if (!verifyResult.passed && verifyRetries === 0) {

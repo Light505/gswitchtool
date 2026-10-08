@@ -87,22 +87,51 @@ test("in-scope absolute paths are accepted before editing", () => fixture(async 
   assert.match(result.stdout, /Scope: 0 change\(s\) declined/);
 }));
 
-test("out-of-scope edits are declined and reported once with the final reason", () => fixture(async ({ repo, state, invoke }) => {
+test("out-of-scope edits cancel the turn and are reported once with the final reason", () => fixture(async ({ repo, state, invoke }) => {
   const result = await invoke(["--write", "--scope", "src/**"], [change("other.js"), change("other.js")], {
     GSWITCH_TEST_APPROVAL_ANSWER: "SCOPE REQUEST: other.js — needed by this task — add a helper"
   });
   successful(result);
-  assert.equal(decision(state), "decline");
+  assert.equal(decision(state), "cancel");
   assert.equal(fs.existsSync(path.join(repo, "other.js")), false);
   assert.match(result.stdout, /SCOPE REQUEST: other\.js — needed by this task — add a helper/);
   assert.equal(result.stdout.match(/SCOPE REQUEST: other\.js/g).length, 1);
   assert.match(result.stdout, /Scope: 1 change\(s\) declined/);
 }));
 
-test("mixed patches decline the whole patch and report each outside path", () => fixture(async ({ repo, state, invoke }) => {
+test("a turn stopped for scope is a completed result with its thread, and verify is skipped", () => fixture(async ({ state, invoke }) => {
+  const result = await invoke(["--write", "--scope", "src/**", "--verify", 'node -e "process.exit(1)"', "--json"], [change("other.js")]);
+  successful(result);
+  assert.equal(decision(state), "cancel");
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.code, null);
+  assert.equal(payload.failovers, 0);
+  assert.ok(payload.threadId);
+  assert.equal(payload.verify, null);
+  assert.equal(payload.verifySkipped, true);
+  assert.deepEqual(payload.scopeRequests, [{ path: "other.js", reason: "fixture reason" }]);
+  const text = await invoke(["--write", "--scope", "src/**", "--verify", 'node -e "process.exit(1)"'], [change("other.js")]);
+  successful(text);
+  assert.match(text.stdout, /\[codex invoke\] completed · thread /);
+  assert.match(text.stdout, /SCOPE REQUEST: other\.js — fixture reason/);
+  assert.match(text.stdout, /Scope: 1 change\(s\) declined/);
+  assert.match(text.stdout, /Verify: skipped \(the run stopped for a scope request\)/);
+}));
+
+for (const [label, changes] of [["an empty", []], ["a malformed", [{ kind: { type: "add" }, diff: "+fixture" }]]]) {
+  test(`${label} change list is declined without stopping the turn`, () => fixture(async ({ state, invoke }) => {
+    const result = await invoke(["--write", "--scope", "src/**", "--json"], changes);
+    successful(result);
+    assert.equal(decision(state), "decline");
+    assert.equal(JSON.parse(result.stdout).scopeStopped, undefined);
+  }));
+}
+
+test("mixed patches cancel the whole patch and report each outside path", () => fixture(async ({ repo, state, invoke }) => {
   const result = await invoke(["--write", "--scope", "src/**", "--json"], [change("src/task.js"), change("other.js"), change("another.js")]);
   successful(result);
-  assert.equal(decision(state), "decline");
+  assert.equal(decision(state), "cancel");
   assert.equal(fs.existsSync(path.join(repo, "src/task.js")), false);
   assert.deepEqual(JSON.parse(result.stdout).scopeRequests, [
     { path: "other.js", reason: "fixture reason" }, { path: "another.js", reason: "fixture reason" }
@@ -167,6 +196,7 @@ test("a kept worktree can resume its thread with wider scope", () => fixture(asy
   assert.equal(first.status, 4, first.stderr || first.stdout);
   const kept = JSON.parse(first.stdout);
   assert.ok(kept.worktree.keptAt);
+  assert.equal(kept.worktree.reason, "stopped for a scope request");
   assert.equal(kept.scopeRequests.length, 1);
   const resumed = await invoke(["--write", "--scope", "other.js", "--resume-thread", kept.threadId, "--worktree-dir", kept.worktree.keptAt, "--json"], [change("other.js")]);
   successful(resumed);
@@ -179,14 +209,14 @@ test("a kept worktree can resume its thread with wider scope", () => fixture(asy
 test("rename destinations outside scope are declined", () => fixture(async ({ state, invoke }) => {
   const result = await invoke(["--write", "--scope", "src/**"], [change("src/task.js", { type: "update", move_path: "other.js" })]);
   successful(result);
-  assert.equal(decision(state), "decline");
+  assert.equal(decision(state), "cancel");
   assert.match(result.stdout, /SCOPE REQUEST: other\.js/);
 }));
 
 test("paths outside the repository are declined even with scope **", () => fixture(async ({ state, invoke }) => {
   const result = await invoke(["--write", "--scope", "**"], [change("../outside.js")]);
   successful(result);
-  assert.equal(decision(state), "decline");
+  assert.equal(decision(state), "cancel");
   assert.match(result.stdout, /SCOPE REQUEST: \.\.\/outside\.js/);
 }));
 

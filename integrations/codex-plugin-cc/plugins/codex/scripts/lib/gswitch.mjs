@@ -31,6 +31,8 @@ const ERROR_MESSAGES = {
   ACCOUNT_SWITCH_FAILED: "The Codex account ran out and GSwitch could not switch to another account. Tell the user.",
   ACCOUNT_VERIFICATION_FAILED:
     "The Codex account ran out, but the replacement account could not be verified, so work did not resume. Tell the user.",
+  CODEX_SIGNED_OUT:
+    "Codex is signed out in GSwitch. Open GSwitch and press Switch on an account allowed in Invoke Mode, then try again.",
   UNKNOWN_LEASE: "GSwitch no longer tracks this Codex run. Ask the user to check GSwitch.",
   STOPPED_BY_USER:
     "The user stopped this Codex task in GSwitch. Do not restart or retry it; tell the user what it was doing and ask how to continue.",

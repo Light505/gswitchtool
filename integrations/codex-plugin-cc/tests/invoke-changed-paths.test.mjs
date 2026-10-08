@@ -32,6 +32,20 @@ test("unmatchedCodexPaths normalizes ./, backslashes and absolute paths inside t
   assert.deepEqual(unmatchedCodexPaths(named, gitPaths, "", "/repo"), []);
 });
 
+test("unmatchedCodexPaths accepts a bare file name when exactly one changed path has that base name", () => {
+  const gitPaths = ["plugins/codex/scripts/lib/git.mjs", "tests/invoke-changed-paths.test.mjs"];
+  assert.deepEqual(unmatchedCodexPaths(["git.mjs", "invoke-changed-paths.test.mjs"], gitPaths, "", "/repo"), []);
+});
+
+test("unmatchedCodexPaths still reports a bare file name that is ambiguous or unknown", () => {
+  const gitPaths = ["src/index.ts", "lib/index.ts", "src/a.ts"];
+  assert.deepEqual(unmatchedCodexPaths(["index.ts", "missing.ts"], gitPaths, "", "/repo"), ["index.ts", "missing.ts"]);
+});
+
+test("unmatchedCodexPaths does not match a path with a folder by its base name alone", () => {
+  assert.deepEqual(unmatchedCodexPaths(["other/a.ts"], ["src/a.ts"], "", "/repo"), ["other/a.ts"]);
+});
+
 test("unmatchedCodexPaths still reports a file git does not show as changed, as Codex wrote it", () => {
   const named = ["src/a.ts", "src/missing.ts", "src/{a,nope}.ts"];
   assert.deepEqual(unmatchedCodexPaths(named, ["src/a.ts"], "", "/repo"), ["src/missing.ts", "src/{a,nope}.ts"]);
