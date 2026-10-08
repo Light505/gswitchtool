@@ -26,7 +26,7 @@ import {
   } from "./lib/codex.mjs";
 import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
-import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readInvokeStatus } from "./lib/gswitch.mjs";
+import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readClaudeSetup, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget, unmatchedCodexPaths } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
@@ -1060,11 +1060,16 @@ async function handleCancel(argv) {
 }
 
 function renderInvokeStatus(report) {
+  const setup = readClaudeSetup();
+  const label = setup?.setup === "router" ? `Router (${setup.router.mode})`
+    : { "claude-only": "Claude only", "claude-codex": "Claude + Codex" }[setup?.setup];
+  const first = label ? `Claude Code setup: ${label} (change it in GSwitch: Claude Code button)\n`
+    : "Claude Code setup: unknown (open GSwitch once)\n";
   const text = renderInvokeStatusBody(report);
   if (report.available && report.invoke_mode && report.codex_signed_out) {
-    return `Codex is signed out in GSwitch: runs will be refused (CODEX_SIGNED_OUT) until the user presses Switch on an account allowed in Invoke Mode.\n${text}`;
+    return `${first}Codex is signed out in GSwitch: runs will be refused (CODEX_SIGNED_OUT) until the user presses Switch on an account allowed in Invoke Mode.\n${text}`;
   }
-  return text;
+  return `${first}${text}`;
 }
 
 function renderInvokeStatusBody(report) {

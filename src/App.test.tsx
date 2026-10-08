@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { open } from "@tauri-apps/plugin-dialog";
 
 import App from "./App";
-import type { AccountView, QuotaRefreshFailureCode, QuotaView, SwitchFailureCode } from "./types";
+import type { ClaudeSetup, AccountView, QuotaRefreshFailureCode, QuotaView, SwitchFailureCode } from "./types";
 
 // The second click of a two-click confirmation is ignored for 300 ms.
 const pastConfirmGuard = () => new Promise((resolve) => window.setTimeout(resolve, 320));
@@ -56,7 +56,7 @@ const mocks = vi.hoisted(() => ({
   updateDelivery: vi.fn(),
   openLatestRelease: vi.fn(),
   invokeSettings: vi.fn(),
-  setInvokeMode: vi.fn(),
+  setClaudeSetup: vi.fn(),
   modelCatalog: vi.fn(),
   setInvokeProfiles: vi.fn(),
   setAccountInvokeAllowed: vi.fn(),
@@ -150,6 +150,27 @@ const staleQuota: QuotaView = {
   },
 };
 
+function claudeSetup(enabled = false): ClaudeSetup {
+  return {
+    setup: enabled ? "claude-codex" : "claude-only",
+    router: {
+      mode: "mixed",
+      claudeAllowed: {
+        haiku: ["low", "medium"],
+        sonnet: ["low", "medium", "high", "xhigh", "max"],
+        opus: ["low", "medium", "high", "xhigh", "max"],
+      },
+      claudeOnlyReview: "on",
+    },
+  };
+}
+
+async function openInvokeSettings() {
+  await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+  const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+  await userEvent.click(within(panel).getAllByRole("button", { name: "Invoke settings..." })[0]!);
+}
+
 function prepareDefaults() {
   mocks.codexCliInfo.mockResolvedValue({ version: "0.156.1", latest_version: "0.157.0", update_status: "available", supports_update: true });
   mocks.updateCodexCli.mockResolvedValue({ version: "0.157.0", update_status: "unknown", supports_update: true });
@@ -230,10 +251,15 @@ function prepareDefaults() {
   mocks.cancelWake.mockResolvedValue(undefined);
   mocks.updateDelivery.mockResolvedValue("installer_exits");
   mocks.openLatestRelease.mockResolvedValue(undefined);
-  mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, allowed_invocation_profiles: [] });
-  mocks.setInvokeMode.mockImplementation(async (enabled: boolean) => ({ invoke_mode: enabled, allowed_invocation_profiles: [] }));
+  mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, claude_setup: claudeSetup(false), allowed_invocation_profiles: [] });
+  mocks.setClaudeSetup.mockImplementation(async (setup: ClaudeSetup) => ({
+    invoke_mode: setup.setup === "claude-codex" || (setup.setup === "router"
+      && (setup.router.mode !== "claude" || setup.router.claudeOnlyReview === "on")),
+    claude_setup: setup,
+    allowed_invocation_profiles: [],
+  }));
   mocks.modelCatalog.mockResolvedValue([]);
-  mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, allowed_invocation_profiles: profiles }));
+  mocks.setInvokeProfiles.mockImplementation(async (profiles: unknown) => ({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: profiles }));
   mocks.appVersion.mockResolvedValue({ version: "1.2.0", dev: false });
   mocks.onInvokeAutoWoke.mockResolvedValue(() => undefined);
   mocks.invokeTasks.mockResolvedValue([]);
@@ -244,18 +270,18 @@ function prepareDefaults() {
   mocks.onInvokeActivity.mockResolvedValue(() => undefined);
   mocks.onInvokeResumed.mockResolvedValue(() => undefined);
   mocks.setInvokeWeeklyReserve.mockImplementation(async (reserve: Record<string, number>) => ({
-    invoke_mode: true,
+    invoke_mode: true, claude_setup: claudeSetup(true),
     allowed_invocation_profiles: [],
     weekly_reserve: reserve,
   }));
   mocks.setInvokeTaskDefaults.mockImplementation(async (task_defaults: unknown) => ({
-    invoke_mode: true,
+    invoke_mode: true, claude_setup: claudeSetup(true),
     allowed_invocation_profiles: [],
     task_defaults,
   }));
   mocks.setInvokePreferences.mockImplementation(async (order: string[], min: number, tasks: number, autoWake: boolean) => ({
     auto_wake: autoWake,
-    invoke_mode: true,
+    invoke_mode: true, claude_setup: claudeSetup(true),
     allowed_invocation_profiles: [],
     account_priority: order,
     preferred_min_remaining: min,
@@ -2372,7 +2398,7 @@ describe("GSwitch account workspace", () => {
 
     // The default palette and following the system leave no attribute.
     await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
-    await userEvent.click(screen.getByRole("button", { name: /Claude Code/ }));
+    await userEvent.click(within(screen.getByLabelText("Appearance", { selector: "div" })).getByRole("button", { name: /Claude Code/ }));
     await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
     await userEvent.click(screen.getByRole("button", { name: "System" }));
     expect(document.documentElement.dataset.palette).toBeUndefined();
@@ -2462,22 +2488,24 @@ describe("Invoke Mode", () => {
     mocks.listAccounts.mockResolvedValue([chatAccount, apiKeyAccount]);
   });
 
-  it("keeps Manual Mode identical to the plain switcher", async () => {
+  it("keeps Claude only as the plain switcher with one setup entry", async () => {
     render(<App />);
-    const mode = await screen.findByRole("group", { name: "Account mode" });
-    expect(within(mode).getByRole("button", { name: "Manual" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: "Claude Code: Claude only" })).toBeInTheDocument();
     expect(await screen.findByText("person@example.com")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "Account mode" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Invoke settings" })).not.toBeInTheDocument();
   });
 
-  it("turns Invoke Mode on only from the human control and offers per-account eligibility", async () => {
+  it("enables Invoke through a saved setup and offers per-account eligibility", async () => {
     render(<App />);
-    const mode = await screen.findByRole("group", { name: "Account mode" });
-    await userEvent.click(within(mode).getByRole("button", { name: "Invoke" }));
-
-    await waitFor(() => expect(mocks.setInvokeMode).toHaveBeenCalledWith(true));
-    expect(within(mode).getByRole("button", { name: "Invoke" })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(await screen.findByRole("button", { name: "Claude Code: Claude only" }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true)));
+    expect(await screen.findByRole("button", { name: "Claude Code: Claude + Codex" })).toBeInTheDocument();
     // Only ChatGPT accounts can be failover targets; API-key cards get no switch.
     const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
     expect(screen.getAllByRole("switch")).toHaveLength(1);
@@ -2489,8 +2517,106 @@ describe("Invoke Mode", () => {
     expect(mocks.switchAccount).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["claude-only", "Claude only", "mixed", "on", false],
+    ["claude-codex", "Claude + Codex", "mixed", "on", true],
+    ["router", "Router", "mixed", "on", true],
+    ["router", "Router", "mixed", "off", true],
+    ["router", "Router", "codex", "on", true],
+    ["router", "Router", "codex", "off", true],
+    ["router", "Router", "claude", "on", true],
+    ["router", "Router", "claude", "off", false],
+  ] as const)("saves %s / %s / %s / %s with its exact payload", async (kind, name, mode, review, enabled) => {
+    const initial = claudeSetup(true);
+    initial.router.claudeOnlyReview = review;
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: "Claude Code: Claude + Codex" }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: new RegExp("^" + name.replace("+", "\\+")) }));
+    if (kind === "router") {
+      await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
+      const reviewControl = within(panel).queryByRole("combobox", { name: "Codex review in Claude mode" });
+      if (mode === "claude") {
+        expect(reviewControl).toBeInTheDocument();
+        await userEvent.selectOptions(reviewControl!, review);
+      } else {
+        expect(reviewControl).not.toBeInTheDocument();
+      }
+      expect(within(panel).getAllByRole("checkbox")).toHaveLength(15);
+      await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
+    }
+    const expected: ClaudeSetup = {
+      ...initial,
+      setup: kind,
+      router: {
+        ...initial.router,
+        mode,
+        claudeOnlyReview: review,
+        claudeAllowed: { ...initial.router.claudeAllowed,
+          haiku: kind === "router" ? ["low", "medium", "high"] : ["low", "medium"] },
+      },
+    };
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith(expected));
+    expect(await screen.findByRole("button", { name: "Claude Code: " + name })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Claude Code" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("switch")).toHaveLength(enabled ? 1 : 0);
+  });
+
+  it("cancels draft changes without saving", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "Claude Code: Claude only" }));
+    expect(within(await screen.findByRole("dialog", { name: "Claude Code" }))
+      .getByRole("button", { name: /^Claude only/ })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("preserves a router draft while visiting Invoke settings", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    let panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
+    await userEvent.click(within(panel).getAllByRole("button", { name: "Invoke settings..." })[1]!);
+    const invokeDialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    await userEvent.click(within(invokeDialog).getByRole("button", { name: "Close Invoke settings" }));
+    panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    expect(within(panel).getByRole("checkbox", { name: "haiku high" })).toBeChecked();
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+  });
+
+  it("keeps the panel open and setup unchanged when publication fails", async () => {
+    mocks.setClaudeSetup.mockRejectedValue("Unable to atomically replace Claude Code setup");
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("Claude Code setup was not saved.");
+    expect(screen.getByRole("button", { name: "Claude Code: Claude only" })).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  it("opens the panel while paused and clears the pause after a saved human decision", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
+    mocks.invokePause.mockResolvedValue({ resumes_at: null });
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Invoke Mode paused" })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Claude Code: Claude + Codex" }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
+    expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true));
+  });
+
   it("keeps the account unchanged and explains when eligibility cannot be saved", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.setAccountInvokeAllowed.mockRejectedValue("Account store lock is unavailable");
     render(<App />);
 
@@ -2502,7 +2628,7 @@ describe("Invoke Mode", () => {
 
   it("whitelists only the efforts each Codex model supports", async () => {
     mocks.invokeSettings.mockResolvedValue({
-      invoke_mode: true,
+      invoke_mode: true, claude_setup: claudeSetup(true),
       allowed_invocation_profiles: [{ model: "model-b", reasoning_efforts: ["medium"] }],
     });
     mocks.modelCatalog.mockResolvedValue([
@@ -2511,7 +2637,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    await openInvokeSettings();
     const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
     expect(await within(dialog).findByRole("checkbox", { name: "medium reasoning for Model B" })).toBeChecked();
     expect(within(dialog).queryByRole("checkbox", { name: "medium reasoning for Model A" })).not.toBeInTheDocument();
@@ -2526,6 +2652,7 @@ describe("Invoke Mode", () => {
       { model: "model-a", reasoning_efforts: ["low", "max"] },
     ]));
     expect(mocks.setInvokeTaskDefaults).toHaveBeenCalledWith({ review: { model: "model-a", effort: "low" } });
+    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
   });
@@ -2534,7 +2661,7 @@ describe("Invoke Mode", () => {
     const second: AccountView = { ...chatAccount, id: "account-2", email: "second@example.com", label: "Second", plan_type: "pro", invoke_allowed: true };
     mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: false }, second]);
     mocks.invokeSettings.mockResolvedValue({
-      invoke_mode: true,
+      invoke_mode: true, claude_setup: claudeSetup(true),
       allowed_invocation_profiles: [],
       account_priority: ["account-1", "account-2"],
       preferred_min_remaining: 20,
@@ -2545,7 +2672,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    await openInvokeSettings();
     const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
     expect(within(dialog).getByText("Not allowed")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Move person@example.com up" })).toBeDisabled();
@@ -2563,13 +2690,14 @@ describe("Invoke Mode", () => {
 
     // Out-of-range values are kept within limits.
     await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6, true));
+    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
   it("marks a model that only some accounts offer", async () => {
     const pro: AccountView = { ...chatAccount, id: "account-2", email: "pro@example.com", label: "Pro", plan_type: "pro" };
     mocks.listAccounts.mockResolvedValue([{ ...chatAccount, plan_type: "plus" }, pro]);
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.modelCatalog.mockResolvedValue([
       { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
       { model: "model-pro", display_name: "Model Pro", supported_reasoning_efforts: ["high"], is_default: false, only_on: ["account-2"] },
@@ -2577,7 +2705,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    await openInvokeSettings();
     const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
     const badge = await within(dialog).findByText("Only on Pro");
     expect(badge).toHaveAttribute("title", expect.stringContaining("pro@example.com"));
@@ -2586,7 +2714,7 @@ describe("Invoke Mode", () => {
   });
 
   it("lists delegated Codex tasks and stops one after a confirming click", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([
       { id: "task-1", started_at: Date.now() - 125_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "C:\\work\\studio-app", thread_id: "01a1f2c3-4455-6677", running: true },
       { id: "task-2", started_at: Date.now() - 5_000, model: "gpt-6-luna", reasoning_effort: "low", write: false, cwd: "/work/other", thread_id: null, running: false },
@@ -2612,7 +2740,7 @@ describe("Invoke Mode", () => {
   });
 
   it("follows a running task's Codex log like a terminal", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([
       { id: "task-1", started_at: Date.now() - 30_000, model: "gpt-6.1-sol", reasoning_effort: "medium", write: true, cwd: "/work/studio-app", thread_id: "01a1f2c3-4455", running: true },
     ]);
@@ -2672,7 +2800,7 @@ describe("Invoke Mode", () => {
     [{ input_tokens: 1000, cached_input_tokens: 0, output_tokens: 100 }, "Input 1k · Cached 0 (0% hit) · Output 100"],
     [{}, "1,234 tokens"],
   ])("shows known Watch token fields without inventing missing counts (%j)", async (usage, expected) => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([
       { id: "task-1", started_at: Date.now(), model: "m", reasoning_effort: "low", write: false, cwd: "/work", thread_id: "thread-1", running: true },
     ]);
@@ -2685,7 +2813,7 @@ describe("Invoke Mode", () => {
   });
 
   it("opens two live logs, focuses an existing one, and closes each independently", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([1, 2].map((id) => ({
       id: `task-${id}`, started_at: Date.now(), model: `m${id}`, reasoning_effort: "low", write: false,
       cwd: `/work/project${id}`, thread_id: `thread-${id}`, running: true,
@@ -2721,7 +2849,7 @@ describe("Invoke Mode", () => {
   });
 
   it("replaces the oldest open log on the fifth task without reordering a focused log", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([1, 2, 3, 4, 5].map((id) => ({
       id: `task-${id}`, started_at: Date.now(), model: `m${id}`, reasoning_effort: "low", write: false,
       cwd: "/work", thread_id: `thread-${id}`, running: true,
@@ -2754,7 +2882,7 @@ describe("Invoke Mode", () => {
   });
 
   it("shows no task strip in Manual Mode", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: false, claude_setup: claudeSetup(false), allowed_invocation_profiles: [] });
     mocks.invokeTasks.mockResolvedValue([
       { id: "task-1", started_at: Date.now(), model: "m", reasoning_effort: "low", write: false, cwd: "/x", running: true },
     ]);
@@ -2816,18 +2944,19 @@ describe("Invoke Mode", () => {
 
   it("saves a weekly reserve for an account", async () => {
     mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: true }]);
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [], weekly_reserve: {} });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [], weekly_reserve: {} });
     mocks.modelCatalog.mockResolvedValue([
       { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
     ]);
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    await openInvokeSettings();
     const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
     const reserve = within(dialog).getByRole("spinbutton", { name: "Weekly reserve for person@example.com" });
     await userEvent.type(reserve, "30");
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({ "account-1": 30 }));
+    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
@@ -2966,11 +3095,11 @@ describe("Invoke Mode", () => {
   });
 
   it("keeps the dialog open with a safe message when the model list cannot be read", async () => {
-    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, allowed_invocation_profiles: [] });
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.modelCatalog.mockRejectedValue("Unable to start Codex App Server. Check that Codex is installed.");
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Invoke settings" }));
+    await openInvokeSettings();
     const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
     expect(await within(dialog).findByText("Could not read the Codex model list.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();

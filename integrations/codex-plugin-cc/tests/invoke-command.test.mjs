@@ -205,13 +205,13 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
     assert.doesNotMatch(text.stdout, /signed out/);
   }));
 
-test("invoke-status says first that Codex is signed out in GSwitch", () =>
+test("invoke-status says after the setup that Codex is signed out in GSwitch", () =>
   withGSwitch({ signedOut: true }, undefined, async (ctx) => {
     const result = await companion(["invoke-status"], ctx);
     assert.equal(result.status, 0, result.stderr);
     assert.match(
       result.stdout,
-      /^Codex is signed out in GSwitch: runs will be refused \(CODEX_SIGNED_OUT\) until the user presses Switch on an account allowed in Invoke Mode\.\n/
+      /^Claude Code setup: unknown \(open GSwitch once\)\nCodex is signed out in GSwitch: runs will be refused \(CODEX_SIGNED_OUT\) until the user presses Switch on an account allowed in Invoke Mode\.\n/
     );
     assert.match(result.stdout, /- model-a: high, xhigh/);
   }));

@@ -4,7 +4,7 @@
 
 use std::{
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -18,10 +18,13 @@ use crate::{
     model_access::ModelAccess,
     storage,
     types::{
-        CatalogModel, InvocationDefault, InvocationProfile, InvokeSettings,
+        CatalogModel, ClaudeSetup, InvocationDefault, InvocationProfile, InvokeSettings,
         MAX_CONCURRENT_TASKS_LIMIT,
     },
 };
+
+#[cfg(test)]
+use crate::types::ClaudeSetupKind;
 
 const SETTINGS_LABEL: &str = "Invoke Mode settings";
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -73,8 +76,72 @@ impl InvokeState {
             .map_err(|_| "Invoke Mode settings are unavailable".to_string())
     }
 
+    #[cfg(test)]
     pub fn set_invoke_mode(&self, enabled: bool) -> Result<InvokeSettings, String> {
-        self.update(|settings| settings.invoke_mode = enabled)
+        self.update_with_setup(
+            |settings| {
+                settings.claude_setup.setup = if enabled {
+                    ClaudeSetupKind::ClaudeCodex
+                } else {
+                    ClaudeSetupKind::ClaudeOnly
+                };
+                settings.invoke_mode = settings.claude_setup.invoke_mode();
+            },
+            true,
+        )
+    }
+
+    /// Serde rejects unknown setup/model/effort values before this boundary.
+    pub fn set_claude_setup(&self, mut setup: ClaudeSetup) -> Result<InvokeSettings, String> {
+        setup.normalize();
+        self.update_with_setup(
+            |settings| {
+                settings.invoke_mode = setup.invoke_mode();
+                settings.claude_setup = setup;
+            },
+            true,
+        )
+    }
+
+    /// Startup republishes the derived, credential-free plugin projection.
+    pub fn publish_claude_setup(&self) -> Result<(), String> {
+        let settings = self
+            .settings
+            .lock()
+            .map_err(|_| "Invoke Mode settings are unavailable".to_string())?;
+        self.write_claude_setup(&settings.claude_setup)
+    }
+
+    fn write_claude_setup(&self, setup: &ClaudeSetup) -> Result<(), String> {
+        #[derive(Serialize)]
+        struct SharedSetup<'a> {
+            version: u8,
+            #[serde(flatten)]
+            setup: &'a ClaudeSetup,
+        }
+        let content = serde_json::to_vec_pretty(&SharedSetup { version: 1, setup })
+            .map_err(|_| "Unable to serialize Claude Code setup".to_string())?;
+        let path = self.path.with_file_name("claude-setup.json");
+        let parent = path.parent().ok_or("Invalid Claude Code setup path")?;
+        fs::create_dir_all(parent).map_err(|_| "Unable to create storage for Claude Code setup")?;
+        // Keep this non-secret projection's temporary path so failed renames
+        // can be cleaned up. atomic-write-file 0.3.1 consumes that path on error.
+        let temporary = parent.join(format!(".claude-setup.{}.tmp", uuid::Uuid::new_v4()));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|_| "Unable to prepare Claude Code setup")?;
+        let result = file.write_all(&content).and_then(|()| file.sync_all());
+        drop(file);
+        let result = result.and_then(|()| fs::rename(&temporary, &path));
+        if result.is_err() {
+            fs::remove_file(&temporary).map_err(|_| {
+                "Claude Code setup was not saved; unable to remove its temporary file"
+            })?;
+            return Err("Unable to atomically replace Claude Code setup".to_string());
+        }
+        Ok(())
     }
 
     /// Replaces the whitelist after checking it against `catalog`, which must
@@ -189,6 +256,13 @@ impl InvokeState {
     where
         F: FnOnce(&mut InvokeSettings),
     {
+        self.update_with_setup(change, false)
+    }
+
+    fn update_with_setup<F>(&self, change: F, publish_setup: bool) -> Result<InvokeSettings, String>
+    where
+        F: FnOnce(&mut InvokeSettings),
+    {
         let mut settings = self
             .settings
             .lock()
@@ -198,6 +272,16 @@ impl InvokeState {
         let value = serde_json::to_value(&candidate)
             .map_err(|_| format!("Unable to serialize {SETTINGS_LABEL}"))?;
         storage::write_json_atomic(&self.path, &value, SETTINGS_LABEL)?;
+        if publish_setup || candidate.claude_setup != settings.claude_setup {
+            if let Err(error) = self.write_claude_setup(&candidate.claude_setup) {
+                // Restore the saved owner; memory advances only after publication.
+                let previous = serde_json::to_value(&*settings)
+                    .map_err(|_| format!("Unable to serialize {SETTINGS_LABEL}"))?;
+                storage::write_json_atomic(&self.path, &previous, SETTINGS_LABEL)
+                    .map_err(|rollback| format!("{error}; {rollback}"))?;
+                return Err(error);
+            }
+        }
         *settings = candidate.clone();
         Ok(candidate)
     }
@@ -381,6 +465,7 @@ fn parse_model_list(result: &Value) -> Result<(Vec<CatalogModel>, Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::ClaudeSetupKind;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -475,6 +560,225 @@ mod tests {
             .join("invoke.json")
     }
 
+    #[test]
+    fn legacy_setup_derives_from_both_invoke_modes() {
+        for enabled in [false, true] {
+            let path = temp_path("legacy-setup");
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, json!({ "invoke_mode": enabled }).to_string()).unwrap();
+            let state = InvokeState::load(path.clone());
+            let settings = state.settings().unwrap();
+            assert_eq!(
+                settings.claude_setup,
+                ClaudeSetup::from_invoke_mode(enabled)
+            );
+            assert_eq!(settings.invoke_mode, enabled);
+            state.publish_claude_setup().unwrap();
+            let shared: Value = serde_json::from_slice(
+                &fs::read(path.with_file_name("claude-setup.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                shared["setup"],
+                if enabled {
+                    "claude-codex"
+                } else {
+                    "claude-only"
+                }
+            );
+            fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn every_setup_mode_and_review_combination_derives_invoke_mode() {
+        use crate::types::{ClaudeOnlyReview, ClaudeRouterMode, ClaudeRouterOptions};
+        let path = temp_path("setup-combinations");
+        let state = InvokeState::load(path.clone());
+        for kind in [
+            ClaudeSetupKind::ClaudeOnly,
+            ClaudeSetupKind::ClaudeCodex,
+            ClaudeSetupKind::Router,
+        ] {
+            for mode in [
+                ClaudeRouterMode::Mixed,
+                ClaudeRouterMode::Claude,
+                ClaudeRouterMode::Codex,
+            ] {
+                for review in [ClaudeOnlyReview::On, ClaudeOnlyReview::Off] {
+                    let setup = ClaudeSetup {
+                        setup: kind,
+                        router: ClaudeRouterOptions {
+                            mode,
+                            claude_only_review: review,
+                            ..ClaudeRouterOptions::default()
+                        },
+                    };
+                    let expected = kind == ClaudeSetupKind::ClaudeCodex
+                        || (kind == ClaudeSetupKind::Router
+                            && (mode != ClaudeRouterMode::Claude
+                                || review == ClaudeOnlyReview::On));
+                    let saved = state.set_claude_setup(setup.clone()).unwrap();
+                    assert_eq!(saved.invoke_mode, expected);
+                    assert_eq!(saved.claude_setup, setup);
+                    assert_eq!(InvokeState::load(path.clone()).settings().unwrap(), saved);
+                }
+            }
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn setup_command_payload_rejects_unknown_options() {
+        let valid = serde_json::to_value(ClaudeSetup::default()).unwrap();
+        for pointer in [
+            "/setup",
+            "/router/mode",
+            "/router/claudeOnlyReview",
+            "/router/claudeAllowed/haiku/0",
+        ] {
+            let mut invalid = valid.clone();
+            *invalid.pointer_mut(pointer).unwrap() = json!("unknown");
+            assert!(
+                serde_json::from_value::<ClaudeSetup>(invalid).is_err(),
+                "{pointer}"
+            );
+        }
+        let mut unknown_model = valid;
+        unknown_model["router"]["claudeAllowed"]["unknown"] = json!(["low"]);
+        assert!(serde_json::from_value::<ClaudeSetup>(unknown_model).is_err());
+    }
+
+    #[test]
+    fn shared_setup_has_exact_shape_order_and_leaves_no_temporary_file() {
+        use crate::types::ClaudeEffort;
+        let path = temp_path("shared-setup");
+        let state = InvokeState::load(path.clone());
+        let mut setup = ClaudeSetup::default();
+        setup.router.claude_allowed.haiku =
+            vec![ClaudeEffort::Medium, ClaudeEffort::Low, ClaudeEffort::Low];
+        setup.router.claude_allowed.sonnet = vec![ClaudeEffort::Low];
+        setup.router.claude_allowed.opus.clear();
+        let saved = state.set_claude_setup(setup).unwrap();
+        let content = fs::read_to_string(path.with_file_name("claude-setup.json")).unwrap();
+        let shared: Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(
+            shared,
+            json!({
+                "version": 1,
+                "setup": "claude-only",
+                "router": {
+                    "mode": "mixed",
+                    "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
+                    "claudeOnlyReview": "on"
+                }
+            })
+        );
+        assert!(content.find("\"haiku\"").unwrap() < content.find("\"sonnet\"").unwrap());
+        assert!(content.find("\"sonnet\"").unwrap() < content.find("\"opus\"").unwrap());
+        assert_eq!(
+            saved.claude_setup.router.claude_allowed.haiku,
+            vec![ClaudeEffort::Low, ClaudeEffort::Medium]
+        );
+        state
+            .set_claude_setup(ClaudeSetup::from_invoke_mode(true))
+            .unwrap();
+        let mut names = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["claude-setup.json", "invoke.json"]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn failed_shared_setup_write_restores_saved_and_in_memory_policy() {
+        let path = temp_path("shared-setup-failure");
+        let state = InvokeState::load(path.clone());
+        let original = state.set_claude_setup(ClaudeSetup::default()).unwrap();
+        let shared_path = path.with_file_name("claude-setup.json");
+        fs::remove_file(&shared_path).unwrap();
+        fs::create_dir(&shared_path).unwrap();
+        assert!(state
+            .set_claude_setup(ClaudeSetup::from_invoke_mode(true))
+            .is_err());
+        assert_eq!(state.settings().unwrap(), original);
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().unwrap(),
+            original
+        );
+        let mut names = fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        names.sort();
+        assert_eq!(names, vec!["claude-setup.json", "invoke.json"]);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn locked_shared_setup_keeps_original_file_and_removes_temporary_file() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let path = temp_path("setup-locked");
+        let state = InvokeState::load(path.clone());
+        let original = state.set_claude_setup(ClaudeSetup::default()).unwrap();
+        let shared_path = path.with_file_name("claude-setup.json");
+        let content = fs::read(&shared_path).unwrap();
+        let held = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(&shared_path)
+            .unwrap();
+        assert!(state
+            .set_claude_setup(ClaudeSetup::from_invoke_mode(true))
+            .is_err());
+        assert_eq!(state.settings().unwrap(), original);
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().unwrap(),
+            original
+        );
+        drop(held);
+        assert_eq!(fs::read(&shared_path).unwrap(), content);
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 2);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn failed_policy_write_leaves_shared_setup_and_memory_unchanged() {
+        let path = temp_path("setup-owner-failure");
+        let state = InvokeState::load(path.clone());
+        state.publish_claude_setup().unwrap();
+        let shared_path = path.with_file_name("claude-setup.json");
+        let original_shared = fs::read(&shared_path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(state
+            .set_claude_setup(ClaudeSetup::from_invoke_mode(true))
+            .is_err());
+        assert_eq!(state.settings().unwrap(), InvokeSettings::default());
+        assert_eq!(fs::read(shared_path).unwrap(), original_shared);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn startup_publication_replaces_a_stale_projection() {
+        let path = temp_path("setup-startup");
+        let state = InvokeState::load(path.clone());
+        let saved = state
+            .set_claude_setup(ClaudeSetup::from_invoke_mode(true))
+            .unwrap();
+        fs::write(path.with_file_name("claude-setup.json"), "{}").unwrap();
+        let reloaded = InvokeState::load(path.clone());
+        reloaded.publish_claude_setup().unwrap();
+        let shared: Value =
+            serde_json::from_slice(&fs::read(path.with_file_name("claude-setup.json")).unwrap())
+                .unwrap();
+        assert_eq!(shared["setup"], "claude-codex");
+        assert_eq!(reloaded.settings().unwrap(), saved);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     fn catalog() -> Vec<CatalogModel> {
         vec![
             CatalogModel {
@@ -511,6 +815,7 @@ mod tests {
     fn enabled(profiles: Vec<InvocationProfile>) -> InvokeSettings {
         InvokeSettings {
             invoke_mode: true,
+            claude_setup: ClaudeSetup::from_invoke_mode(true),
             allowed_invocation_profiles: profiles,
             ..InvokeSettings::default()
         }

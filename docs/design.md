@@ -28,13 +28,17 @@ current task or a log from the Activity history it was opened from. Watch and
 Activity show uncached input, cached input with hit rate, and output when known.
 Codex's input total includes cached input; the hit rate uses that full total.
 
-The toolbar contains the vertically centered GSwitch mark and name, a compact
-Manual/Invoke segmented control, Refresh, Wake all, Add account, and a compact
-language menu. In Invoke Mode only, an icon button beside the segmented control
-opens one focused dialog listing each Codex model with a checkbox for each
-reasoning effort that model supports, and each ChatGPT card gains one
-**Allow in Invoke Mode** switch row. Manual Mode shows neither, so it looks like
-the plain switcher. When an Invoke Mode switch is waiting for the user to quit
+The toolbar contains the vertically centered GSwitch mark and name, a
+**Claude Code: <setup name>** button, Refresh, Wake all, Add account, and a compact
+language menu. The Claude Code button opens one wide setup panel with selectable
+Claude only, Claude + Codex, and Router cards, Save/Cancel, and a next-message
+scope note. Router exposes its mode, a three-model by five-effort worker grid,
+and Codex review on/off only in Claude mode. Claude + Codex and Router cards
+open the existing Invoke settings dialog; returning preserves the setup draft.
+Invoke Mode is derived from the saved setup and has no direct frontend toggle.
+When it is on, each ChatGPT card retains its **Allow in Invoke Mode** row.
+The setup button remains available during an Invoke pause. When an Invoke
+Mode switch is waiting for the user to quit
 Codex, the window shows it in the safety-notice position with both accounts and
 a **Cancel switch** action, and asks the operating system for attention. The current account is
 identified on its card rather than repeated beside the brand. The language

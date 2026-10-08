@@ -129,12 +129,128 @@ pub struct InvocationDefault {
     pub effort: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ClaudeSetupKind {
+    ClaudeOnly,
+    ClaudeCodex,
+    Router,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeRouterMode {
+    Mixed,
+    Claude,
+    Codex,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeOnlyReview {
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ClaudeEffort {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+/// Fixed fields reject unknown models and preserve worker order.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeAllowed {
+    pub haiku: Vec<ClaudeEffort>,
+    pub sonnet: Vec<ClaudeEffort>,
+    pub opus: Vec<ClaudeEffort>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClaudeRouterOptions {
+    pub mode: ClaudeRouterMode,
+    pub claude_allowed: ClaudeAllowed,
+    pub claude_only_review: ClaudeOnlyReview,
+}
+
+impl Default for ClaudeRouterOptions {
+    fn default() -> Self {
+        use ClaudeEffort::{High, Low, Max, Medium, Xhigh};
+        Self {
+            mode: ClaudeRouterMode::Mixed,
+            claude_allowed: ClaudeAllowed {
+                haiku: vec![Low, Medium],
+                sonnet: vec![Low, Medium, High, Xhigh, Max],
+                opus: vec![Low, Medium, High, Xhigh, Max],
+            },
+            claude_only_review: ClaudeOnlyReview::On,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ClaudeSetup {
+    pub setup: ClaudeSetupKind,
+    pub router: ClaudeRouterOptions,
+}
+
+impl ClaudeSetup {
+    pub fn from_invoke_mode(enabled: bool) -> Self {
+        Self {
+            setup: if enabled {
+                ClaudeSetupKind::ClaudeCodex
+            } else {
+                ClaudeSetupKind::ClaudeOnly
+            },
+            router: ClaudeRouterOptions::default(),
+        }
+    }
+
+    pub fn invoke_mode(&self) -> bool {
+        match self.setup {
+            ClaudeSetupKind::ClaudeOnly => false,
+            ClaudeSetupKind::ClaudeCodex => true,
+            ClaudeSetupKind::Router => {
+                self.router.mode != ClaudeRouterMode::Claude
+                    || self.router.claude_only_review == ClaudeOnlyReview::On
+            }
+        }
+    }
+
+    pub fn normalize(&mut self) {
+        for efforts in [
+            &mut self.router.claude_allowed.haiku,
+            &mut self.router.claude_allowed.sonnet,
+            &mut self.router.claude_allowed.opus,
+        ] {
+            efforts.sort();
+            efforts.dedup();
+        }
+    }
+}
+
+impl Default for ClaudeSetup {
+    fn default() -> Self {
+        Self::from_invoke_mode(false)
+    }
+}
+
 /// Human-owned Invoke Mode policy. Only the WebView commands change it; the
 /// Claude-facing surface can read it but never write it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(from = "InvokeSettingsInput")]
 pub struct InvokeSettings {
     #[serde(default)]
     pub invoke_mode: bool,
+    #[serde(default)]
+    pub claude_setup: ClaudeSetup,
     #[serde(default)]
     pub allowed_invocation_profiles: Vec<InvocationProfile>,
     /// Optional suggestions for Claude; request validation does not enforce them.
@@ -160,6 +276,49 @@ pub struct InvokeSettings {
     pub weekly_reserve: std::collections::BTreeMap<String, u8>,
 }
 
+// Missing setup is migrated from the old Invoke Mode flag at deserialization.
+#[derive(Deserialize)]
+struct InvokeSettingsInput {
+    #[serde(default)]
+    invoke_mode: bool,
+    #[serde(default)]
+    claude_setup: Option<ClaudeSetup>,
+    #[serde(default)]
+    allowed_invocation_profiles: Vec<InvocationProfile>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    task_defaults: std::collections::BTreeMap<String, InvocationDefault>,
+    #[serde(default)]
+    account_priority: Vec<String>,
+    #[serde(default = "default_preferred_min_remaining")]
+    preferred_min_remaining: u8,
+    #[serde(default = "default_max_concurrent_tasks")]
+    max_concurrent_tasks: u8,
+    #[serde(default)]
+    auto_wake: bool,
+    #[serde(default)]
+    weekly_reserve: std::collections::BTreeMap<String, u8>,
+}
+
+impl From<InvokeSettingsInput> for InvokeSettings {
+    fn from(input: InvokeSettingsInput) -> Self {
+        let mut claude_setup = input
+            .claude_setup
+            .unwrap_or_else(|| ClaudeSetup::from_invoke_mode(input.invoke_mode));
+        claude_setup.normalize();
+        Self {
+            invoke_mode: claude_setup.invoke_mode(),
+            claude_setup,
+            allowed_invocation_profiles: input.allowed_invocation_profiles,
+            task_defaults: input.task_defaults,
+            account_priority: input.account_priority,
+            preferred_min_remaining: input.preferred_min_remaining,
+            max_concurrent_tasks: input.max_concurrent_tasks,
+            auto_wake: input.auto_wake,
+            weekly_reserve: input.weekly_reserve,
+        }
+    }
+}
+
 pub const DEFAULT_PREFERRED_MIN_REMAINING: u8 = 20;
 pub const DEFAULT_MAX_CONCURRENT_TASKS: u8 = 2;
 pub const MAX_CONCURRENT_TASKS_LIMIT: u8 = 6;
@@ -176,6 +335,7 @@ impl Default for InvokeSettings {
     fn default() -> Self {
         Self {
             invoke_mode: false,
+            claude_setup: ClaudeSetup::default(),
             allowed_invocation_profiles: Vec::new(),
             task_defaults: std::collections::BTreeMap::new(),
             account_priority: Vec::new(),

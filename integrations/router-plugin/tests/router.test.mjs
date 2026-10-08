@@ -31,7 +31,21 @@ function fixture(t) {
   }
   const read = (relative) => JSON.parse(fs.readFileSync(path.join(data, relative), "utf8"));
   const hook = (event, extra = {}) => JSON.parse(run(["hook", event], { session_id: "s1", cwd: project, ...extra }));
-  const mode = (value) => run(["mode", "s1", project, value]);
+  const setupFile = path.join(home, ".gswitchtool", "claude-setup.json");
+  function setup(value) {
+    fs.mkdirSync(path.dirname(setupFile), { recursive: true });
+    fs.writeFileSync(setupFile, typeof value === "string" ? value : JSON.stringify(value));
+  }
+  function settings(value) {
+    const previous = fs.existsSync(setupFile) ? JSON.parse(fs.readFileSync(setupFile, "utf8")).router : {};
+    setup({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on", ...previous, ...value } });
+  }
+  const mode = (value) => {
+    if (value === "off") setup({ version: 1, setup: "claude-only", router: { mode: "mixed", claudeOnlyReview: "on" } });
+    else settings({ mode: value });
+    return run(["mode", "s1", project]);
+  };
+  const allowed = () => run(["mode", "s1", project]).split("\n")[1] + "\n";
   const agent = (extra = {}, top = {}) => hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "Do work\nSCOPE: src/*", ...extra }, ...top });
   const decision = (result) => result.hookSpecificOutput?.permissionDecision;
   function git(args, cwd = project) {
@@ -48,102 +62,109 @@ function fixture(t) {
     fs.writeFileSync(path.join(project, "file.txt"), "base\n");
     git(["add", "."]); git(["commit", "-m", "base"]);
   }
-  return { home, env, data, project, run, write, read, hook, mode, agent, decision, git, init };
+  return { home, env, data, project, run, write, read, hook, mode, setupFile, setup, settings, allowed, agent, decision, git, init };
 }
 
-test("mode and review resolve session > project > global, task words ignored", (t) => {
+test("missing, corrupt or invalid app setup is off; other setups ignore old router choices", (t) => {
   const f = fixture(t);
-  assert.match(f.run(["mode", "s1", f.project]), /Off \(global default\).*on \(global default\)/);
-  f.run(["default", f.project, "mixed", "--all"]);
-  assert.match(f.run(["mode", "s1", f.project]), /Mixed \(global default\)/);
-  f.run(["default", f.project, "claude"]);
-  f.run(["default", f.project, "review", "off"]);
-  assert.match(f.run(["mode", "s1", f.project, "do", "task"]), /Claude only \(project default\).*off \(project default\)/);
-  assert.match(f.run(["mode", "s1", f.project, "codex", "do", "task"]), /Codex only \(session\)/);
-  assert.match(f.run(["review", "s1", f.project, "on"]), /on \(session\)/);
-  f.run(["default", f.project, "--clear"]);
-  assert.match(f.run(["mode", "s2", f.project]), /Mixed \(global default\).*on \(global default\)/);
-  f.run(["default", f.project, "review", "off", "--all"]);
-  assert.match(f.run(["mode", "s2", f.project]), /off \(global default\)/);
-  f.run(["default", f.project, "--clear", "--all"]);
-  assert.equal(f.read("config.json").default, "off");
-  assert.equal(f.read("config.json").claudeOnlyReview, "on");
-  assert.deepEqual(f.read("config.json").projects, {});
+  f.write("config.json", { default: "codex", claudeOnlyReview: "off", claudeAllowed: {}, projects: { [f.project]: { mode: "mixed" } } });
+  f.write("sessions/s1.json", { mode: "claude", claudeOnlyReview: "off" });
+  const off = () => {
+    assert.match(f.run(["mode", "s1", f.project]), /^Router: Off \(GSwitch setup\)/);
+    assert.deepEqual(f.hook("UserPromptSubmit"), {});
+  };
+  off();
+  for (const value of ["{broken", "null", "[]", {}, { version: 2, setup: "router" },
+    { version: 1, setup: "router", router: { mode: "off", claudeOnlyReview: "on" } },
+    { version: 1, setup: "router", router: { mode: "mixed", claudeOnlyReview: "invalid" } }]) {
+    f.setup(value); off();
+  }
+  for (const setup of ["claude-only", "claude-codex"]) {
+    f.setup({ version: 1, setup, router: { mode: "mixed", claudeOnlyReview: "on" } }); off();
+  }
+  fs.rmSync(f.setupFile);
+  fs.mkdirSync(f.setupFile); off();
 });
 
-test("allow shows, replaces, orders, enables all, disables and resets globally", (t) => {
+test("the app alone supplies mode, review and allowed workers, read on each message", (t) => {
   const f = fixture(t);
-  const defaults = "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n";
-  assert.equal(f.run(["allow"]), defaults);
-  assert.equal(fs.existsSync(path.join(f.data, "config.json")), false);
-  f.write("config.json", { default: "claude", projects: { [projectKey(f.project)]: { claudeAllowed: { sonnet: ["max"] } } }, extra: "keep" });
-  assert.equal(f.run(["allow"]), defaults);
-  assert.equal(f.run(["allow", "sonnet", "high,low,high"]), "Claude workers allowed: haiku low, medium · sonnet low, high · opus low, medium, high, xhigh, max\n");
-  assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["low", "high"]);
-  f.run(["allow", "sonnet", "medium"]);
-  assert.deepEqual(f.read("config.json").claudeAllowed.sonnet, ["medium"]);
-  f.run(["allow", "opus", "all"]);
-  assert.deepEqual(f.read("config.json").claudeAllowed.opus, efforts);
-  assert.match(f.run(["allow"]), /sonnet medium · opus low, medium, high, xhigh, max/);
-  for (const { short } of models) f.run(["allow", short, "none"]);
-  assert.equal(f.run(["allow"]), "Claude workers allowed: none\n");
-  assert.equal(f.run(["allow", "--reset"]), defaults);
-  const cfg = f.read("config.json");
-  assert.deepEqual(cfg.claudeAllowed, defaultAllowed());
-  assert.equal(cfg.default, "claude"); assert.equal(cfg.extra, "keep");
-  assert.deepEqual(cfg.projects[projectKey(f.project)].claudeAllowed, { sonnet: ["max"] });
+  f.write("config.json", { default: "codex", claudeOnlyReview: "on", claudeAllowed: {}, projects: { [f.project]: { mode: "claude" } } });
+  f.write("sessions/s1.json", { mode: "off", claudeOnlyReview: "on" });
+  for (const mode of ["mixed", "claude", "codex"]) {
+    f.settings({ mode, claudeOnlyReview: "off", claudeAllowed: { haiku: ["medium"], sonnet: ["low"], opus: [] } });
+    const line = f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext;
+    assert.match(line, new RegExp(`^Router: mode=${mode} \\(GSwitch setup\\).*review in claude mode: off`));
+    assert.match(line, /Claude workers: haiku medium · sonnet low$/);
+  }
 });
 
-test("bad allow input names valid values and leaves config bytes unchanged", (t) => {
-  const f = fixture(t);
-  const invalid = [
-    ["unknown", "low"], ["fable", "all"], ["haiku", "ultra"], ["opus"], ["sonnet", "low,"],
-    ["sonnet", ""], ["haiku", "all,low"], ["haiku", "none,low"],
-    ["haiku", "low", "extra"], ["--reset", "extra"]
-  ];
-  for (const raw of [null, "{broken", JSON.stringify({ claudeAllowed: { sonnet: ["max"] }, extra: "keep" }, null, 4)]) {
-    if (raw !== null) f.write("config.json", raw);
-    for (const args of invalid) {
-      const result = spawnSync(process.execPath, [script, "allow", ...args], { cwd: f.home, env: f.env, encoding: "utf8", windowsHide: true });
-      assert.equal(result.status, 1);
-      assert.equal(result.stdout, ""); assert.equal(result.stderr.trim().split(/\r?\n/).length, 1);
-      if (["unknown", "fable", "--reset"].includes(args[0])) assert.equal(result.stderr, "Router: Invalid model. Valid models: haiku, sonnet, opus\n");
-      else assert.match(result.stderr, /Valid efforts: low, medium, high, xhigh, max/);
-      if (raw === null) assert.equal(fs.existsSync(path.join(f.data, "config.json")), false);
-      else assert.equal(fs.readFileSync(path.join(f.data, "config.json"), "utf8"), raw);
-    }
+test("mode arguments change no setup, config or worker state", (t) => {
+  const f = fixture(t); f.mode("mixed");
+  f.write("config.json", { default: "claude", extra: "keep" });
+  f.write("sessions/s1.json", { mode: "codex", claudeOnlyReview: "off", bindings: { a1: { scope: ["src/*"] } } });
+  const files = [f.setupFile, path.join(f.data, "config.json"), path.join(f.data, "sessions/s1.json")];
+  const before = files.map((file) => fs.readFileSync(file));
+  for (const words of [["codex"], ["off", "do", "task"], ["unknown"], ["it's a \"task\""], [""]]) {
+    assert.equal(f.run(["mode", "s1", f.project, ...words]), "Change the setup in GSwitch: Claude Code button.\n");
+    files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
+  }
+  const status = f.run(["mode", "s1", f.project]);
+  assert.match(status, /Mixed \(GSwitch setup\).*on \(GSwitch setup\)/);
+  assert.match(status, /Claude workers allowed: haiku low, medium/);
+  const skill = fs.readFileSync(path.join(plugin, "skills/mode/SKILL.md"), "utf8");
+  const injection = skill.match(/!`([^`]+)`/)[1];
+  assert.doesNotMatch(injection, /\$0|\$ARGUMENTS/);
+  assert.match(skill, /If any arguments were supplied/);
+  assert.match(skill, /Change the setup in GSwitch: Claude Code button\./);
+  assert.deepEqual(f.agent(), {});
+  const state = f.read("sessions/s1.json");
+  assert.equal(Object.hasOwn(state, "mode"), false);
+  assert.equal(Object.hasOwn(state, "claudeOnlyReview"), false);
+  assert.deepEqual(state.bindings.a1.scope, ["src/*"]);
+});
+
+test("appDataDir uses the same single-directory validation as dataDir", (t) => {
+  const f = fixture(t); f.mode("mixed");
+  const copy = path.join(f.home, "plugin"); fs.cpSync(plugin, copy, { recursive: true });
+  const entry = path.join(copy, "scripts/router.mjs");
+  const target = path.join(copy, "router-target.json");
+  for (const appDataDir of [undefined, "..", ".", "../other", "nested/dir", "/absolute", "C:\\outside", 42]) {
+    fs.writeFileSync(target, JSON.stringify({ appDataDir }));
+    assert.match(f.run(["mode", "s1", f.project], "", entry), /Mixed \(GSwitch setup\)/);
   }
 });
 
 test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays empty", (t) => {
   const f = fixture(t); f.mode("claude");
   for (const claudeAllowed of [undefined, null, [], "all", 5, { haiku: "low" }, { opus: null }, { sonnet: ["high", 42] }]) {
-    f.write("config.json", { claudeAllowed });
-    assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+    f.settings({ claudeAllowed });
+    assert.equal(f.allowed(), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
     assert.deepEqual(f.agent(), {});
     assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
     assert.deepEqual(f.agent({ subagent_type: "router:opus-low" }), {});
   }
-  f.write("config.json", "{broken");
+  f.setup("{broken");
+  assert.deepEqual(f.hook("UserPromptSubmit"), {});
+  f.setup({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on" } });
   assert.deepEqual(f.agent(), {});
-  assert.equal(f.run(["allow"]), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
-  f.write("config.json", { claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
-  assert.equal(f.run(["allow"]), "Claude workers allowed: sonnet low, max\n");
+  assert.equal(f.allowed(), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+  f.settings({ claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
+  assert.equal(f.allowed(), "Claude workers allowed: sonnet low, max\n");
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
   assert.match(f.agent({ subagent_type: "router:fable-low" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
   for (const allowed of [{}, { unknown: ["high"] }, { fable: ["max"] }, { fable: null }, { haiku: ["bogus"] }]) {
-    f.write("config.json", { claudeAllowed: allowed });
-    assert.equal(f.run(["allow"]), "Claude workers allowed: none\n");
+    f.settings({ claudeAllowed: allowed });
+    assert.equal(f.allowed(), "Claude workers allowed: none\n");
     assert.match(f.agent().hookSpecificOutput.permissionDecisionReason, /Allowed: none\./);
   }
 });
 
 test("allow-list denies before low usage, after model override and codex mode", (t) => {
   const f = fixture(t); f.mode("claude");
-  f.run(["allow", "opus", "none"]);
+  f.settings({ claudeAllowed: { ...defaultAllowed(), opus: [] } });
   assert.equal(f.agent({ subagent_type: "router:opus-low" }).hookSpecificOutput.permissionDecisionReason,
     "router:opus-low is not allowed. Allowed: haiku low, medium · sonnet low, medium, high, xhigh, max. Pick an allowed worker or send the task to Codex.");
-  f.run(["allow", "sonnet", "medium"]);
+  f.settings({ claudeAllowed: { ...defaultAllowed(), sonnet: ["medium"], opus: [] } });
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-medium" }, { tool_name: "Task" }), {});
   const pending = f.read("sessions/s1.json").pending.length;
   f.write("usage.json", { fiveHour: { usedPercentage: 80, resetsAt: Date.now() / 1000 + 3600 } });
@@ -156,7 +177,7 @@ test("allow-list denies before low usage, after model override and codex mode", 
 
 test("approval and low usage apply across every generated worker", (t) => {
   const f = fixture(t); f.mode("claude");
-  for (const { short } of models) f.run(["allow", short, "all"]);
+  f.settings({ claudeAllowed: Object.fromEntries(models.map(({ short }) => [short, efforts])) });
   for (const { short } of models) for (const effort of efforts) {
     const type = `router:${short}-${effort}`;
     const result = f.agent({ subagent_type: type, description: "Fix parser" });
@@ -211,21 +232,13 @@ test("generated agents check passes and catches drift, missing and extra agents"
   assert.match(f.run(["--check"], "", entry), /checked 15/);
 });
 
-test("Windows keys, slash-safe globs and project lookup", (t) => {
+test("Windows keys and slash-safe globs", () => {
   assert.equal(projectKey("C:\\Users\\Me\\project\\", "win32"), "C:/Users/Me/project");
   assert.equal(projectKey("C:/Users/Me/project/../project/", "win32"), "C:/Users/Me/project");
   assert.equal(matchesScope("src/test/a.js", "src\\**"), true);
   assert.equal(matchesScope("src/a.js", "./src/?.js"), true);
   assert.equal(matchesScope("src/nested/a.js", "src/*"), false);
   assert.equal(matchesScope("a.js", "**/*.js"), false);
-  const f = fixture(t);
-  f.run(["default", `${f.project}${path.sep}`, "claude"]);
-  assert.equal(Object.keys(f.read("config.json").projects)[0], projectKey(f.project));
-  if (process.platform === "win32") {
-    assert.match(f.run(["mode", "s1", f.project.toUpperCase().replaceAll("\\", "/")]), /Claude only \(project default\)/);
-    f.run(["default", f.project.toUpperCase(), "review", "off"]);
-    assert.equal(Object.keys(f.read("config.json").projects).length, 1);
-  }
 });
 
 test("corrupt files default safely, malformed hooks allow and log", (t) => {
@@ -261,12 +274,12 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (session) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max$/);
-  f.run(["allow", "sonnet", "max,low"]);
+  f.settings({ claudeAllowed: { ...defaultAllowed(), sonnet: ["max","low"] } });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max$/);
-  f.write("config.json", { claudeAllowed: {} });
+  f.settings({ claudeAllowed: {} });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none$/);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});
 });
@@ -284,7 +297,7 @@ test("Agent and Task permissions, fixed models, low usage, scope, approval and h
   f.write("usage.json", { fiveHour: { usedPercentage: 99, resetsAt: Date.now() / 1000 - 1 } });
   assert.equal(f.decision(f.agent({ prompt: "no scope" })), "deny");
   assert.equal(f.decision(f.agent({ prompt: "SCOPE: \nTask" })), "deny");
-  f.run(["allow", "opus", "high"]);
+  f.settings({ claudeAllowed: { ...defaultAllowed(), opus: ["high"] } });
   assert.equal(f.decision(f.agent({ subagent_type: "router:opus-high", description: "Fix parser" })), "ask");
   assert.match(f.agent({ subagent_type: "general-purpose" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
   assert.deepEqual(f.agent({ subagent_type: "Explore" }), {});
@@ -320,13 +333,13 @@ test("binding oldest matching launch, scope widening, edits, ignored files and f
   f.mode("off"); assert.deepEqual(edit("outside.js"), {});
 });
 
-test("SubagentStart inherits project mode and links ignored node and Cargo caches", (t) => {
+test("SubagentStart uses app setup and links ignored node and Cargo caches", (t) => {
   const f = fixture(t); f.init();
   fs.writeFileSync(path.join(f.project, "Cargo.toml"), "[package]\nname='fixture'\nversion='0.1.0'\n");
   f.git(["add", "Cargo.toml"]); f.git(["commit", "-m", "cargo"]);
   fs.mkdirSync(path.join(f.project, "node_modules")); fs.mkdirSync(path.join(f.project, "target"));
   const worker = path.join(f.home, "worker"); f.git(["worktree", "add", "-b", "worker", worker]);
-  f.run(["default", f.project, "claude"]); f.agent();
+  f.mode("claude"); f.agent();
   f.hook("SubagentStart", { cwd: worker, agent_id: "a1", agent_type: "router:haiku-low" });
   const bound = f.read("sessions/s1.json").bindings.a1;
   assert.equal(bound.cwd, worker);
@@ -371,10 +384,12 @@ test("statusline captures usage, passes exact stdin/output, removes expired wind
 
 test("statusline install/uninstall roundtrip, backups, absent and corrupt settings", (t) => {
   const f = fixture(t);
+  f.write("config.json", { default: "codex", claudeOnlyReview: "off", claudeAllowed: {}, projects: {} });
   const file = path.join(f.home, ".claude", "settings.json"); fs.mkdirSync(path.dirname(file));
   const original = { theme: "dark", permissions: { allow: ["Read"] }, statusLine: { type: "command", command: "echo hello", padding: 2 } };
   const raw = JSON.stringify(original, null, 4); fs.writeFileSync(file, raw);
   f.run(["statusline-install"]); f.run(["statusline-install"]);
+  assert.deepEqual(Object.keys(f.read("config.json")).sort(), ["statusLineCommand", "statusLinePrevious"]);
   assert.equal(f.read("config.json").statusLineCommand, "echo hello");
   assert.equal(fs.readFileSync(path.join(f.data, "backups", fs.readdirSync(path.join(f.data, "backups"))[0]), "utf8"), raw);
   assert.match(JSON.parse(fs.readFileSync(file, "utf8")).statusLine.command, /router\.mjs.*statusline/);
@@ -498,24 +513,26 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   assert.equal(manifest.version.split("-dev.")[1], codexManifest.version.split("-dev.")[1]);
   const marketplace = JSON.parse(fs.readFileSync(path.join(marketplaceRoot, ".claude-plugin/marketplace.json"), "utf8"));
   assert.deepEqual(marketplace.plugins.map((item) => item.name), ["codex-dev", "router-dev"]);
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dev, "router-target.json"), "utf8")), { dataDir: ".gswitchtool-router-dev" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dev, "router-target.json"), "utf8")), { $comment: "Added by Light505 for gswitchtool (2026).", dataDir: ".gswitchtool-router-dev", appDataDir: ".gswitchtool-dev" });
   assert.equal(fs.readFileSync(path.join(dev, "references.md"), "utf8"), "codex-dev:gswitch-review and /router-dev:mode");
   assert.equal(fs.readFileSync(path.join(dev, "templates/references.md"), "utf8"), "/router-dev:allow and codex-dev:gswitch-review");
   assert.deepEqual(fs.readdirSync(path.join(dev, "agents")).sort(), workerNames.map((name) => `${name}.md`).sort());
   for (const name of workerNames) assert.equal(fs.readFileSync(path.join(dev, "agents", `${name}.md`), "utf8"), fs.readFileSync(path.join(plugin, "agents", `${name}.md`), "utf8"));
   assert.equal(fs.readFileSync(path.join(dev, "templates/worker.md"), "utf8"), fs.readFileSync(path.join(plugin, "templates/worker.md"), "utf8"));
-  assert.match(fs.readFileSync(path.join(dev, "skills/allow/SKILL.md"), "utf8"), /disable-model-invocation: true/);
+  for (const name of ["allow", "default", "review"]) assert.equal(fs.existsSync(path.join(dev, "skills", name, "SKILL.md")), false);
   assert.match(f.run(["--check"], "", path.join(dev, "scripts/gen-agents.mjs")), /checked 15/);
   const devScript = path.join(dev, "scripts", "router.mjs");
-  f.run(["mode", "s1", f.project, "claude"], "", devScript);
-  assert.equal(fs.existsSync(path.join(f.home, ".gswitchtool-router-dev", "sessions/s1.json")), true);
+  const devSetup = path.join(f.home, ".gswitchtool-dev", "claude-setup.json");
+  fs.mkdirSync(path.dirname(devSetup), { recursive: true });
+  fs.writeFileSync(devSetup, JSON.stringify({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "off", claudeAllowed: { haiku: ["low"], sonnet: ["max"], opus: ["high"] } } }));
+  f.mode("codex");
+  assert.match(f.run(["mode", "s1", f.project], "", devScript), /Claude only \(GSwitch setup\).*off/);
   assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
   const call = (type) => JSON.parse(f.run(["hook", "PreToolUse"], { session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "SCOPE: src/*" } }, devScript));
   assert.deepEqual(call("router-dev:haiku-low"), {});
+  assert.equal(fs.existsSync(path.join(f.home, ".gswitchtool-router-dev", "sessions/s1.json")), true);
   assert.equal(call("router:haiku-low").hookSpecificOutput.permissionDecision, "deny");
-  f.run(["allow", "sonnet", "max"], "", devScript);
   assert.equal(call("router-dev:sonnet-max").hookSpecificOutput.permissionDecision, "ask");
-  f.run(["allow", "opus", "high"], "", devScript);
   assert.equal(call("router-dev:opus-low").hookSpecificOutput.permissionDecision, "deny");
   assert.equal(call("router-dev:opus-high").hookSpecificOutput?.permissionDecision, "ask");
   fs.writeFileSync(path.join(dev, "stale.md"), "stale");

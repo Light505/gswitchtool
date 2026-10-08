@@ -25,7 +25,12 @@ function fixture(t) {
     return result.stdout;
   };
   const hook = (event, extra = {}) => JSON.parse(run(["hook", event], { session_id: "s1", cwd: project, ...extra }));
-  const mode = (value, folder = project) => run(["mode", "s1", folder, value]);
+  const mode = (value, folder = project) => {
+    const file = path.join(home, ".gswitchtool", "claude-setup.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ version: 1, setup: value === "off" ? "claude-only" : "router", router: { mode: value === "off" ? "mixed" : value, claudeOnlyReview: "on" } }));
+    return run(["mode", "s1", folder]);
+  };
   function git(args, cwd = project) {
     const result = spawnSync("git", args, { cwd, env, encoding: "utf8", windowsHide: true });
     assert.equal(result.status, 0, result.stderr);
@@ -51,7 +56,7 @@ test("a session folder outside git does not break worker dependency links and mo
   const worker = path.join(f.home, "worker");
   f.git(["worktree", "add", "-b", "w1", worker]);
   fs.mkdirSync(path.join(f.project, "node_modules"));
-  assert.equal(f.run(["mode", "s1", folder, "mixed"]).split("\n")[1], notRepository(folder));
+  assert.equal(f.mode("mixed", folder).split("\n")[2], notRepository(folder));
   assert.deepEqual(f.hook("SubagentStart", { agent_type: "router:haiku-low", agent_id: "a1", cwd: worker }), {});
   assert.equal(fs.existsSync(path.join(worker, "node_modules")), true);
   assert.equal(fs.existsSync(path.join(f.data, "router.log")), false);
@@ -90,7 +95,7 @@ test("mode warns about a folder outside git only", (t) => {
   const f = fixture(t); f.init();
   assert.equal(f.mode("off").includes("is not a git repository"), false);
   const folder = path.join(f.home, "scratch"); fs.mkdirSync(folder);
-  assert.deepEqual(f.run(["mode", "s1", folder, "mixed"]).trimEnd().split("\n").slice(1), [notRepository(folder), baseRefWarning]);
+  assert.deepEqual(f.mode("mixed", folder).trimEnd().split("\n").slice(2), [notRepository(folder), baseRefWarning]);
 });
 
 test("identical copied settings are not worker changes in check or apply", (t) => {
@@ -132,13 +137,4 @@ test("statusline install replaces a router command from an older plugin path wit
   assert.deepEqual(f.read("config.json").statusLinePrevious, { type: "command", command: "echo hello" });
   f.run(["statusline-uninstall"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { statusLine: { type: "command", command: "echo hello" } });
-});
-
-test("mode skill passes only the mode word; an invalid mode only shows the current state", (t) => {
-  const f = fixture(t);
-  const skill = fs.readFileSync(path.join(plugin, "skills", "mode", "SKILL.md"), "utf8");
-  assert.match(skill, /router\.mjs" mode "\$\{CLAUDE_SESSION_ID\}" "\$\{CLAUDE_PROJECT_DIR\}" '\$0'`/);
-  assert.doesNotMatch(skill, /\$ARGUMENTS/);
-  assert.match(f.mode("it's a \"task\""), /^Router: Off \(global default\)/);
-  assert.equal(fs.existsSync(path.join(f.data, "sessions", "s1.json")), false);
 });

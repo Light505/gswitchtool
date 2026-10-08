@@ -11,6 +11,7 @@ import type {
   InvocationDefault,
   InvokeTaskKind,
   InvokeSettings,
+  ClaudeSetup,
   InvokePause,
   SwitchAccounts,
   LiveAccountView,
@@ -111,8 +112,8 @@ export const api = {
   cancelWake: (operationId: string) =>
     invoke<void>("cancel_wake", { operationId }),
   invokeSettings: () => invoke<InvokeSettings>("get_invoke_settings"),
-  setInvokeMode: (enabled: boolean) =>
-    invoke<InvokeSettings>("set_invoke_mode", { enabled }),
+  setClaudeSetup: (setup: ClaudeSetup) =>
+    invoke<InvokeSettings>("set_claude_setup", { setup }),
   modelCatalog: (refresh = false) =>
     invoke<CatalogModel[]>("get_model_catalog", { refresh }),
   setInvokeProfiles: (profiles: InvocationProfile[]) =>

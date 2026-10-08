@@ -28,13 +28,17 @@ function fixture(t) {
     assert.equal(r.status, 0, r.stderr);
     return r.stdout;
   }
+  function setup(router) {
+    const directory = path.join(home, ".gswitchtool"); fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, "claude-setup.json"), JSON.stringify({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on", ...router } }));
+  }
   function writeSession(value) {
     fs.mkdirSync(path.join(data, "sessions"), { recursive: true });
     fs.writeFileSync(path.join(data, "sessions/s1.json"), JSON.stringify(value));
   }
   const hook = (event, extra = {}) => JSON.parse(run(["hook", event], { session_id: "s1", cwd: project, ...extra }));
   const resultArgs = (...flags) => ["result", "s1", project, "--task", "t1", "--difficulty", "small", "--worker", "router:haiku-low", "--outcome", "pass", ...flags];
-  return { home, env, project, data, file, invoke, run, writeSession, hook, resultArgs };
+  return { home, env, project, data, file, invoke, run, setup, writeSession, hook, resultArgs };
 }
 
 test("cost approval has all 15 prices, exactly six expensive workers and unknown asks", (t) => {
@@ -49,8 +53,8 @@ test("cost approval has all 15 prices, exactly six expensive workers and unknown
   for (const name of ["opus-medium", "opus-low", "sonnet-high"]) assert.equal(needsApproval(name), false, name);
   for (const name of ["unknown", "toString", "__proto__", undefined]) assert.equal(needsApproval(name), true);
   const f = fixture(t);
-  f.writeSession({ mode: "claude" });
-  fs.writeFileSync(path.join(f.data, "config.json"), JSON.stringify({ claudeAllowed: { haiku: ["max"], sonnet: ["high", "xhigh", "max"], opus: ["low", "medium", "high", "xhigh", "max"] } }));
+  f.setup({}); f.writeSession({});
+  f.setup({ claudeAllowed: { haiku: ["max"], sonnet: ["high", "xhigh", "max"], opus: ["low", "medium", "high", "xhigh", "max"] } });
   for (const name of [...expensive, "opus-medium", "opus-low", "sonnet-high"]) {
     const response = f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: `router:${name}`, prompt: "SCOPE: src/*" } });
     assert.equal(response.hookSpecificOutput?.permissionDecision, expensive.includes(name) ? "ask" : undefined, name);
@@ -102,7 +106,7 @@ test("result rejects missing, duplicate, unknown and invalid values in one line 
 
 test("SubagentStop records only bound router workers, nullable metrics and key-only raw", (t) => {
   const f = fixture(t);
-  f.writeSession({ mode: "claude", projectDir: projectKey(f.project), bindings: {
+  f.setup({}); f.writeSession({ projectDir: projectKey(f.project), bindings: {
     a1: { type: "router:haiku-low", scope: ["src/*"], cwd: path.join(f.home, "worker") },
     other: { type: "general-purpose", scope: [] }
   } });
@@ -121,7 +125,7 @@ test("SubagentStop records only bound router workers, nullable metrics and key-o
 
 test("PostToolUse Agent/Task records worker, response child ID, scope and supplied telemetry", (t) => {
   const f = fixture(t);
-  f.writeSession({ mode: "claude", projectDir: projectKey(f.project), bindings: { a1: { type: "router:sonnet-high", scope: ["src/*", "tests/*"] } } });
+  f.setup({}); f.writeSession({ projectDir: projectKey(f.project), bindings: { a1: { type: "router:sonnet-high", scope: ["src/*", "tests/*"] } } });
   const input = { agent_id: "parent", tool_name: "Agent", tool_input: { subagent_type: "router:sonnet-high", prompt: "SECRET_VALUE\nSCOPE: src/*" },
     tool_response: { agentId: "a1", totalDurationMs: 125, totalTokens: 987, usage: { total_tokens: 999 }, content: "SECRET_VALUE" }, duration_ms: 100 };
   assert.deepEqual(f.hook("PostToolUse", input), {});
@@ -166,7 +170,7 @@ test("telemetry accepts usage totals, counts, camel case and zero; ignores inval
 
 test("completion observations continue after routing is disabled", (t) => {
   const f = fixture(t);
-  f.writeSession({ mode: "off", bindings: { a1: { type: "router:haiku-low", scope: ["a/*"] } } });
+  f.writeSession({ bindings: { a1: { type: "router:haiku-low", scope: ["a/*"] } } });
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1" }), {});
   assert.deepEqual(f.hook("PostToolUse", { tool_name: "Task", tool_input: { subagent_type: "router:haiku-low" }, tool_response: { agentId: "a1" } }), {});
   assert.equal(readResults(f.file).length, 2);
@@ -317,7 +321,7 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
     { type: "assistant", uuid: "x2", timestamp: at("12"), message: { id: "m2", model: "claude-haiku-5-5", usage } },
     { type: "assistant", uuid: "x3", timestamp: at("14"), message: { id: "m2", model: "claude-haiku-5-5", usage } }
   ].map((line) => JSON.stringify(line)).join("\n") + "\n");
-  f.writeSession({ mode: "claude", bindings: { a1: { type: "router:haiku-low", scope: [] } } });
+  f.setup({}); f.writeSession({ bindings: { a1: { type: "router:haiku-low", scope: [] } } });
   f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
   f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
   const r = readResults(f.file)[0];
@@ -343,7 +347,7 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
 
 test("hooks always return JSON on malformed inputs and unwritable results, never log payload values", (t) => {
   const f = fixture(t);
-  f.writeSession({ mode: "claude", bindings: { a1: { type: "router:haiku-low", scope: [] } } });
+  f.setup({}); f.writeSession({ bindings: { a1: { type: "router:haiku-low", scope: [] } } });
   for (const raw of ["{bad SECRET_VALUE", "null", "[]", "42", JSON.stringify({ session_id: {}, cwd: {}, agent_id: [], tool_input: [] })]) {
     for (const event of ["SubagentStop", "PostToolUse"]) assert.doesNotThrow(() => JSON.parse(f.run(["hook", event], raw)));
   }

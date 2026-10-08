@@ -13,7 +13,7 @@ use crate::{
     invoke::{self, InvokeState},
     migration, quota, switching,
     types::{
-        AccountView, AppSnapshot, CatalogModel, CodexCliInfo, CodexCliUpdateFailure,
+        AccountView, AppSnapshot, CatalogModel, ClaudeSetup, CodexCliInfo, CodexCliUpdateFailure,
         CodexCliUpdateStatus, ExportResult, ImportResult, InvocationProfile, InvokeSettings,
         LiveAccountView, MigrationPreview, OAuthLoginStart, OAuthLoginStatus, QuotaRefreshFailure,
         QuotaRefreshFailureCode, QuotaView, ResetCreditFailure, ResetCreditFailureCode,
@@ -575,14 +575,15 @@ pub fn resume_invoke(coordinator: State<'_, Arc<Coordinator>>) {
     coordinator.resume();
 }
 
-/// Turning Invoke Mode on or off also ends a pause: the user has decided.
+/// A human setup decision ends a pause after both files are saved.
 #[tauri::command]
-pub fn set_invoke_mode(
+pub async fn set_claude_setup(
     invoke: State<'_, InvokeState>,
     coordinator: State<'_, Arc<Coordinator>>,
-    enabled: bool,
+    setup: ClaudeSetup,
 ) -> Result<InvokeSettings, String> {
-    let settings = invoke.set_invoke_mode(enabled)?;
+    let invoke = invoke.inner().clone();
+    let settings = run_blocking(move || invoke.set_claude_setup(setup)).await?;
     coordinator.resume();
     Ok(settings)
 }

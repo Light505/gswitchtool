@@ -26,7 +26,6 @@ import {
   Plus,
   RefreshCw,
   ShieldAlert,
-  SlidersHorizontal,
   Terminal,
   Trash2,
   Upload,
@@ -68,6 +67,10 @@ import { quotaRefreshDue } from "./refreshPolicy";
 import type {
   AccountView,
   CatalogModel,
+  ClaudeSetup,
+  ClaudeSetupKind,
+  ClaudeModel,
+  ClaudeEffort,
   CodexCliInfo,
   CodexCliUpdateFailure,
   InvocationProfile,
@@ -114,7 +117,7 @@ type Dialog =
   | "export"
   | "wake"
   | "codex-cli"
-  | "invoke-settings"
+  | "claude-setup"
   | "activity"
   | null;
 
@@ -1528,6 +1531,122 @@ function orderedAccounts(accounts: AccountView[], priority: string[]) {
   ).map(({ account }) => account);
 }
 
+function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved, t }: {
+  settings: InvokeSettings;
+  accounts: AccountView[];
+  onClose: () => void;
+  onSaved: (settings: InvokeSettings) => void;
+  onInvokeSaved: (settings: InvokeSettings) => void;
+  t: Translator;
+}) {
+  const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
+  const [showInvokeSettings, setShowInvokeSettings] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const setups: ClaudeSetupKind[] = ["claude-only", "claude-codex", "router"];
+  const models: ClaudeModel[] = ["haiku", "sonnet", "opus"];
+  const efforts: ClaudeEffort[] = ["low", "medium", "high", "xhigh", "max"];
+  const toggleWorker = (model: ClaudeModel, effort: ClaudeEffort) => {
+    setDraft((current) => {
+      const selected = current.router.claudeAllowed[model];
+      return { ...current, router: { ...current.router, claudeAllowed: {
+        ...current.router.claudeAllowed,
+        [model]: efforts.filter((value) => value === effort ? !selected.includes(value) : selected.includes(value)),
+      } } };
+    });
+  };
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      onSaved(await api.setClaudeSetup(draft));
+    } catch (failure) {
+      setError(friendlyError(t, failure, t("claudeSetup.saveError")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (showInvokeSettings) {
+    return <InvokeSettingsDialog accounts={accounts} onClose={() => setShowInvokeSettings(false)}
+      onSaved={(saved) => { onInvokeSaved(saved); setShowInvokeSettings(false); }} settings={settings} t={t} />;
+  }
+  return (
+    <Modal dismissible={!saving} onClose={onClose} t={t} title={t("claudeSetup.title")} wide>
+      <div className="claude-setup-panel">
+        <div aria-label={t("claudeSetup.choose")} className="claude-setup-cards" role="group">
+          {setups.map((setup) => (
+            <div className="claude-setup-card" data-selected={draft.setup === setup} key={setup}>
+              <button aria-pressed={draft.setup === setup} className="claude-setup-choice" disabled={saving}
+                onClick={() => setDraft((current) => ({ ...current, setup }))} type="button">
+                <strong>{t(`claudeSetup.name.${setup}`)}</strong>
+                <span>{t(`claudeSetup.description.${setup}`)}</span>
+              </button>
+              {setup !== "claude-only" ? (
+                <button className="link-button" disabled={saving} onClick={() => setShowInvokeSettings(true)} type="button">
+                  {t("claudeSetup.invokeSettings")}
+                </button>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {draft.setup === "router" ? (
+          <div className="claude-router-options">
+            <label className="claude-router-mode">
+              <span>{t("claudeSetup.mode")}</span>
+              <select disabled={saving} value={draft.router.mode}
+                onChange={(event) => setDraft((current) => ({ ...current, router: { ...current.router, mode: event.target.value as ClaudeSetup["router"]["mode"] } }))}>
+                <option value="mixed">{t("claudeSetup.mode.mixed")}</option>
+                <option value="claude">{t("claudeSetup.mode.claude")}</option>
+                <option value="codex">{t("claudeSetup.mode.codex")}</option>
+              </select>
+            </label>
+            <div className="claude-worker-grid">
+              <table>
+                <caption>{t("claudeSetup.workers")}</caption>
+                <thead><tr><th scope="col">{t("claudeSetup.model")}</th>{efforts.map((effort) => <th key={effort} scope="col">{effort}</th>)}</tr></thead>
+                <tbody>
+                  {models.map((model) => (
+                    <tr key={model}>
+                      <th scope="row">{model === "haiku" ? "Haiku" : model === "sonnet" ? "Sonnet" : "Opus"}</th>
+                      {efforts.map((effort) => (
+                        <td key={effort}>
+                          <input aria-label={t("claudeSetup.workerEffort", { model, effort })}
+                            checked={draft.router.claudeAllowed[model].includes(effort)} disabled={saving}
+                            onChange={() => toggleWorker(model, effort)} type="checkbox" />
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="claude-setup-note">{t("claudeSetup.costNote")}</p>
+            {draft.router.mode === "claude" ? (
+              <label className="claude-router-mode">
+                <span>{t("claudeSetup.review")}</span>
+                <select disabled={saving} value={draft.router.claudeOnlyReview}
+                  onChange={(event) => setDraft((current) => ({ ...current, router: { ...current.router, claudeOnlyReview: event.target.value as "on" | "off" } }))}>
+                  <option value="on">{t("claudeSetup.on")}</option>
+                  <option value="off">{t("claudeSetup.off")}</option>
+                </select>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+        {error ? <p className="remove-error" role="alert">{error}</p> : null}
+        <p className="claude-setup-note">{t("claudeSetup.footer")}</p>
+        <div className="modal-actions">
+          <button className="button button-quiet" disabled={saving} onClick={onClose} type="button">{t("common.cancel")}</button>
+          <button className="button button-primary" disabled={saving} onClick={() => void save()} type="button">
+            {saving ? <LoaderCircle className="spin" size={15} /> : null}{t("common.save")}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   settings: InvokeSettings;
   accounts: AccountView[];
@@ -1814,7 +1933,6 @@ export default function App() {
   const [migrationScanned, setMigrationScanned] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [invokeSettings, setInvokeSettings] = useState<InvokeSettings | null>(null);
-  const [invokeChanging, setInvokeChanging] = useState(false);
   const [failoverWaiting, setFailoverWaiting] = useState<SwitchAccounts | null>(null);
   const [failoverCancelling, setFailoverCancelling] = useState(false);
   const [invokePause, setInvokePause] = useState<InvokePause | null>(null);
@@ -2340,17 +2458,6 @@ export default function App() {
   const accountName = (id: string) => {
     const account = accounts.find((saved) => saved.id === id);
     return account ? accountPrimaryName(account) : t("common.unknown");
-  };
-
-  const changeInvokeMode = async (enabled: boolean) => {
-    setInvokeChanging(true);
-    try {
-      setInvokeSettings(await api.setInvokeMode(enabled));
-    } catch (error) {
-      setNotice({ kind: "error", text: friendlyError(t, error, t("error.invokeMode")) });
-    } finally {
-      setInvokeChanging(false);
-    }
   };
 
   const changeAccountInvokeAllowed = async (account: AccountView, allowed: boolean) => {
@@ -3236,33 +3343,9 @@ export default function App() {
         </div>
         <div className="toolbar-actions">
           {invokeSettings ? (
-            <div aria-label={t("invoke.mode")} className="mode-toggle" role="group">
-              {([false, true] as const).map((enabled) => (
-                <button
-                  aria-pressed={invokeSettings.invoke_mode === enabled}
-                  className={enabled ? "mode-invoke" : undefined}
-                  disabled={invokeChanging || storageRecovery}
-                  key={String(enabled)}
-                  onClick={() => {
-                    if (invokeSettings.invoke_mode !== enabled) void changeInvokeMode(enabled);
-                  }}
-                  type="button"
-                >
-                  {t(enabled ? "invoke.invoke" : "invoke.manual")}
-                </button>
-              ))}
-            </div>
-          ) : null}
-          {invokeSettings?.invoke_mode ? (
-            <button
-              aria-label={t("invoke.settings")}
-              className="icon-button"
-              disabled={storageRecovery}
-              onClick={() => setDialog("invoke-settings")}
-              title={t("invoke.settings")}
-              type="button"
-            >
-              <SlidersHorizontal size={17} />
+            <button className="button button-secondary claude-setup-button" disabled={storageRecovery}
+              onClick={() => setDialog("claude-setup")} type="button">
+              {t("claudeSetup.header", { setup: t(`claudeSetup.name.${invokeSettings.claude_setup.setup}`) })}
             </button>
           ) : null}
           <button className="button button-quiet" disabled={loading || busy !== null || refreshProgress !== null || storageRecovery} onClick={() => void refreshAll()} type="button">
@@ -4163,14 +4246,19 @@ export default function App() {
         </Modal>
       ) : null}
 
-      {dialog === "invoke-settings" && invokeSettings ? (
-        <InvokeSettingsDialog
+      {dialog === "claude-setup" && invokeSettings ? (
+        <ClaudeSetupDialog
           accounts={accounts.filter((account) => account.kind === "chat_gpt")}
           onClose={() => setDialog(null)}
+          onInvokeSaved={(saved) => {
+            setInvokeSettings(saved);
+            setNotice({ kind: "success", text: t("invoke.saved") });
+          }}
           onSaved={(saved) => {
             setInvokeSettings(saved);
+            setInvokePause(null);
             setDialog(null);
-            setNotice({ kind: "success", text: t("invoke.saved") });
+            setNotice({ kind: "success", text: t("claudeSetup.saved") });
           }}
           settings={invokeSettings}
           t={t}

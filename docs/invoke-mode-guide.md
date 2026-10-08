@@ -10,8 +10,9 @@ You stay in control:
 - **You** add accounts, turn Invoke Mode on or off, choose which models and
   reasoning efforts Claude may use, and choose which accounts may be used
   automatically.
-- **Claude** sends work to Codex only when you ask, and may ask Codex to review
-  its own changes while Invoke Mode is on.
+- **Claude** follows the setup you choose in GSwitch's **Claude Code** panel:
+  works itself, delegates suitable tasks, or follows the router. Codex tasks
+  and reviews still require Invoke Mode.
 - **GSwitch** checks every request, and when an account runs out of usage it
   switches to another allowed account and resumes the same Codex conversation.
 
@@ -21,7 +22,7 @@ You stay in control:
 | --- | --- | --- | --- |
 | **GSwitch Claude Tool** (the app) | Windows app that holds your Codex accounts and decides what Codex may run | Release installer, then updates itself | Nothing else; works without Claude |
 | **Codex plugin** (`codex@gswitchtool`) | Claude Code plugin that sends Codex tasks to the app and shows its status (`/codex:...`) | Claude Code plugin list (`gswitchtool`) | The app open with Invoke Mode on, to run Codex |
-| **Router plugin** (`router@gswitchtool`, optional, not released yet) | Claude Code plugin that picks who writes each coding task: a Claude worker or Codex (`/router:...`) | Same plugin list, once released; until then Dev only | The Codex plugin and Invoke Mode for modes `mixed` and `codex` |
+| **Router plugin** (`router@gswitchtool`, optional) | Claude Code plugin that picks who writes each coding task: a Claude worker or Codex (`/router:...`) | Same plugin list, installed separately; ships with the setup panel | The Codex plugin and Invoke Mode for modes `mixed` and `codex` |
 
 Only the app holds accounts and rules. The plugins ask; the app checks every
 request against your settings and runs it or refuses it. The app and the
@@ -168,6 +169,28 @@ Keep GSwitch Claude Tool open while you use Invoke Mode. Switching back to
 **Manual** turns everything off: Claude cannot use Codex through GSwitch and no
 account changes automatically.
 
+### Choose the Claude Code setup
+
+Open the **Claude Code** button in GSwitch. This panel is the only place to
+change the setup:
+
+| Setup | How Claude works |
+| --- | --- |
+| **Claude only** | Claude does the work itself. It does not use `gswitch-delegate`, `gswitch-review` or `/codex` commands unless you ask. |
+| **Claude + Codex** | Claude sends bounded, self-contained coding tasks to Codex through `gswitch-delegate`. It keeps decisions, design, debugging that needs the conversation, and edits shorter than their brief. After non-trivial changes it runs `gswitch-review`. |
+| **Router** | Claude follows the router's worker choices, mode, review setting and allowed workers, all chosen in this panel. Install both plugins for this setup. |
+
+The app saves `claude-setup.json` in `~/.gswitchtool` (Dev:
+`~/.gswitchtool-dev`). The Codex plugin reads it on every message and adds one
+`GSwitch setup:` context line. In Router setup, the router also adds its
+`Router:` line. If that line is absent, Claude works as Claude only and tells
+you once that the router plugin is not installed. Missing, unreadable or
+invalid setup files add no setup line and leave the router off; open GSwitch
+once and choose a setup.
+
+`/codex:invoke-status` shows the setup first. `/codex:gswitch-invoke <task>`
+still works for a one-off task in any setup when Invoke Mode is on.
+
 ## 4. Install the Claude Code plugin
 
 In Claude Code, add this repository's plugin. It replaces OpenAI's stock Codex
@@ -185,7 +208,7 @@ This installs the plugin from GitHub `main`. To update it after `main` changes:
 /plugin update codex@gswitchtool
 ```
 
-The router plugin is optional and not released yet; see [`router-guide.md`](./router-guide.md#install).
+The optional router plugin ships with the Claude Code setup panel; see [`router-guide.md`](./router-guide.md#install).
 
 Start a new Claude Code session after installing or updating the plugin. To try
 plugin changes that are not on `main` yet, see
@@ -197,10 +220,11 @@ plugin changes that are not on `main` yet, see
 | --- | --- |
 | `/codex:gswitch-invoke <task>` | Claude hands that task to Codex. |
 | `/codex:gswitch-invoke` | For the rest of this session, Claude hands Codex the work that suits it and keeps the rest. |
-| Nothing | Claude does the work itself. While Invoke Mode is on, it may ask Codex for a read-only review of a non-trivial change before reporting back. |
+| An ordinary task | Claude follows the setup chosen in GSwitch's Claude Code panel. With no setup known, it keeps the previous defaults: Claude does the work and may request a review while Invoke Mode is on. |
 
-While Invoke Mode is on, the [router plugin](./router-guide.md) can start Codex
-through `gswitch-delegate` when its rules send a task to Codex.
+While Invoke Mode is on, **Claude + Codex** lets Claude choose suitable tasks
+for `gswitch-delegate`; **Router** lets the [router plugin](./router-guide.md)
+choose them using its rules.
 
 Claude picks a model and effort from your allowed list: lighter for simple work,
 stronger for complex work. Each Codex result ends with a line like:

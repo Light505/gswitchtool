@@ -1,7 +1,7 @@
-import type { AccountView, AppSnapshot, QuotaView } from "../src/types";
+import type { AccountView, AppSnapshot, ClaudeSetup, InvokeSettings, QuotaView } from "../src/types";
 
 // This file is loaded only by `vite --mode demo`. It contains display data,
-// never imports Tauri, and rejects every account mutation.
+// never imports Tauri, and rejects every account mutation. Setup changes are local mocks.
 if ("__TAURI_INTERNALS__" in window) {
   throw new Error("The README demo cannot run inside Tauri.");
 }
@@ -48,21 +48,44 @@ const snapshot: AppSnapshot = {
   live: { status: "ready", credential_store: "file", account: accounts[0] },
 };
 
+let invokeSettings: InvokeSettings = {
+  invoke_mode: true,
+  claude_setup: {
+    setup: "claude-codex",
+    router: {
+      mode: "mixed",
+      claudeAllowed: {
+        haiku: ["low", "medium"],
+        sonnet: ["low", "medium", "high", "xhigh", "max"],
+        opus: ["low", "medium", "high", "xhigh", "max"],
+      },
+      claudeOnlyReview: "on",
+    },
+  },
+  allowed_invocation_profiles: [{ model: "gpt-6-sol", reasoning_efforts: ["low", "medium", "high"] }],
+  task_defaults: {
+    review: { model: "gpt-6-sol", effort: "high" },
+    research: { model: "gpt-6-sol", effort: "medium" },
+  },
+  account_priority: ["demo-1", "demo-3", "demo-4"],
+  preferred_min_remaining: 20,
+  max_concurrent_tasks: 2,
+};
+
 const displayOnly = {
   appSnapshot: async () => snapshot,
   accountQuota: async (id: string) => quotas[id] || { account_id: id, status: "unknown" },
   codexCliInfo: async () => ({ version: "0.158.0", latest_version: "0.158.0", supports_update: true, update_status: "current" as const }),
-  invokeSettings: async () => ({
-    invoke_mode: true,
-    allowed_invocation_profiles: [{ model: "gpt-6-sol", reasoning_efforts: ["low", "medium", "high"] }],
-    task_defaults: {
-      review: { model: "gpt-6-sol", effort: "high" },
-      research: { model: "gpt-6-sol", effort: "medium" },
-    },
-    account_priority: ["demo-1", "demo-3", "demo-4"],
-    preferred_min_remaining: 20,
-    max_concurrent_tasks: 2,
-  }),
+  invokeSettings: async () => invokeSettings,
+  setClaudeSetup: async (setup: ClaudeSetup) => {
+    invokeSettings = {
+      ...invokeSettings,
+      claude_setup: structuredClone(setup),
+      invoke_mode: setup.setup === "claude-codex" || (setup.setup === "router"
+        && (setup.router.mode !== "claude" || setup.router.claudeOnlyReview === "on")),
+    };
+    return invokeSettings;
+  },
   onInvokeAccountSwitched: async () => () => undefined,
   invokeFailover: async () => null,
   onInvokeFailoverWaiting: async () => () => undefined,
@@ -109,10 +132,11 @@ const displayOnly = {
   ],
 };
 
+// The proxy deliberately rejects API operations absent from the display mock.
 export const api = new Proxy(displayOnly, {
   get(target, property, receiver) {
     if (Reflect.has(target, property)) return Reflect.get(target, property, receiver);
     throw new Error(`The README demo forbids operation ${String(property)}.`);
   },
-}) as typeof import("../src/api").api;
+}) as unknown as typeof import("../src/api").api;
 export type UpdateDelivery = import("../src/api").UpdateDelivery;

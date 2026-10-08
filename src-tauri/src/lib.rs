@@ -161,6 +161,9 @@ pub fn run() {
             });
             app.manage(state.clone());
             let invoke = invoke::InvokeState::load(config_dir.join("invoke.json"));
+            if let Err(error) = invoke.publish_claude_setup() {
+                trace.step(&format!("Claude Code setup publication failed: {error}"));
+            }
             let switched = app.handle().clone();
             let waiting = app.handle().clone();
             let paused = app.handle().clone();
@@ -325,7 +328,7 @@ pub fn run() {
             commands::get_wake_operation,
             commands::cancel_wake,
             commands::get_invoke_settings,
-            commands::set_invoke_mode,
+            commands::set_claude_setup,
             commands::get_model_catalog,
             commands::set_invoke_profiles,
             commands::set_invoke_preferences,

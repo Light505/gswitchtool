@@ -13,6 +13,9 @@ function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "router-safety-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const setupDir = path.join(home, ".gswitchtool");
+  fs.mkdirSync(setupDir);
+  fs.writeFileSync(path.join(setupDir, "claude-setup.json"), JSON.stringify({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on" } }));
   const data = path.join(home, ".gswitchtool-router");
   const project = path.join(home, "project");
   fs.mkdirSync(project);
@@ -23,7 +26,7 @@ function fixture(t) {
   };
   const session = (value) => {
     fs.mkdirSync(path.join(data, "sessions"), { recursive: true });
-    fs.writeFileSync(path.join(data, "sessions", "s1.json"), JSON.stringify({ mode: "claude", ...value }));
+    fs.writeFileSync(path.join(data, "sessions", "s1.json"), JSON.stringify(value));
   };
   const edit = (extra = {}) => hook("PreToolUse", { tool_name: "Write", tool_input: { file_path: "src/a.js" }, ...extra });
   return { home, data, project, hook, session, edit };

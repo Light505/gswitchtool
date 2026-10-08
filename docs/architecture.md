@@ -46,10 +46,41 @@ opened twice while Dev and the installed build can run side by side.
 | Quota and reset-credit facts | Codex/OpenAI response | Normalize and cache them without inventing missing values |
 | External Codex process state | Operating system | Detect known or uninspectable runtimes before sensitive operations |
 | Pending switch/reset recovery | GSwitch account store | Persist enough intent to resume safely and idempotently |
-| Invoke Mode policy (mode, allowed model/effort pairs, optional task defaults) | Rust-owned `invoke.json` | Change it only from WebView commands; keep task defaults inside the allowed model/effort pairs |
+| Claude Code setup and Invoke policy (derived mode, allowed Codex pairs, task defaults) | Rust-owned `invoke.json` | Change it only from WebView commands; keep task defaults inside the allowed model/effort pairs |
 | Invoke Mode activity and delegated-task token totals | Rust-owned `activity.jsonl` | Store task metadata and aggregate token counts only; read token totals from Codex rollouts without retaining prompts or output |
 | Per-account Invoke eligibility | `accounts.json` (`invoke_allowed`) | Default to not allowed; keep the choice across a new sign-in for the same identity |
 | Screen and dialog state | React component tree | Keep it transient, derived, and free of stored secrets; selected saved-account IDs are permitted, credentials and export paths are not |
+
+The header's **Claude Code** panel is the only setup editor. Rust saves
+`claude_setup` in `invoke.json` and derives Invoke Mode: off for `claude-only`,
+on for `claude-codex`, and on for `router` unless its mode is `claude` with
+review `off`. Missing setup in an older file derives from its Invoke Mode flag.
+
+Rust atomically publishes the secret-free `claude-setup.json` projection in the
+existing installed/Dev data folder at startup and on setup saves. Plugins read
+this file; they do not own or mutate the setup. Its version-1 shape is exactly:
+
+```json
+{
+  "version": 1,
+  "setup": "claude-only",
+  "router": {
+    "mode": "mixed",
+    "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
+    "claudeOnlyReview": "on"
+  }
+}
+```
+
+`router` is always present. Setup values are `claude-only`, `claude-codex`,
+and `router`; modes are `mixed`, `claude`, and `codex`; review is `on` or
+`off`. Workers are ordered Haiku, Sonnet, Opus; efforts are low, medium, high,
+xhigh, max. Defaults allow Haiku low/medium and every listed effort for Sonnet
+and Opus, with mixed mode and review on. Unknown options are rejected.
+Publication failure returns a save error and attempts to restore the saved
+policy; startup logs publication failure and continues. A successful human
+setup save ends an Invoke pause. Plugins consume the setup starting with the
+next message.
 
 Unknown, stale, timed-out, or conflicting state remains unknown. A cache is a
 projection, not a second authority over runtime or provider facts.

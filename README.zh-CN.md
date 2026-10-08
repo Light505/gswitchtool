@@ -13,7 +13,7 @@
 >
 > 它分为三部分，分别安装、分别有版本号：**应用**（保存账户和规则，可单独使用）、**Codex 插件**
 > `codex@gswitchtool`（让 Claude Code 把 Codex 任务交给应用），以及可选的**路由插件**
-> `router@gswitchtool`（为每个编码任务选择 Claude 工作者或 Codex；尚未发布）。详见
+> `router@gswitchtool`（为每个编码任务选择 Claude 工作者或 Codex；随应用的 Claude Code 设置面板一起提供）。详见
 > [三个部分](./docs/invoke-mode-guide.md#the-three-parts)（英文）。
 
 在一台电脑上管理多个 Codex 账户：看每个账户还剩多少额度，一键切换，接着用 Codex。

@@ -98,7 +98,7 @@ routerManifest.name = "router-dev";
 routerManifest.description = `[dev] ${routerManifest.description}`;
 routerManifest.version += manifest.version.slice(manifest.version.indexOf("-dev."));
 writeFileSync(routerManifestPath, `${JSON.stringify(routerManifest, null, 2)}\n`);
-writeFileSync(path.join(routerDestination, "router-target.json"), `${JSON.stringify({ dataDir: ".gswitchtool-router-dev" }, null, 2)}\n`);
+writeFileSync(path.join(routerDestination, "router-target.json"), `${JSON.stringify({ $comment: "Added by Light505 for gswitchtool (2026).", dataDir: ".gswitchtool-router-dev", appDataDir: ".gswitchtool-dev" }, null, 2)}\n`);
 function rewriteRouterMarkdown(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const full = path.join(directory, entry.name);

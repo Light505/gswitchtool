@@ -1,6 +1,6 @@
 ---
 name: gswitch-delegate
-description: "Use only when a `Router:` line in this session says mode=mixed or mode=codex and the router's rules send a task to Codex. Delegates through GSwitch Invoke Mode with a scope and verify command. Refuses when Invoke Mode is off."
+description: "Use when a `GSwitch setup: Claude + Codex` line sends a bounded, self-contained coding task to Codex, or a `Router:` line says mode=mixed or mode=codex and the router's rules send the task to Codex. Delegates through GSwitch Invoke Mode with a scope and verify command. Refuses when Invoke Mode is off."
 ---
 
 <!-- Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
@@ -9,8 +9,13 @@ description: "Use only when a `Router:` line in this session says mode=mixed or 
 
 ## 1. Check routing and Invoke Mode
 
-Delegate only when a `Router:` line says mode=mixed or mode=codex and the router's
-rules send this task to Codex. If status says Invoke Mode is off or GSwitch is
+Use the newest per-message setup and routing lines. Delegate when a
+`GSwitch setup: Claude + Codex` line is present and you judge the coding task
+bounded and self-contained using that line's rules: keep decisions, design,
+debugging that needs this conversation, and edits shorter than their brief.
+After non-trivial changes run `gswitch-review`. In Router setup, delegate only
+when a `Router:` line says mode=mixed or mode=codex and its rules send this task
+to Codex. If status says Invoke Mode is off or GSwitch is
 unavailable, do not delegate; tell the orchestrator that routing is paused and
 the session runs as a normal session. If Invoke Mode is paused, follow
 [When Codex usage runs out](#when-codex-usage-runs-out).

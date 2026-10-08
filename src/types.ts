@@ -26,7 +26,20 @@ export interface InvocationDefault {
   effort: string;
 }
 
+export type ClaudeSetupKind = "claude-only" | "claude-codex" | "router";
+export type ClaudeModel = "haiku" | "sonnet" | "opus";
+export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export interface ClaudeSetup {
+  setup: ClaudeSetupKind;
+  router: {
+    mode: "mixed" | "claude" | "codex";
+    claudeAllowed: Record<ClaudeModel, ClaudeEffort[]>;
+    claudeOnlyReview: "on" | "off";
+  };
+}
+
 export interface InvokeSettings {
+  claude_setup: ClaudeSetup;
   invoke_mode: boolean;
   allowed_invocation_profiles: InvocationProfile[];
   task_defaults?: Partial<Record<InvokeTaskKind, InvocationDefault>>;

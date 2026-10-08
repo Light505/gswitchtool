@@ -1,6 +1,17 @@
 {
-  "description": "Optional stop-time review gate for Codex Companion.",
+  "description": "Modified by Light505 for gswitchtool (2026). GSwitch setup context, session cleanup and optional stop-time review gate for Codex Companion.",
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/claude-setup-hook.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [

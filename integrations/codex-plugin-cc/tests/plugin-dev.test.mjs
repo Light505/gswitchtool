@@ -1,4 +1,4 @@
-// Added by Light505 for gswitchtool (2026).
+// Modified by Light505 for gswitchtool (2026).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -32,6 +32,8 @@ test("plugin:dev builds an isolated, rewritten copy and replaces it on rerun", a
   assert.equal(marketplace.name, "gswitchtool-dev");
   assert.equal(marketplace.plugins[0].name, "codex-dev");
   assert.equal(marketplace.plugins[0].source, "./plugins/codex-dev");
+
+  assert.deepEqual(JSON.parse(readFileSync(path.join(home, ".gswitchtool-dev-plugin/plugins/router-dev/router-target.json"), "utf8")), { $comment: "Added by Light505 for gswitchtool (2026).", dataDir: ".gswitchtool-router-dev", appDataDir: ".gswitchtool-dev" });
 
   const invoke = readFileSync(path.join(plugin, "skills", "gswitch-review", "SKILL.md"), "utf8");
   assert.match(invoke, /\/codex-dev:/);

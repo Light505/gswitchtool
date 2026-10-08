@@ -19,9 +19,11 @@ function readJSON(file, fallback = {}) {
   catch { return fallback; }
 }
 const target = readJSON(path.join(pluginRoot, "router-target.json"));
-const dataName = typeof target.dataDir === "string" && /^[\w.-]+$/.test(target.dataDir) && ![".", ".."].includes(target.dataDir)
-  ? target.dataDir : ".gswitchtool-router";
+const directoryName = (value, fallback) => typeof value === "string" && /^[\w.-]+$/.test(value) && ![".", ".."].includes(value)
+  ? value : fallback;
+const dataName = directoryName(target.dataDir, ".gswitchtool-router");
 const dataDir = path.join(home, dataName);
+const setupFile = path.join(home, directoryName(target.appDataDir, ".gswitchtool"), "claude-setup.json");
 const pluginName = readJSON(path.join(pluginRoot, ".claude-plugin", "plugin.json")).name || "router";
 const data = (...parts) => path.join(dataDir, ...parts);
 
@@ -77,36 +79,32 @@ function allowedList(allowed = config().claudeAllowed) {
     .map(({ short }) => `${short} ${allowed[short].join(", ")}`).join(" · ") || "none";
 }
 function config() {
-  const value = readJSON(data("config.json"));
-  return { ...value, default: modes.includes(value.default) ? value.default : "off",
-    claudeOnlyReview: reviews.includes(value.claudeOnlyReview) ? value.claudeOnlyReview : "on",
-    claudeAllowed: claudeAllowed(value.claudeAllowed),
-    projects: object(value.projects) };
+  const setup = readJSON(setupFile);
+  const valid = setup.version === 1 && ["claude-only", "claude-codex", "router"].includes(setup.setup) &&
+    modes.slice(1).includes(setup.router?.mode) && reviews.includes(setup.router?.claudeOnlyReview);
+  const value = valid ? setup.router : {};
+  return { mode: valid && setup.setup === "router" ? value.mode : "off",
+    claudeOnlyReview: value.claudeOnlyReview ?? "on", claudeAllowed: claudeAllowed(value.claudeAllowed) };
 }
-function projectEntry(cfg, directory) {
-  const wanted = comparable(directory);
-  return Object.keys(cfg.projects).find((key) => comparable(key) === wanted);
+// Only status-line passthrough state remains in the router's old config file.
+function statuslineConfig() {
+  const { statusLinePrevious, statusLineCommand } = readJSON(data("config.json"));
+  return { statusLinePrevious, statusLineCommand };
 }
 function sessionFile(id) {
   if (!id) throw new Error("A session ID is required");
   return data("sessions", `${/^[\w-]+$/.test(id) ? id : hash(id)}.json`);
 }
 function session(id) {
-  const value = id ? readJSON(sessionFile(id)) : {};
+  const { mode: _mode, claudeOnlyReview: _review, ...value } = id ? readJSON(sessionFile(id)) : {};
   return { ...value, pending: Array.isArray(value.pending) ? value.pending : [],
     bindings: object(value.bindings), finished: Array.isArray(value.finished) ? value.finished : [] };
 }
 function saveSession(id, value) { atomicJSON(sessionFile(id), { ...value, updatedAt: new Date().toISOString() }); }
-function resolved(id, directory) {
+function resolved() {
   const cfg = config();
-  const sess = session(id);
-  const project = object(cfg.projects[projectEntry(cfg, directory)]);
-  function pick(field, global, valid) {
-    if (valid.includes(sess[field])) return { value: sess[field], source: "session" };
-    if (valid.includes(project[field])) return { value: project[field], source: "project default" };
-    return { value: cfg[global], source: "global default" };
-  }
-  return { mode: pick("mode", "default", modes), review: pick("claudeOnlyReview", "claudeOnlyReview", reviews) };
+  return { mode: { value: cfg.mode, source: "GSwitch setup" },
+    review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" } };
 }
 function routerLine(state) {
   const label = { off: "Off", mixed: "Mixed", codex: "Codex only", claude: "Claude only" }[state.mode.value];
@@ -243,7 +241,7 @@ const decision = (value, reason) => ({ hookSpecificOutput: { hookEventName: "Pre
 const isWorker = (type) => workerNames.some((name) => type === `${pluginName}:${name}`);
 function wrapupFile(directory) { return data("wrapups", `${hash(comparable(directory))}.json`); }
 function hook(event, input) {
-  // Expiration precedes resolution, including a resumed session with this ID.
+  // Expire old worker state, including a resumed session with this ID.
   if (event === "SessionStart" && fs.existsSync(data("sessions"))) for (const name of fs.readdirSync(data("sessions"))) {
     const file = data("sessions", name);
     if (name.endsWith(".json") && fs.statSync(file).mtimeMs < Date.now() - 7 * 86400000) fs.rmSync(file);
@@ -251,7 +249,7 @@ function hook(event, input) {
   const id = input.session_id;
   const cwd = input.cwd || process.cwd();
   const sess = session(id);
-  const state = resolved(id, sess.projectDir || cwd);
+  const state = resolved();
   // Observe completions even when the owner turned routing off mid-attempt.
   if (event === "PostToolUse" && ["Agent", "Task"].includes(input.tool_name) && isWorker(input.tool_input?.subagent_type)) {
     const response = object(input.tool_response);
@@ -443,12 +441,12 @@ async function statusline(raw) {
     if (window) atomicJSON(data("usage.json"), { fiveHour: { usedPercentage: window.used_percentage, resetsAt: window.resets_at }, updatedAt: new Date().toISOString() });
     if (fs.existsSync(data("usage.json")) && !usage()) fs.rmSync(data("usage.json"), { force: true });
   });
-  const command = config().statusLineCommand;
+  const command = statuslineConfig().statusLineCommand;
   if (typeof command === "string" && command && !isRouterCommand(command)) {
     const result = spawnSync(command, { shell: true, windowsHide: true, input: raw, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     return result.stdout || "";
   }
-  return `${routerLine(resolved(input.session_id, input.workspace?.project_dir || input.cwd || input.workspace?.current_dir || process.cwd()))}\n`;
+  return `${routerLine(resolved())}\n`;
 }
 // Any router command, including one from an older plugin path (for example after a plugin update).
 const isRouterCommand = (command) => typeof command === "string" && /router\.mjs"?\s+statusline\s*$/.test(command);
@@ -458,7 +456,7 @@ function statuslineSettings(install) {
   const raw = exists ? fs.readFileSync(file, "utf8") : "{}";
   // Do not silently replace corrupt user settings with defaults.
   const settings = object(JSON.parse(raw.replace(/^\uFEFF/, "")));
-  const cfg = config();
+  const cfg = statuslineConfig();
   const command = `node "${path.join(pluginRoot, "scripts", "router.mjs").replace(/\\/g, "/")}" statusline`;
   const current = settings.statusLine?.command;
   if (install && current === command) return "Router status line already installed";
@@ -505,52 +503,15 @@ function command(args, raw) {
   if (name === "stats") return statsTable(aggregateStats(readResults(data("results.jsonl")), statsOptions(rest, comparable)));
   if (name === "statusline") return statusline(raw);
   if (name === "statusline-install" || name === "statusline-uninstall") return statuslineSettings(name === "statusline-install");
-  if (name === "allow") {
-    if (!rest.length) return `Claude workers allowed: ${allowedList()}`;
-    const cfg = config();
-    if (rest.length === 1 && rest[0] === "--reset") cfg.claudeAllowed = defaultAllowed();
-    else {
-      const [model, selection] = rest;
-      if (!models.some(({ short }) => short === model)) throw new Error(`Invalid model. Valid models: ${models.map(({ short }) => short).join(", ")}`);
-      const selected = typeof selection === "string" ? selection.split(",").map((effort) => effort.trim()) : [];
-      if (rest.length !== 2 || !selected.length || (selection !== "all" && selection !== "none" && selected.some((effort) => !efforts.includes(effort)))) {
-        throw new Error(`Invalid effort. Valid efforts: ${efforts.join(", ")} (or all, none)`);
-      }
-      cfg.claudeAllowed[model] = selection === "all" ? [...efforts] : selection === "none" ? [] : efforts.filter((effort) => selected.includes(effort));
-    }
-    atomicJSON(data("config.json"), cfg);
-    return `Claude workers allowed: ${allowedList(cfg.claudeAllowed)}`;
-  }
-  if (name === "mode" || name === "review") {
-    const [id, directory, value] = rest;
-    const sess = session(id);
-    if (name === "mode" && modes.includes(value)) { sess.mode = value; sess.projectDir = projectKey(directory); saveSession(id, sess); }
-    if (name === "review") {
-      if (!reviews.includes(value)) throw new Error("review requires on|off");
-      sess.claudeOnlyReview = value; saveSession(id, sess);
-    }
-    const lines = [routerLine(resolved(id, directory))];
-    if (name === "mode" && !isRepository(projectKey(directory))) lines.push(`Router warning: ${projectKey(directory)} is not a git repository; start the session in the repository folder.`);
-    if (name === "mode" && modes.includes(value) && value !== "off" && worktreeBaseRef(projectKey(directory)) !== "head") lines.push(baseRefWarning);
+  if (name === "mode") {
+    const [, directory, ...words] = rest;
+    if (words.length) return "Change the setup in GSwitch: Claude Code button.";
+    const folder = projectKey(directory);
+    const state = resolved();
+    const lines = [routerLine(state), `Claude workers allowed: ${allowedList()}`];
+    if (!isRepository(folder)) lines.push(`Router warning: ${folder} is not a git repository; start the session in the repository folder.`);
+    if (state.mode.value !== "off" && worktreeBaseRef(folder) !== "head") lines.push(baseRefWarning);
     return lines.join("\n");
-  }
-  if (name === "default") {
-    const [directory, ...words] = rest;
-    const all = words.includes("--all");
-    const values = words.filter((value) => value !== "--all");
-    const cfg = config();
-    const key = projectEntry(cfg, directory) || projectKey(directory);
-    const entry = { ...object(cfg.projects[key]) };
-    if (values[0] === "--clear") {
-      if (all) { cfg.default = "off"; cfg.claudeOnlyReview = "on"; }
-      else delete cfg.projects[key];
-    } else if (modes.includes(values[0])) {
-      if (all) cfg.default = values[0]; else { entry.mode = values[0]; cfg.projects[key] = entry; }
-    } else if (values[0] === "review" && reviews.includes(values[1])) {
-      if (all) cfg.claudeOnlyReview = values[1]; else { entry.claudeOnlyReview = values[1]; cfg.projects[key] = entry; }
-    } else throw new Error("default requires mode | review on|off | --clear [--all]");
-    atomicJSON(data("config.json"), cfg);
-    return routerLine(resolved(undefined, directory));
   }
   if (name === "scope") {
     const [id, agent] = rest;

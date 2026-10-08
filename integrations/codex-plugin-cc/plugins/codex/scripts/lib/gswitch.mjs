@@ -1,4 +1,4 @@
-// Added by Light505 for gswitchtool (2026): client for the GSwitch Invoke Mode endpoint. See CREDITS.md in gswitchtool.
+// Modified by Light505 for gswitchtool (2026): client for the GSwitch Invoke Mode endpoint. See CREDITS.md in gswitchtool.
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -107,6 +107,19 @@ export function gswitchTargetAppName() {
   try {
     const target = JSON.parse(fs.readFileSync(TARGET_FILE, "utf8"));
     return typeof target.appName === "string" && target.appName.trim() ? target.appName : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Reads the app-owned Claude Code setup without changing it. */
+export function readClaudeSetup(env = process.env) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(resolveGSwitchConfigDir(env), "claude-setup.json"), "utf8"));
+    if (value?.version !== 1 || !["claude-only", "claude-codex", "router"].includes(value.setup) ||
+        !["mixed", "claude", "codex"].includes(value.router?.mode) ||
+        !["on", "off"].includes(value.router?.claudeOnlyReview)) return null;
+    return value;
   } catch {
     return null;
   }

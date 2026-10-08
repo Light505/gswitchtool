@@ -16,6 +16,9 @@ Each message carries `Router: mode=<m> (<source>) · Codex review in claude mode
 <on|off> · Claude 5h: <n% left|unknown>[ · LOW: no Claude workers] · Claude
 workers: <allowed list>`. Use the newest one.
 
+Mode, review and allowed workers come from GSwitch's Claude Code panel; their
+source is `GSwitch setup`. To change them, tell the owner to use that panel.
+
 - `mixed` or `codex` need Invoke Mode. Check it once per session with the
   `gswitch-delegate` skill's status line. If Invoke Mode is off or GSwitch is
   unavailable, say once "Router paused: Invoke Mode is off; working as a normal

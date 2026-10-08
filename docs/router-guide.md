@@ -17,10 +17,8 @@ through the Codex plugin to the app, which applies your Invoke Mode rules. See
 
 ## Install
 
-Not released yet: the router ships together with a setup panel in the app that
-replaces its commands. Until then it is in the plugin list only for the Dev
-build (`pnpm run plugin:dev`, see [Testing and Dev](#testing-and-dev)). Once
-released:
+The router ships with GSwitch's **Claude Code** setup panel. Setups are chosen
+only in that panel: **Claude only**, **Claude + Codex**, or **Router**.
 
 Install the Codex plugin first ([`invoke-mode-guide.md`](./invoke-mode-guide.md#4-install-the-claude-code-plugin)), then:
 
@@ -30,15 +28,18 @@ Install the Codex plugin first ([`invoke-mode-guide.md`](./invoke-mode-guide.md#
 ```
 
 Update it with `/plugin update router@gswitchtool` and start a new session. It
-starts in mode `off`; turn it on with `/router:mode`.
+reads the app's setup on each message. Choose **Router** and its mode in
+GSwitch's **Claude Code** panel to turn routing on. Other setups, or a missing,
+unreadable or invalid setup file, leave routing off.
 
 ## Principles
 
 - The orchestrator only makes decisions. Mechanics (settings, scope checks,
   limits, usage reading, copying worktree results back, recording unfinished
   work) run in scripts and hooks, never through the model.
-- Nothing is written into the project. All router data lives in
-  `~/.gswitchtool-router/` (Dev: `~/.gswitchtool-router-dev/`).
+- Nothing is written into the project. Results, usage, wrap-ups, worker scope
+  records and locks stay in `~/.gswitchtool-router/` (Dev:
+  `~/.gswitchtool-router-dev/`). Setup choices belong to the app.
 - Tool facts beat claims: the orchestrator trusts verify results, git facts and
   warning lines, the same rule as for Codex.
 
@@ -46,12 +47,12 @@ starts in mode `off`; turn it on with `/router:mode`.
 
 | Mode | Who writes code | Needs Invoke Mode |
 | --- | --- | --- |
-| `off` (installed default) | The orchestrator itself, no routing: a normal session | No |
+| `off` (no Router setup) | The orchestrator itself, no routing: a normal session | No |
 | `mixed` | An allowed Claude worker or Codex per task; stronger Claude models only as the last rungs | Yes |
 | `codex` | Codex only; no Claude worker ever writes code | Yes |
 | `claude` | Allowed Claude workers, lowest model first | No |
 
-The router has its own switch (the mode); Invoke Mode only says whether Codex
+The Claude Code panel chooses the router mode; Invoke Mode says whether Codex
 may be used. When Invoke Mode is off, `mixed` and `codex` pause routing and the
 session runs as a normal session, with one line saying so. They never start
 Claude workers instead. `claude` keeps working.
@@ -59,36 +60,29 @@ Claude workers instead. `claude` keeps working.
 The orchestrator should be Opus 5.5 (the model chosen for the session). If the
 session start reports another model, the router warns once.
 
-## Commands and settings
+## Claude Code panel and commands
+
+Use GSwitch's **Claude Code** button to choose the setup. In **Router** setup,
+choose `mixed`, `claude` or `codex`, the allowed Claude worker models and
+efforts, and whether to run Codex review in `claude` mode. To stop routing,
+choose **Claude only** or **Claude + Codex**.
+
+The plugins read the app's `~/.gswitchtool/claude-setup.json` (Dev:
+`~/.gswitchtool-dev/claude-setup.json`). Every message gets the current setup
+context and, while routing is on, a `Router:` line whose source is
+`GSwitch setup`. Changes take effect on the next message.
 
 | You want | Command |
 | --- | --- |
-| Change the mode for this session | `/router:mode off\|mixed\|codex\|claude [task]` |
-| See the current mode and why | `/router:mode` |
-| Codex review in Claude-only mode, this session | `/router:review on\|off` |
-| This project's default | `/router:default <mode>` or `/router:default review on\|off` |
-| Default for all projects | add `--all` |
-| Remove this project's default | `/router:default --clear` |
-| Which Claude models and efforts workers may use | `/router:allow [<model> <efforts>\|--reset]` |
+| See mode, review, allowed workers and warnings | `/router:mode` (status only) |
 | Success rate, time and tokens per worker and difficulty | `/router:stats` |
 | One task straight to Codex, whatever the mode | `/codex:gswitch-invoke` (unchanged) |
 
-`~/.gswitchtool-router/config.json`:
-
-```json
-{
-  "default": "off",
-  "claudeOnlyReview": "on",
-  "projects": {
-    "C:/Users/me/Desktop/Github/dentisys": { "mode": "codex" }
-  }
-}
-```
-
-Projects are matched by their folder path (a moved folder falls back to the
-global default). Session choices live in `sessions/<session id>.json` and are
-removed after 7 days. A hook adds one line with the current mode to every
-message, so the mode survives long sessions and summaries.
+Any arguments to `/router:mode` print
+`Change the setup in GSwitch: Claude Code button.` and change nothing.
+The `route` skill follows the current Router line automatically; `stats` and
+`statusline` remain available. Use `/router:statusline` to install or remove
+the usage-capturing status line.
 
 - Start the Claude Code session in the repository folder itself. The router uses the session's project folder (`CLAUDE_PROJECT_DIR`) for worktrees, `router apply` and the results log. Changing the folder later in the session does not change it. A folder that is not a git repository cannot be used for worker worktrees: the router ignores it for dependency links, and `/router:mode` warns that the session should start in the repository folder.
 - Set `"worktree": { "baseRef": "head" }` in the project's Claude Code settings. Without it, Claude Code starts each worker's worktree from the remote's default branch (`origin/HEAD`, usually `main`), not from the branch you are on. When a mode is on, `/router:mode` and the session start warn if it is missing. The router reads `~/.claude/settings.json`, then `.claude/settings.json` and `.claude/settings.local.json` in the project; the later file wins.
@@ -105,17 +99,12 @@ The files are generated by `scripts/gen-agents.mjs` from `templates/worker.md`.
 More models can be added by extending the model list in `scripts/workers.mjs`
 and regenerating the agents.
 
-The global `claudeAllowed` setting in `config.json` chooses which workers may
-start. The default allows Haiku low and medium, every Sonnet effort and every
-Opus effort; the ladders below use only some of them.
-Missing or corrupt settings
-use this default; unknown models and efforts are ignored. An empty object
-allows no Claude workers. Project and session settings do not override it.
-
-`/router:allow` shows the list. `/router:allow <model> <effort,effort|all|none>`
-replaces that model's efforts; `/router:allow --reset` restores the default.
-For example, `/router:allow sonnet medium,high` enables those Sonnet workers.
-Bad input leaves the config unchanged.
+The allowed workers chosen in the Claude Code panel determine which workers
+may start. If that allowlist is missing or invalid, the fallback allows Haiku
+low and medium, every Sonnet effort and every Opus effort; the ladders below
+use only some of them.
+Unknown models and efforts are ignored. An empty allowlist allows no Claude
+workers. `/router:mode` shows the current list; change it only in the panel.
 
 A Claude worker that costs more per attempt than Opus medium (~$1.45) needs the
 owner's approval: Opus high, Haiku max, Sonnet xhigh, Opus xhigh, Opus max and
@@ -298,7 +287,8 @@ Claude accounts, and hitting the limit stops the whole session.
 ## Testing and Dev
 
 `pnpm run plugin:dev` also builds `router-dev`, which uses `codex-dev` and
-`~/.gswitchtool-router-dev/`. Not provable by unit tests and checked by hand in a
-real session: hook inputs for subagents, worktree isolation, the approval
+`~/.gswitchtool-router-dev/` for runtime records and reads setup from
+`~/.gswitchtool-dev/claude-setup.json`. Not provable by unit tests and checked
+by hand in a real session: hook inputs for subagents, worktree isolation, the approval
 prompt for workers above Opus medium's cost, status line support in the desktop app, and Codex's
 behavior after a declined file change.
