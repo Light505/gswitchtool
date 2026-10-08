@@ -35,6 +35,8 @@ The orchestrator decides and may resume you with a wider scope.
 If the brief is unclear, a needed fact is missing, or the same fix failed
 twice, stop. Say what you tried, what failed (the exact error), and what you
 would try next. Do not guess at requirements.
+End with one line `STOPPED: <too hard | unclear brief | environment> — <one sentence>`
+(too hard means capability, unclear brief means context, environment means tool).
 
 ## Answer
 

@@ -37,8 +37,8 @@ test("orchestrator results are accepted in both namespaces with the same record 
   const r = readResults(f.file)[0];
   assert.deepEqual(r, { type: "result", time: r.time, sessionId: "s1", project: projectKey(f.project), task: "t1", difficulty: "small",
     worker: "orchestrator", outcome: "pass", reason: null, step: null, title: null, agentId: null, codexJobId: null, codexThreadId: null });
-  assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "orchestrator", "--outcome", "fail"], projectKey, "router-dev").worker, "orchestrator");
-  assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "orchestrator", "--outcome", "fail"], projectKey, "router").worker, "orchestrator");
+  assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "orchestrator", "--outcome", "fail", "--reason", "other"], projectKey, "router-dev").worker, "orchestrator");
+  assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "orchestrator", "--outcome", "fail", "--reason", "other"], projectKey, "router").worker, "orchestrator");
 });
 
 test("orchestrator results reject agent and Codex fields and name orchestrator as a valid worker", (t) => {

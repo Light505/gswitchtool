@@ -55,8 +55,9 @@ test("cost approval has all 15 prices, exactly six expensive workers and unknown
   const f = fixture(t);
   f.setup({}); f.writeSession({});
   f.setup({ claudeAllowed: { haiku: ["max"], sonnet: ["high", "xhigh", "max"], opus: ["low", "medium", "high", "xhigh", "max"] } });
+  f.run(["plan", "s1", f.project, "--task", "t1", "--kind", "implement", "--difficulty", "small"]);
   for (const name of [...expensive, "opus-medium", "opus-low", "sonnet-high"]) {
-    const response = f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: `router:${name}`, prompt: "SCOPE: src/*" } });
+    const response = f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: `router:${name}`, prompt: "SCOPE: src/*\nTASK: t1" } });
     assert.equal(response.hookSpecificOutput?.permissionDecision, expensive.includes(name) ? "ask" : undefined, name);
   }
 });
@@ -112,7 +113,7 @@ test("SubagentStop records only bound router workers, nullable metrics and key-o
   } });
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1", agent_type: "router:haiku-low", usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 5 }, duration_ms: 42, last_assistant_message: "SECRET_VALUE" }), {});
   const r = readResults(f.file)[0];
-  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], durationMs: null, tokens: 65,
+  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], task: null, durationMs: null, tokens: 65,
     raw: { input: ["session_id", "cwd", "agent_id", "agent_type", "usage", "duration_ms", "last_assistant_message"], tool_response: [] } });
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /SECRET_VALUE|input_tokens|output_tokens/);
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1" }), {});

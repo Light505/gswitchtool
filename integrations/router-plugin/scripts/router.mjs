@@ -5,8 +5,8 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { models, efforts, workerNames, defaultAllowed, needsApproval } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable } from "./results.mjs";
+import { models, efforts, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
+import { appendResult, readResults, resultRecord, planRecord, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -240,7 +240,33 @@ const context = (event, text) => text ? { hookSpecificOutput: { hookEventName: e
 const decision = (value, reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: value, permissionDecisionReason: reason } });
 const isWorker = (type) => workerNames.some((name) => type === `${pluginName}:${name}`);
 function wrapupFile(directory) { return data("wrapups", `${hash(comparable(directory))}.json`); }
+// An inline invoke brief starts right after its opening quote.
+const taskId = (text) => String(text || "").match(/(?:^|["'])[ \t]*TASK:[ \t]*([\w.-]{1,40})[ \t]*["']?[ \t]*$/m)?.[1];
+const failedList = (state) => state.results.filter((r) => r.outcome === "fail").map((r) => `${r.worker} (${r.reason ?? "other"})`).join(", ");
+const floorFor = (state) => taskFloor(state.plan.kind, state.plan.difficulty,
+  state.failedWorkers.map(({ worker }) => benchmarks[benchmarkId(worker)]?.score), state.failedWorkers.length);
+function taskLaunch(id, task, type, title, repair = false) {
+  const state = taskState(readResults(data("results.jsonl")), id, task);
+  if (!state.plan) return decision("deny", `Run router plan for task ${task} first.`);
+  if (state.done) return decision("deny", `Task ${task} already passed; use a new task id for new work.`);
+  const failed = state.failedWorkers.find(({ worker }) => worker === type);
+  if (failed && !repair) return decision("deny", `${type} already failed task ${task} (${failed.reasons.join(", ")}); resume that worker for a repair or pick a candidate from router plan.`);
+  const reasons = [], score = benchmarks[benchmarkId(type)]?.score, { floor } = floorFor(state);
+  // A repair resumes the worker that failed, so the raised floor does not apply to it.
+  if (!repair && score != null && score < floor) reasons.push(`${type} scores ${score}, below floor ${floor} for task ${task}`);
+  if (state.failures >= ownerCheckAfter) reasons.push(`Task ${task} has ${state.failures} failed attempts (${failedList(state)}); continue with ${type}?`);
+  if (needsApproval(benchmarkId(type))) reasons.push(`Approve ${type} for task: ${state.plan.title || title}`);
+  return reasons.length ? decision("ask", reasons.join(" · ")) : {};
+}
+// Read simple invoke flags (`--name value` or `--name=value`); like the companion's parser, the last one wins.
+function shellOption(command, names) {
+  const matches = [...command.matchAll(new RegExp(`(?:^|\\s)(?:${names.join("|")})(?:\\s+|=)(?:"([^"]*)"|'([^']*)'|([^\\s"']+))`, "g"))];
+  const match = matches.at(-1);
+  return match ? match[1] ?? match[2] ?? match[3] : undefined;
+}
 function hook(event, input) {
+  const command = String(input.tool_input?.command || "");
+  if (event === "PreToolUse" && input.tool_name === "Bash" && !/\bnode(?:\.exe)?["']?\s+(?:"[^"]*|'[^']*|[^\s"']*)codex-companion\.mjs["']?\s+invoke(?:\s|$)/.test(command)) return {};
   // Expire old worker state, including a resumed session with this ID.
   if (event === "SessionStart" && fs.existsSync(data("sessions"))) for (const name of fs.readdirSync(data("sessions"))) {
     const file = data("sessions", name);
@@ -259,7 +285,7 @@ function hook(event, input) {
     const agentId = [response.agentId, response.agent_id].find((value) => typeof value === "string" && value) || null;
     const worker = input.tool_input.subagent_type;
     const bound = agentId ? sess.bindings[agentId] : undefined;
-    appendResult(data("results.jsonl"), attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd), agentId, worker,
+    appendResult(data("results.jsonl"), attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd), agentId, worker, task: bound?.task ?? taskId(input.tool_input.prompt) ?? null,
       scope: bound?.type === worker && Array.isArray(bound.scope) ? bound.scope : scopes(String(input.tool_input.prompt || "").match(/^\s*SCOPE:[ \t]*([^\r\n]+)$/m)?.[1]) }));
     return {};
   }
@@ -268,7 +294,7 @@ function hook(event, input) {
     if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
     saveSession(id, sess);
     appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
-      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path) });
+      agentId: input.agent_id, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path) });
     return {};
   }
   if (event === "SessionStart") {
@@ -285,6 +311,28 @@ function hook(event, input) {
     return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}`);
   }
   if (state.mode.value === "off") return {};
+  if (event === "PreToolUse" && input.tool_name === "SendMessage") {
+    const bound = sess.bindings[input.tool_input?.to];
+    if (!bound?.task) return {};
+    const task = taskState(readResults(data("results.jsonl")), id, bound.task);
+    return task.failures >= ownerCheckAfter && !task.done
+      ? decision("ask", `Task ${bound.task} has ${task.failures} failed attempts; continue by resuming ${bound.type}?`) : {};
+  }
+  if (event === "PreToolUse" && input.tool_name === "Bash") {
+    if (sess.bindings[input.agent_id]) return decision("deny", "Router workers cannot start other agents.");
+    let task = taskId(command);
+    const file = shellOption(command, ["--prompt-file"]);
+    if (!task && file) {
+      const directory = shellOption(command, ["--cwd"]);
+      task = taskId(fs.readFileSync(path.resolve(directory ? path.resolve(cwd, directory) : cwd, file), "utf8"));
+    }
+    if (!task) return {};
+    if (state.mode.value === "claude" && /(?:^|\s)--write(?:\s|$)/.test(command)) return decision("deny", "Claude mode: Codex does not write code; use a Claude worker.");
+    const model = shellOption(command, ["--model", "-m"]), effort = shellOption(command, ["--effort"]);
+    if (!model || !effort) return {};
+    const type = `${pluginName === "router-dev" ? "codex-dev" : "codex"}:${model}/${effort}`;
+    return taskLaunch(id, task, type, command.split(/\r?\n/)[0], /(?:^|\s)--resume-thread(?:\s|$)/.test(command));
+  }
   if (event === "PreToolUse" && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(input.tool_name)) {
     const bound = sess.bindings[input.agent_id];
     if (!bound) return isWorker(input.agent_type) ? decision("deny", "Router has no scope for this worker; stop and report.") : {};
@@ -312,18 +360,21 @@ function hook(event, input) {
     if (usage()?.left <= 30) return decision("deny", state.mode.value === "mixed" ? "LOW usage: send this to Codex" : "LOW usage: stop and wrap up, ask the owner");
     const scope = scopes(String(tool.prompt || "").match(/^\s*SCOPE:[ \t]*([^\r\n]+)$/m)?.[1]);
     if (!scope.length) return decision("deny", "Add a line SCOPE: <globs> to the worker prompt (comma-separated paths).");
-    const task = String(tool.description || tool.prompt || "worker task").split(/\r?\n/)[0];
+    const task = taskId(tool.prompt);
+    if (!task) return decision("deny", "Add a line TASK: <id> to the worker prompt (run router plan first).");
+    const permission = taskLaunch(id, task, type, String(tool.description || tool.prompt || "worker task").split(/\r?\n/)[0]);
+    if (permission.hookSpecificOutput?.permissionDecision === "deny") return permission;
     // Record ask launches too: SubagentStart happens only after approval.
     sess.projectDir = sess.projectDir || projectKey(cwd);
-    sess.pending.push({ type, scope, time: Date.now() });
+    sess.pending.push({ type, scope, task, time: Date.now() });
     saveSession(id, sess);
-    return needsApproval(name) ? decision("ask", `Approve ${type} for task: ${task}`) : {};
+    return permission;
   }
   if (event === "SubagentStart" && isWorker(input.agent_type) && input.agent_id) {
     const pending = sess.pending.map((launch, index) => ({ launch, index })).filter(({ launch }) => launch.type === input.agent_type).sort((a, b) => a.launch.time - b.launch.time)[0];
     if (pending) {
       sess.pending.splice(pending.index, 1);
-      sess.bindings[input.agent_id] = { type: input.agent_type, scope: pending.launch.scope, cwd };
+      sess.bindings[input.agent_id] = { type: input.agent_type, scope: pending.launch.scope, task: pending.launch.task ?? null, cwd };
       saveSession(id, sess);
     }
     if (input.cwd) sharedDependencies(cwd, sess.projectDir);
@@ -489,12 +540,87 @@ function statuslineSettings(install) {
   }
   return `Router status line ${install ? "installed" : "uninstalled"}`;
 }
+// --codex "<model>:<effort>[,<effort>...][;<model>:...]" -> { model: [efforts] }
+function codexAllowed(text) {
+  const allowed = {};
+  for (const part of text.split(";")) {
+    const [model, list, ...extra] = part.split(":").map((item) => item.trim());
+    if (extra.length || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(model || "") || !list)
+      throw new Error(`Invalid --codex "${text}"; use --codex "<model>:<effort>[,<effort>...][;<model>:...]"`);
+    for (const effort of list.split(",").map((item) => item.trim())) {
+      if (!efforts.includes(effort)) throw new Error(`Unknown Codex effort "${effort}"; use low, medium, high, xhigh or max`);
+      allowed[model] = [...new Set([...(allowed[model] || []), effort])];
+    }
+  }
+  return allowed;
+}
+function workers(args) {
+  const at = args.indexOf("--codex");
+  const text = at < 0 ? undefined : args[at + 1];
+  const unknown = args.filter((_, i) => at < 0 || (i !== at && i !== at + 1));
+  if (unknown.length) throw new Error(`Unknown router workers option: ${unknown[0]}. Use: router workers [--codex "<model>:<effort>[,<effort>...][;<model>:...]"]`);
+  if (at >= 0 && (text === undefined || text.startsWith("--"))) throw new Error(`--codex needs a value: "<model>:<effort>[,<effort>...][;<model>:...]"`);
+  const codex = text === undefined ? {} : codexAllowed(text);
+  const state = resolved();
+  const mode = state.mode.value;
+  if (mode === "off") return "Router is off.";
+  const low = usage()?.left <= 30;
+  const rows = workerTable({ claudeAllowed: config().claudeAllowed, codexAllowed: codex, mode, low, namespace: pluginName });
+  const notes = (row) => [row.basis === "estimated" ? "estimated" : row.basis === "none" ? "no agent benchmark; skip" : "",
+    row.approval ? "needs owner approval" : "", row.dominatedBy ? `skip: ${row.dominatedBy} scores as high for less` : ""].filter(Boolean).join("; ");
+  const cells = [["Worker", "Score", "Cost/try", "Min/try", "Note"], ...rows.map((row) => [row.worker,
+    row.score === null ? "-" : `${row.basis === "estimated" ? "~" : ""}${row.score}`,
+    row.cost === null ? "-" : `USD ${row.cost.toFixed(2)}`, row.minutes === null ? "-" : String(row.minutes), notes(row)])];
+  const widths = cells[0].map((_, i) => Math.max(...cells.map((cell) => cell[i].length)));
+  const table = cells.map((cell) => cell.map((text, i) => text.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
+  const lines = [`Router workers (mode=${mode}; allowed by your GSwitch settings; agent benchmark per attempt)`, table];
+  if (low && (mode === "claude" || mode === "mixed")) lines.push("Claude usage LOW: Claude workers left out.");
+  if (text === undefined && (mode === "mixed" || mode === "codex")) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
+  return lines.join("\n");
+}
+const recovery = {
+  verify: "repair once with the same worker (resume it with the evidence), or escalate",
+  review: "repair once with the same worker (resume it with the evidence), or escalate",
+  incomplete: "repair once with the same worker (resume it with the evidence), or escalate",
+  capability: "escalate to a candidate below", other: "escalate to a candidate below",
+  context: "ask the owner if it is a product decision; otherwise retry the same worker with the missing context",
+  tool: "fix the environment or verify command, then retry the same worker; do not escalate",
+  scope: "decide the scope request, then resume the same worker",
+  usage: "Codex: GSwitch fails over by itself; if Invoke Mode paused, stop and wait for the owner. Claude LOW: mixed uses Codex rows, claude wraps up",
+  worktree: "keep the worktree, tell the owner its path and reason; retry on a fresh worktree or ask",
+  stopped: "ask the owner"
+};
+function plan(args) {
+  if (resolved().mode.value === "off") return "Router is off.";
+  const at = args.indexOf("--codex");
+  if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith("--"))) throw new Error(`--codex needs a value: "<model>:<effort>[,<effort>...][;<model>:...]"`);
+  const record = planRecord(args, projectKey), text = option(args, "--codex");
+  const codex = text === undefined ? {} : codexAllowed(text);
+  appendResult(data("results.jsonl"), record);
+  const state = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
+  const { floor, level } = floorFor(state), mode = resolved().mode.value;
+  const lines = [`Plan ${record.task}: ${record.kind}, ${record.difficulty} · floor ${floor} (${level}) · ${state.failures} failed of ${ownerCheckAfter} before the owner is asked`];
+  if (state.failures) lines.push(`Failed: ${failedList(state)}`);
+  if (state.last?.outcome === "fail") lines.push(`Next after ${state.last.reason ?? "other"}: ${recovery[state.last.reason ?? "other"]}`);
+  if (state.failures >= ownerCheckAfter) lines.push(`Owner check: ask the owner before attempt ${state.failures + 1}; the launch will show an approval prompt.`);
+  if (state.done) lines.push(`Task ${record.task} already passed; start a new task id for new work.`);
+  else {
+    const rows = workerTable({ claudeAllowed: config().claudeAllowed, codexAllowed: codex, mode, low: usage()?.left <= 30, namespace: pluginName });
+    const choices = candidates(rows, { floor, exclude: state.failedWorkers.map(({ worker }) => worker) }).slice(0, 6);
+    if (!choices.length) lines.push(`No allowed worker meets floor ${floor}: stop and ask the owner.`);
+    else lines.push("Candidates (cheapest first):", ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
+  }
+  if (text === undefined && ["mixed", "codex"].includes(mode)) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
+  lines.push(`Brief lines: TASK: ${record.task} · SCOPE: <globs> · VERIFY: <command>`);
+  return lines.join("\n");
+}
 function command(args, raw) {
   const [name, ...rest] = args;
   if (name === "hook") return JSON.stringify(hook(rest[0], object(JSON.parse(raw || "{}"))));
   if (name === "check") return check(rest);
   if (name === "apply") return apply(rest);
   if (name === "usage") return usageLine();
+  if (name === "plan") return plan(rest);
   if (name === "result") {
     const record = resultRecord(rest, projectKey, pluginName);
     appendResult(data("results.jsonl"), record);
@@ -506,6 +632,7 @@ function command(args, raw) {
     const table = statsTable(aggregateStats(records, options));
     return edits ? `${table}\nOrchestrator edits (not worker attempts): ${edits}` : table;
   }
+  if (name === "workers") return workers(rest);
   if (name === "statusline") return statusline(raw);
   if (name === "statusline-install" || name === "statusline-uninstall") return statuslineSettings(name === "statusline-install");
   if (name === "mode") {
@@ -554,7 +681,8 @@ async function main() {
     // Parsed before the lock so a lock timeout can still deny a worker's edit.
     if (isHook) try { input = object(JSON.parse(raw || "{}")); } catch {}
     // Git and verification operations have private indexes and need no state lock.
-    const output = ["check", "apply", "usage", "statusline"].includes(args[0]) ? await command(args, raw) : await locked(() => command(args, raw));
+    const readHook = isHook && args[1] === "PreToolUse" && ["Bash", "SendMessage"].includes(input.tool_name);
+    const output = readHook || ["check", "apply", "usage", "statusline"].includes(args[0]) ? await command(args, raw) : await locked(() => command(args, raw));
     process.stdout.write(args[0] === "statusline" ? output : `${output}\n`);
   } catch (error) {
     if (isHook) {

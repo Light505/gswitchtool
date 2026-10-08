@@ -43,7 +43,7 @@ With the router (mode mixed):
   coding task ─> router picks a worker
      ├─ Claude worker ─> edits in its own worktree ─> router check + apply
      └─ Codex ─> Codex plugin ─> app checks the rules ─> Codex ─> result
-  Claude checks the result; on failure the router moves one step up its ladder.
+  Claude checks the result; on failure the router finds the cause, repairs, retries or escalates to a stronger allowed worker, and asks the owner after 3 failed attempts.
 ```
 
 ## What you need

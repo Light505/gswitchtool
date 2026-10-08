@@ -5,7 +5,8 @@
     "UserPromptSubmit": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook UserPromptSubmit", "timeout": 15 }] }],
     "PreToolUse": [
       { "matcher": "^(Agent|Task)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] },
-      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] }
+      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] },
+      { "matcher": "^(Bash|SendMessage)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PreToolUse", "timeout": 15 }] }
     ],
     "PostToolUse": [
       { "matcher": "^(Agent|Task)$", "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PostToolUse", "timeout": 15 }] }

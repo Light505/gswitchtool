@@ -46,7 +46,17 @@ function fixture(t) {
     return run(["mode", "s1", project]);
   };
   const allowed = () => run(["mode", "s1", project]).split("\n")[1] + "\n";
-  const agent = (extra = {}, top = {}) => hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "Do work\nSCOPE: src/*", ...extra }, ...top });
+  const planned = new Set();
+  const plan = (entry = script) => {
+    if (planned.has(entry)) return;
+    const out = run(["plan", "s1", project, "--task", "t1", "--kind", "implement", "--difficulty", "small"], "", entry);
+    if (out !== "Router is off.\n") planned.add(entry);
+    return out;
+  };
+  const agent = (extra = {}, top = {}) => {
+    plan();
+    return hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", ...extra, prompt: `${extra.prompt ?? "Do work\nSCOPE: src/*"}\nTASK: t1` }, ...top });
+  };
   const decision = (result) => result.hookSpecificOutput?.permissionDecision;
   function git(args, cwd = project) {
     const result = spawnSync("git", args, { cwd, env, encoding: "utf8", windowsHide: true });
@@ -62,7 +72,7 @@ function fixture(t) {
     fs.writeFileSync(path.join(project, "file.txt"), "base\n");
     git(["add", "."]); git(["commit", "-m", "base"]);
   }
-  return { home, env, data, project, run, write, read, hook, mode, setupFile, setup, settings, allowed, agent, decision, git, init };
+  return { home, env, data, project, run, write, read, hook, mode, setupFile, setup, settings, allowed, agent, decision, git, init, plan };
 }
 
 test("missing, corrupt or invalid app setup is off; other setups ignore old router choices", (t) => {
@@ -351,12 +361,12 @@ test("SubagentStart uses app setup and links ignored node and Cargo caches", (t)
 });
 
 test("concurrent worker launches preserve both records", async (t) => {
-  const f = fixture(t); f.mode("claude");
+  const f = fixture(t); f.mode("claude"); f.plan();
   const launch = () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [script, "hook", "PreToolUse"], { env: f.env, cwd: f.home, windowsHide: true });
     let out = ""; child.stdout.on("data", (chunk) => out += chunk);
     child.on("error", reject); child.on("close", (code) => code === 0 ? resolve(out) : reject(new Error(`exit ${code}`)));
-    child.stdin.end(JSON.stringify({ session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "SCOPE: src/*" } }));
+    child.stdin.end(JSON.stringify({ session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "SCOPE: src/*\nTASK: t1" } }));
   });
   await Promise.all([launch(), launch(), launch()]);
   assert.equal(f.read("sessions/s1.json").pending.length, 3);
@@ -529,7 +539,8 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   f.mode("codex");
   assert.match(f.run(["mode", "s1", f.project], "", devScript), /Claude only \(GSwitch setup\).*off/);
   assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
-  const call = (type) => JSON.parse(f.run(["hook", "PreToolUse"], { session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "SCOPE: src/*" } }, devScript));
+  f.plan(devScript);
+  const call = (type) => JSON.parse(f.run(["hook", "PreToolUse"], { session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "SCOPE: src/*\nTASK: t1" } }, devScript));
   assert.deepEqual(call("router-dev:haiku-low"), {});
   assert.equal(fs.existsSync(path.join(f.home, ".gswitchtool-router-dev", "sessions/s1.json")), true);
   assert.equal(call("router:haiku-low").hookSpecificOutput.permissionDecision, "deny");

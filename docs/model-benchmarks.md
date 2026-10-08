@@ -1,9 +1,8 @@
 # Model benchmarks and prices
 
 Capability and cost of every model and reasoning effort the router and Invoke
-Mode can use. The router's escalation ladders
-([`router-guide.md`](./router-guide.md#escalation-ladders)) are checked against
-these tables. Data as of 2026-10-08; recheck when models or prices change and update
+Mode can use. The router's capability floors and candidates
+([`router-guide.md`](./router-guide.md#routing)) use these tables. Data as of 2026-10-08; recheck when models or prices change and update
 this file, the router guide and the route skill together. The full AA release
 comparison was checked the same day; it matches the Intelligence Index numbers
 used here.
@@ -217,24 +216,30 @@ the router uses estimates:
 Uncertainty is about ±30%. Replace them when AA publishes CAI numbers for Opus
 below max, or from the router's own results.
 
-## Default start per difficulty
+## Capability floors and expected cost
 
-The owner's short-ladder rule sets the starts and ladders. Every task starts at
-the first rung whatever its difficulty: Haiku low in `claude` and `mixed` (a
-failure there costs little), Sol low in `codex`. At most two escalations. The
-middle rung is the cheapest worker at Opus medium's level: Opus medium in
-`claude`, and Sol medium in `mixed` and `codex` (61 for $0.70, where Opus medium
-scores about 60 for $1.45). The top rung is Opus high (about 63, owner
-approves); nothing above it, so Sonnet max is not a rung. After the last rung
-the orchestrator stops and asks the owner. High-risk work starts one rung up:
-Opus medium in `claude`, Sol medium in `mixed` and `codex`.
-
-| Mode | Ladder |
+| Difficulty | Floor |
 | --- | --- |
-| `claude` | Haiku low → Opus medium → Opus high (owner approves) → stop and ask |
-| `mixed` | Haiku low → Sol medium → Opus high (owner approves) → stop and ask |
-| `mixed` with Claude usage LOW | Sol low → Sol medium → stop and ask |
-| `codex` | Sol low → Sol medium → stop and ask |
+| Trivial | 0 |
+| Small | 0 |
+| Moderate | 42 |
+| Hard | 55 |
+| High-risk | 60 |
+
+Debug counts as at least moderate; architecture as at least hard. The floors
+sit at the scores of the cheapest worker reasonable at that level: Sonnet low
+42, Sonnet high 55, Opus medium about 60. Candidates are allowed workers that
+meet the floor, cheapest first; workers without agent benchmarks are left out.
+
+After a worker failure (verify, review, incomplete, capability or other), each
+distinct failed worker raises the floor one difficulty level and above the
+highest failed worker's score. Failed workers are excluded. After 3 failed
+attempts, every further attempt needs the owner. With no candidate, ask earlier.
+
+These paths simulate capability failures and always pick the first candidate.
+They use the default Claude allowlist, Sol low, medium and high, and Luna low,
+medium, high, xhigh and max. Mixed LOW has no Claude workers. (approval) marks
+workers above Opus medium's cost; the estimates assume approval is given.
 
 `scripts/router-ladder-calc.mjs` prints the expected cost, minutes and unsolved
 share of each row. Per attempt: the worker's price plus $0.30 of orchestrator
@@ -242,47 +247,52 @@ and review overhead, and the worker's minutes (Coding Agent Index time per task)
 plus 3 minutes. The chance a task reaches each attempt: failures are 80% driven
 by difficulty (a task one worker fails is likely hard for the next) and 20%
 luck. Easier difficulties fail less often than the CAI's hard tasks: moderate
-×0.5, small ×0.25, trivial ×0.1. "Unsolved" is the chance the task still fails
-after the last rung. "Previous" is the released 1.11.0 default (cost only), with Sol xhigh counted
-as skipped, as it ran.
+×0.5, small ×0.25, trivial ×0.1. "Unsolved" is the share still failing when the owner is asked, after 3
+failed attempts or earlier if no allowed candidate remains.
 
 `claude`:
 
-| Difficulty | Default start | Expected cost | Expected minutes | Unsolved after last rung | Previous |
-| --- | --- | --- | --- | --- | --- |
-| Trivial | Haiku low | $0.65 | 16 | 2.4% | Haiku low, $0.82, 19 min |
-| Small | Haiku low | $0.96 | 19 | 6.3% | Haiku low, $1.48, 26 min |
-| Moderate | Haiku low | $1.50 | 23 | 13.6% | Haiku medium, $3.05, 38 min |
-| Hard | Haiku low | $2.63 | 32 | 30.7% | Sonnet low, $6.95, 57 min |
-| High-risk, at the moderate factor | Opus medium | $2.24 | 18 | 15.5% | Opus medium (same start) |
-| High-risk, at the hard factor | Opus medium | $2.73 | 22 | 32.6% | Opus medium (same start) |
+| Difficulty | Path | Expected cost | Expected minutes | Unsolved when owner asked |
+| --- | --- | --- | --- | --- |
+| trivial | router:haiku-low → router:haiku-medium → router:sonnet-low | $0.52 | 16 | 3.8% |
+| small | router:haiku-low → router:sonnet-low → router:sonnet-high | $0.77 | 18 | 7.8% |
+| moderate | router:sonnet-low → router:sonnet-high → router:opus-medium | $1.56 | 16 | 14.5% |
+| hard | router:sonnet-high → router:opus-medium → router:opus-high (approval) | $3.20 | 28 | 29.0% |
+| high-risk (moderate) | router:opus-medium → router:opus-high (approval) → router:opus-xhigh (approval) | $3.04 | 23 | 12.3% |
+| high-risk (hard) | router:opus-medium → router:opus-high (approval) → router:opus-xhigh (approval) | $4.40 | 32 | 26.9% |
 
 `mixed`:
 
-| Difficulty | Default start | Expected cost | Expected minutes | Unsolved after last rung | Previous |
-| --- | --- | --- | --- | --- | --- |
-| Trivial | Haiku low | $0.59 | 16 | 2.4% | Haiku low, $0.84, 19 min |
-| Small | Haiku low | $0.82 | 19 | 6.3% | Haiku low, $1.50, 27 min |
-| Moderate | Haiku low | $1.22 | 23 | 13.5% | Haiku low, $2.76, 40 min |
-| Hard | Haiku low | $2.07 | 32 | 30.7% | Sol low, $6.24, 50 min |
-| High-risk, at the moderate factor | Sol medium | $1.48 | 18 | 15.5% | Sol xhigh |
-| High-risk, at the hard factor | Sol medium | $1.96 | 21 | 32.5% | Sol xhigh |
+| Difficulty | Path | Expected cost | Expected minutes | Unsolved when owner asked |
+| --- | --- | --- | --- | --- |
+| trivial | router:haiku-low → codex:gpt-6-luna/max → router:sonnet-low | $0.51 | 17 | 3.8% |
+| small | router:haiku-low → router:sonnet-low → codex:gpt-6.1-sol/low | $0.68 | 18 | 7.5% |
+| moderate | router:sonnet-low → codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $1.20 | 15 | 14.1% |
+| hard | codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium → router:opus-high (approval) | $2.08 | 24 | 28.8% |
+| high-risk (moderate) | codex:gpt-6.1-sol/medium → router:opus-high (approval) → router:opus-xhigh (approval) | $2.27 | 23 | 12.3% |
+| high-risk (hard) | codex:gpt-6.1-sol/medium → router:opus-high (approval) → router:opus-xhigh (approval) | $3.62 | 32 | 26.9% |
 
-`codex`, and `mixed` once Claude usage is LOW (then Sol low → Sol medium):
+`mixed LOW`:
 
-| Difficulty | Default start | Expected cost | Expected minutes | Unsolved after last rung | Previous |
-| --- | --- | --- | --- | --- | --- |
-| Trivial | Sol low | $0.84 | 12 | 3.2% | Luna max, $0.48, 24 min |
-| Small | Sol low | $0.91 | 13 | 8.0% | Luna max, $0.48, 24 min |
-| Moderate | Sol low | $1.02 | 15 | 16.4% | Luna max, $0.48, 24 min |
-| Hard | Sol low | $1.23 | 18 | 34.6% | Sol low, $0.80, 12 min |
-| High-risk, at the moderate factor | Sol medium | $1.00 | 14 | 19.5% | Sol xhigh |
-| High-risk, at the hard factor | Sol medium | $1.00 | 14 | 39.0% | Sol xhigh |
+| Difficulty | Path | Expected cost | Expected minutes | Unsolved when owner asked |
+| --- | --- | --- | --- | --- |
+| trivial | codex:gpt-6-luna/max → codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $0.56 | 26 | 2.6% |
+| small | codex:gpt-6-luna/max → codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $0.69 | 27 | 6.6% |
+| moderate | codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $1.02 | 15 | 16.4% |
+| hard | codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $1.23 | 18 | 34.6% |
+| high-risk (moderate) | codex:gpt-6.1-sol/medium | $1.00 | 14 | 19.5% |
+| high-risk (hard) | codex:gpt-6.1-sol/medium | $1.00 | 14 | 39.0% |
 
-Trade-off: more tasks end in "stop and ask" instead of climbing to Sonnet max.
-The unsolved share rises from about 6–9% to about 14% for moderate tasks, and
-from about 18–25% to about 31% for hard tasks. In exchange, cost and time fall
-a lot: `claude` hard is $6.95 and 57 minutes before, $2.63 and 32 minutes now.
+`codex`:
+
+| Difficulty | Path | Expected cost | Expected minutes | Unsolved when owner asked |
+| --- | --- | --- | --- | --- |
+| trivial | codex:gpt-6-luna/max → codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $0.56 | 26 | 2.6% |
+| small | codex:gpt-6-luna/max → codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $0.69 | 27 | 6.6% |
+| moderate | codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $1.02 | 15 | 16.4% |
+| hard | codex:gpt-6.1-sol/low → codex:gpt-6.1-sol/medium | $1.23 | 18 | 34.6% |
+| high-risk (moderate) | codex:gpt-6.1-sol/medium | $1.00 | 14 | 19.5% |
+| high-risk (hard) | codex:gpt-6.1-sol/medium | $1.00 | 14 | 39.0% |
 
 Timing evidence: the router results log had one timed worker attempt (Haiku
 low, moderate, 2.3 minutes against 11.6 in the benchmark), so benchmark minutes
@@ -292,9 +302,3 @@ Luna xhigh 6 minutes, n=7; Sol high 15 minutes, n=11), but no difficulty or
 outcome, so it cannot compare models. The speed weighting rests on the
 Artificial Analysis Coding Agent Index time per task; replace it when the
 router's own results reach 10 per worker and difficulty.
-
-Sol xhigh is not allowed by the owner's GSwitch setup, so it is not a rung.
-
-High-risk rows are evaluated at the moderate and hard factors. They start one
-rung up (`claude` Opus medium, `mixed` and `codex` Sol medium) because a wrong
-change that passes the tests costs more there.

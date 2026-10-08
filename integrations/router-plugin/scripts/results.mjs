@@ -1,11 +1,12 @@
 // Added by Light505 for gswitchtool (2026).
 import fs from "node:fs";
 import path from "node:path";
-import { efforts, workerNames } from "./workers.mjs";
+import { efforts, workerNames, difficulties, kinds, failureReasons, workerFailures } from "./workers.mjs";
 
-export const difficulties = ["trivial", "small", "moderate", "hard", "high-risk"];
-const reasons = ["verify", "review", "scope", "stopped", "other"];
-const steps = ["start", "escalation"];
+export { difficulties } from "./workers.mjs";
+const reasons = failureReasons;
+const outcomes = ["pass", "fail", "unverified", "blocked"];
+const steps = ["start", "escalation", "repair", "retry"];
 const object = (value) => value && typeof value === "object" && !Array.isArray(value) ? value : {};
 const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
 const firstNumber = (...values) => values.find(number) ?? null;
@@ -68,9 +69,10 @@ export function resultRecord(args, normalizeProject, namespace = "router") {
   const orchestrator = f["--worker"] === "orchestrator";
   if (!orchestrator && !isResultWorker(f["--worker"], namespace)) throw new Error("Invalid worker. Use a router worker, codex:<model>/<effort> (low, medium, high, xhigh, max) or orchestrator");
   if (orchestrator && (f["--agent"] || f["--codex-job"] || f["--codex-thread"])) throw new Error("Orchestrator results cannot use --agent, --codex-job or --codex-thread");
-  if (!["pass", "fail"].includes(f["--outcome"])) throw new Error("Invalid outcome. Valid values: pass, fail");
+  if (!outcomes.includes(f["--outcome"])) throw new Error("Invalid outcome. Valid values: pass, fail, unverified, blocked");
   if (f["--reason"] && !reasons.includes(f["--reason"])) throw new Error(`Invalid reason. Valid values: ${reasons.join(", ")}`);
-  if (f["--step"] && !steps.includes(f["--step"])) throw new Error("Invalid step. Valid values: start, escalation");
+  if (f["--outcome"] === "fail" && !f["--reason"]) throw new Error(`A failed result needs --reason ${reasons.join(", ")}`);
+  if (f["--step"] && !steps.includes(f["--step"])) throw new Error("Invalid step. Valid values: start, escalation, repair, retry");
   if (f["--title"] && [...f["--title"]].length > 120) throw new Error("Title must be at most 120 characters");
   return {
     type: "result", time: new Date().toISOString(), sessionId, project: normalizeProject(directory),
@@ -78,6 +80,32 @@ export function resultRecord(args, normalizeProject, namespace = "router") {
     reason: f["--reason"] ?? null, step: f["--step"] ?? null, title: f["--title"] ?? null,
     agentId: f["--agent"] ?? null, codexJobId: f["--codex-job"] ?? null, codexThreadId: f["--codex-thread"] ?? null
   };
+}
+
+export function planRecord(args, normalizeProject) {
+  const [sessionId, directory, ...rest] = args;
+  if (!text(sessionId) || sessionId.startsWith("--") || !text(directory) || directory.startsWith("--")) throw new Error("plan requires <sessionId> <projectDir>");
+  const f = flags(rest, ["--task", "--kind", "--difficulty", "--title", "--codex"]);
+  if (!/^[\w.-]{1,40}$/.test(f["--task"] ?? "")) throw new Error("Invalid task id. Use 1–40 letters, digits, underscores, dots or hyphens");
+  if (!kinds.includes(f["--kind"])) throw new Error(`Invalid kind. Valid values: ${kinds.join(", ")}`);
+  if (!difficulties.includes(f["--difficulty"])) throw new Error(`Invalid difficulty. Valid values: ${difficulties.join(", ")}`);
+  if (f["--title"] && [...f["--title"]].length > 120) throw new Error("Title must be at most 120 characters");
+  return { type: "plan", time: new Date().toISOString(), sessionId, project: normalizeProject(directory),
+    task: f["--task"], kind: f["--kind"], difficulty: f["--difficulty"], title: f["--title"] ?? null };
+}
+export function taskState(records, sessionId, task) {
+  const matching = records.filter((r) => r.sessionId === sessionId && r.task === task);
+  const results = matching.filter((r) => r.type === "result" && r.worker !== "orchestrator");
+  const failed = results.filter((r) => r.outcome === "fail"), workers = new Map();
+  for (const r of failed) {
+    if (r.reason != null && !workerFailures.includes(r.reason)) continue;
+    const reasons = workers.get(r.worker) ?? [];
+    if (!reasons.includes(r.reason ?? "other")) reasons.push(r.reason ?? "other");
+    workers.set(r.worker, reasons);
+  }
+  return { plan: matching.filter((r) => r.type === "plan").at(-1) ?? null, results, failures: failed.length,
+    done: results.some((r) => ["pass", "unverified"].includes(r.outcome)),
+    failedWorkers: [...workers].map(([worker, reasons]) => ({ worker, reasons })), last: results.at(-1) ?? null };
 }
 
 function usageTokens(value) {
@@ -91,10 +119,10 @@ function usageTokens(value) {
   return parts.length ? parts.reduce((sum, part) => sum + part, 0) : null;
 }
 
-export function attemptRecord(input, { sessionId, project, agentId = null, worker, scope = [] }) {
+export function attemptRecord(input, { sessionId, project, agentId = null, worker, scope = [], task = null }) {
   const response = object(input.tool_response);
   return {
-    type: "attempt", time: new Date().toISOString(), sessionId: sessionId ?? null, project, agentId, worker, scope,
+    type: "attempt", time: new Date().toISOString(), sessionId: sessionId ?? null, project, agentId, worker, scope, task,
     durationMs: firstNumber(response.totalDurationMs, response.duration_ms),
     tokens: firstNumber(response.totalTokens, usageTokens(response.usage), usageTokens(input.usage)),
     raw: { input: Object.keys(input), tool_response: Object.keys(response) }
@@ -133,7 +161,7 @@ export function transcriptTotals(file) {
 export function validResult(record) {
   return record.type === "result" && text(record.sessionId) && text(record.project) && text(record.task) && text(record.worker) &&
     isResultWorker(record.worker, /^(router-dev|codex-dev):/.test(record.worker) ? "router-dev" : "router") &&
-    difficulties.includes(record.difficulty) && ["pass", "fail"].includes(record.outcome) &&
+    difficulties.includes(record.difficulty) && outcomes.includes(record.outcome) &&
     typeof record.time === "string" && Number.isFinite(Date.parse(record.time));
 }
 
@@ -153,12 +181,12 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
   }
   const groups = new Map();
   for (const r of records) {
-    if (!validResult(r) || (project && normalizeProject(r.project) !== normalizeProject(project)) ||
+    if (!validResult(r) || r.outcome === "blocked" || (project && normalizeProject(r.project) !== normalizeProject(project)) ||
         (since !== undefined && Date.parse(r.time) < now - since * 86400000)) continue;
     const key = JSON.stringify([r.worker, r.difficulty]);
     const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, attempts: 0, passes: 0, durations: [], tokens: [], jobs: new Set() };
     group.attempts++;
-    if (r.outcome === "pass") group.passes++;
+    if (["pass", "unverified"].includes(r.outcome)) group.passes++;
     const attempt = text(r.agentId) ? telemetry.get(identity(r)) : undefined;
     if (number(attempt?.durationMs)) group.durations.push(attempt.durationMs);
     if (number(attempt?.tokens)) group.tokens.push(attempt.tokens);
@@ -173,7 +201,7 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
 // Orchestrator edits are logged as results but are not worker attempts, so aggregateStats and validResult skip them.
 export function orchestratorEdits(records, { project, since, now = Date.now(), normalizeProject = (value) => value } = {}) {
   return records.filter((r) => r.type === "result" && r.worker === "orchestrator" && text(r.sessionId) && text(r.project) && text(r.task) &&
-    difficulties.includes(r.difficulty) && ["pass", "fail"].includes(r.outcome) && typeof r.time === "string" && Number.isFinite(Date.parse(r.time)) &&
+    difficulties.includes(r.difficulty) && outcomes.includes(r.outcome) && typeof r.time === "string" && Number.isFinite(Date.parse(r.time)) &&
     (!project || normalizeProject(r.project) === normalizeProject(project)) &&
     (since === undefined || Date.parse(r.time) >= now - since * 86400000)).length;
 }

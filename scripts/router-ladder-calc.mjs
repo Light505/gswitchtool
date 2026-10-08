@@ -1,36 +1,41 @@
 // Added by Light505 for gswitchtool (2026).
-// Evaluates the router's ladders and high-risk paths with the numbers in docs/model-benchmarks.md.
+// Evaluates the router's policy paths with the numbers in docs/model-benchmarks.md.
 // Run: node scripts/router-ladder-calc.mjs
 // Optional: --results <results.jsonl> reports observed rates without changing picks.
 import { readResults, validResult } from "../integrations/router-plugin/scripts/results.mjs";
-// [score, cost $, minutes]; * = Opus estimates. o = overhead per attempt, a = correlation.
-const W = {
-  "Haiku low": [28, .14, 11.6], "Haiku medium": [34, .23, 14.0], "Sonnet low": [42, .48, 6.3], "Sonnet medium": [46, .62, 8.5],
-  "Sonnet high": [55, 1.24, 12.3], "Sonnet max": [68, 14.19, 90],
-  "Opus medium*": [60, 1.45, 11], "Opus high*": [63, 2.16, 16], "Opus xhigh*": [65, 4.82, 30],
-  "Luna max": [41, .18, 21.4], "Sol low": [57, .50, 8.6], "Sol medium": [61, .70, 10.9], "Sol high": [60, .89, 13.3],
+import { benchmarks, workerTable, defaultAllowed, candidates, taskFloor, ownerCheckAfter, needsApproval, benchmarkId } from "../integrations/router-plugin/scripts/workers.mjs";
+// [score, cost $, minutes] from benchmarks; * = Opus estimates. o = overhead per attempt, a = correlation.
+const ids = {
+  "Haiku low": "haiku-low", "Haiku medium": "haiku-medium", "Sonnet low": "sonnet-low", "Sonnet medium": "sonnet-medium",
+  "Sonnet high": "sonnet-high", "Sonnet max": "sonnet-max",
+  "Opus medium*": "opus-medium", "Opus high*": "opus-high", "Opus xhigh*": "opus-xhigh",
+  "Luna max": "codex:gpt-6-luna/max", "Sol low": "codex:gpt-6.1-sol/low", "Sol medium": "codex:gpt-6.1-sol/medium", "Sol high": "codex:gpt-6.1-sol/high",
 };
-// Owner's short ladders: every task starts at the first rung; at most two escalations.
-// Mixed LOW (Claude usage at 30% or less) and codex use the Codex ladder.
-const ladders = {
-  claude: ["Haiku low", "Opus medium*", "Opus high*"],
-  mixed: ["Haiku low", "Sol medium", "Opus high*"],
-  "mixed LOW": ["Sol low", "Sol medium"],
-  codex: ["Sol low", "Sol medium"],
+const W = Object.fromEntries(Object.entries(ids).map(([name, id]) => [name, [benchmarks[id].score, benchmarks[id].cost, benchmarks[id].minutes]]));
+// Simulate capability failures until the owner check, or until no candidate remains.
+const codexAllowed = {
+  "gpt-6.1-sol": ["low", "medium", "high"],
+  "gpt-6-luna": ["low", "medium", "high", "xhigh", "max"],
 };
-// High-risk work starts one rung up.
-const highRisk = {
-  claude: ["Opus medium*", "Opus high*"],
-  mixed: ["Sol medium", "Opus high*"],
-  codex: ["Sol medium"],
-};
+function policyPath(mode, difficulty) {
+  const rows = workerTable({ claudeAllowed: defaultAllowed(), codexAllowed,
+    mode: mode === "mixed LOW" ? "mixed" : mode, low: mode === "mixed LOW" });
+  const failed = [];
+  for (let attempt = 0; attempt < ownerCheckAfter; attempt++) {
+    const { floor } = taskFloor("implement", difficulty, failed.map((row) => row.score), failed.length);
+    const next = candidates(rows, { floor, exclude: failed.map((row) => row.worker) })[0];
+    if (!next) break;
+    failed.push(next);
+  }
+  return failed;
+}
 const classes = { trivial: 0.1, small: 0.25, moderate: 0.5, hard: 1 };
 const o = 0.3, oT = 3, a = 0.8;
 
-// Expected cost and minutes of a fixed path of ladder rungs.
+// Expected cost and minutes of a policy path.
 function evalPath(path, cls) { let cost = 0, time = 0, reach = 1, prev = null;
-  for (const n of path) { const s = W[n][0] / 100, fj = classes[cls] * (1 - s);
-    cost += reach * (W[n][1] + o); time += reach * (W[n][2] + oT);
+  for (const n of path) { const w = benchmarks[benchmarkId(n.worker)], s = w.score / 100, fj = classes[cls] * (1 - s);
+    cost += reach * (w.cost + o); time += reach * (w.minutes + oT);
     const f = prev === null ? fj : a * Math.min(1, fj / (classes[cls] * (1 - prev))) + (1 - a) * fj;
     reach *= f; prev = s; }
   return { cost, time, unsolved: reach }; }
@@ -46,17 +51,16 @@ try {
   console.error(`Router ladder: ${error.message}`);
   process.exit(1);
 }
-console.log("\n== Chosen defaults (owner's short ladders: every task starts at the first rung; high-risk one rung up) ==");
-for (const [mode, path] of Object.entries(ladders)) {
-  for (const cls of Object.keys(classes)) {
-    const r = evalPath(path, cls);
-    console.log(`${mode.padEnd(10)} ${cls.padEnd(9)} START ${path[0]} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; unsolved ${(r.unsolved * 100).toFixed(1)}%)`);
-  }
-}
-for (const [mode, path] of Object.entries(highRisk)) {
-  for (const cls of ["moderate", "hard"]) {
-    const r = evalPath(path, cls);
-    console.log(`${mode.padEnd(10)} high-risk ${cls.padEnd(9)} START ${path[0]} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; unsolved ${(r.unsolved * 100).toFixed(1)}%)`);
+console.log("\n== Policy paths (capability failures; up to 3 attempts before asking the owner) ==");
+for (const mode of ["claude", "mixed", "mixed LOW", "codex"]) {
+  for (const [difficulty, factor] of [
+    ...Object.keys(classes).map((cls) => [cls, cls]),
+    ["high-risk", "moderate"], ["high-risk", "hard"],
+  ]) {
+    const path = policyPath(mode, difficulty), r = evalPath(path, factor);
+    const label = difficulty === "high-risk" ? `high-risk (${factor})` : difficulty;
+    const names = path.map(({ worker }) => `${worker}${needsApproval(benchmarkId(worker)) ? " (approval)" : ""}`).join(" \u2192 ");
+    console.log(`${mode.padEnd(10)} ${label.padEnd(20)} ${names} | $${r.cost.toFixed(2)} | ${r.time.toFixed(0)}m | unsolved ${(r.unsolved * 100).toFixed(1)}%`);
   }
 }
 if (process.argv.includes("--results")) {

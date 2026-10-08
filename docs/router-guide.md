@@ -48,9 +48,9 @@ unreadable or invalid setup file, leave routing off.
 | Mode | Who writes code | Needs Invoke Mode |
 | --- | --- | --- |
 | `off` (no Router setup) | The orchestrator itself, no routing: a normal session | No |
-| `mixed` | An allowed Claude worker or Codex per task; stronger Claude models only as the last rungs | Yes |
+| `mixed` | An allowed Claude worker or Codex that meets the task floor | Yes |
 | `codex` | Codex only; no Claude worker ever writes code | Yes |
-| `claude` | Allowed Claude workers, lowest model first | No |
+| `claude` | Allowed Claude workers that meet the task floor | No |
 
 The Claude Code panel chooses the router mode; Invoke Mode says whether Codex
 may be used. When Invoke Mode is off, `mixed` and `codex` pause routing and the
@@ -101,16 +101,18 @@ and regenerating the agents.
 
 The allowed workers chosen in the Claude Code panel determine which workers
 may start. If that allowlist is missing or invalid, the fallback allows Haiku
-low and medium, every Sonnet effort and every Opus effort; the ladders below
-use only some of them.
+low and medium, every Sonnet effort and every Opus effort.
 Unknown models and efforts are ignored. An empty allowlist allows no Claude
 workers. `/router:mode` shows the current list; change it only in the panel.
 
-A Claude worker that costs more per attempt than Opus medium (~$1.45) needs the
-owner's approval: Opus high, Haiku max, Sonnet xhigh, Opus xhigh, Opus max and
-Sonnet max. The rule reads each worker's cost from `scripts/workers.mjs`, so it
-follows the data. The prompt names the worker and the task. Routing and the escalation ladders skip workers that are
-not allowed.
+A worker that costs more per attempt than Opus medium (~$1.45) needs the
+owner's approval: Opus high, Haiku max, Sonnet xhigh, Opus xhigh, Opus max,
+Sonnet max and Codex Sol max. The rule reads each worker's cost from
+`scripts/workers.mjs`, so it follows the data. The prompt names the worker and
+the task. Claude launches use the Agent hook; a Codex invoke whose brief has a
+`TASK:` line uses the Bash hook. Invokes without one (your own
+`/codex:gswitch-invoke`, reviews) pass unchanged.
+Routing leaves out workers that are not allowed.
 
 Workers cannot start other agents. Each Claude worker runs in its own git
 worktree; when it finishes, a script copies the result back into the working
@@ -126,39 +128,84 @@ override is refused, and the approval rule above applies.
 
 ## Routing
 
-For each task the orchestrator writes a brief (goal, scope and verify command)
-and starts at the mode's first rung, whatever the difficulty. It moves up the
-ladder only after a failure: a failed verify or a serious review finding. The
-owner may name a different start for a task.
+The orchestrator classifies each task by kind, difficulty and how it can be
+verified. Kinds are implement, debug, refactor, test, docs, review, research
+and architecture. It runs `router plan` before starting a worker and again
+after each failure, using the same task id for every attempt.
 
-| Difficulty | `claude` | `mixed` | `codex` |
-| --- | --- | --- | --- |
-| Trivial, small, moderate, hard | Haiku low | Haiku low | Sol low |
+The plan lists allowed workers whose agent-benchmark score meets the task's
+capability floor, cheapest first. It leaves out workers without a benchmark
+and workers beaten by another eligible worker on score and cost. In mixed
+and codex modes, the orchestrator supplies the Codex allowlist from
+`invoke-status` with `--codex`. LOW leaves out Claude workers.
 
-High-risk list: credentials, account switching and failover, concurrency,
-money and data logic, data deletion, release and update code, security. These
-start one rung up on purpose: Opus medium in `claude`, Sol medium in `mixed` and
-`codex`. A wrong change that passes the tests costs more there than a few extra
-cents.
-
-## Escalation ladders
-
-| Mode | Ladder |
+| Difficulty | Floor |
 | --- | --- |
-| `claude` | Haiku low → Opus medium → Opus high (owner approves) → stop and ask |
-| `mixed` | Haiku low → Sol medium → Opus high (owner approves) → stop and ask |
-| `mixed` with LOW | Sol low → Sol medium → stop and ask |
-| `codex` | Sol low → Sol medium → stop and ask |
+| Trivial | 0 |
+| Small | 0 |
+| Moderate | 42 |
+| Hard | 55 |
+| High-risk | 60 |
 
-High-risk tasks start one rung up: `claude` at Opus medium → Opus high (owner
-approves) → stop and ask; `mixed` at Sol medium → Opus high (owner approves) →
-stop and ask; `codex` at Sol medium → stop and ask.
+Debug counts as at least moderate; architecture as at least hard. High-risk
+means credentials, account switching and failover, concurrency, money and
+data logic, data deletion, release and update code, or security, whatever the
+size. A product decision or unclear requirement goes to the owner first.
 
-There are at most two escalations per task. The next worker gets the brief plus
-what the previous one tried and why it failed. Rungs that are not allowed are
-skipped. After the last rung the orchestrator stops and asks the owner, with
-what each rung tried. Codex workers are `gpt-6.1-sol` at low or medium; Sol
-high and xhigh are not used.
+Pick the first candidate unless the task gives a reason for another listed
+worker. The owner may name a worker; a launch below the floor asks for approval.
+The brief includes `TASK:`, `SCOPE:` and a `VERIFY:` command when one exists.
+
+## Failures and recovery
+
+Find the cause from tool evidence, record the outcome and reason, then run
+`router plan` again.
+
+| Reason | Recovery |
+| --- | --- |
+| `verify` | Tests or build failed: repair once with the failing output, then escalate |
+| `review` | Serious review finding: repair once with the finding, then escalate |
+| `incomplete` | Brief partly done or wrong: repair once with what is missing, then escalate |
+| `capability` | Too hard, no progress or the same wrong fix twice: escalate |
+| `other` | Another worker failure: escalate |
+| `context` | Supply missing facts and retry the same worker; ask the owner for a product decision |
+| `tool` | Fix the environment or verify command and retry the same worker; do not escalate |
+| `scope` | Decide the scope request, then resume the same worker |
+| `usage` | Codex fails over through GSwitch; if Invoke Mode pauses, wait for the owner. Claude LOW uses Codex in mixed mode or wraps up in claude mode |
+| `worktree` | Tell the owner the kept path and reason; retry on a fresh worktree or ask |
+| `stopped` | The owner stopped it: ask the owner |
+
+Each distinct worker that fails for verify, review, incomplete, capability or
+other raises the floor one difficulty level and above the highest failed
+worker's score. Those workers are excluded from candidates. Effort is part of
+the worker, so a listed higher effort can be an escalation. The next worker
+gets what the earlier attempts tried and why they failed.
+
+Repair once per worker per task by resuming the worker or Codex thread.
+Repairs count as attempts. Codex already retries a failed verify once inside
+invoke; after `Verify: FAILED after 1 retry`, escalate instead of repairing.
+
+After 3 failed attempts, ask the owner before every further attempt. Say what
+each attempt tried, why it failed and what comes next. The launch hook also
+shows an approval prompt. Stop when there is no candidate, the task is blocked,
+approval is denied, or recovery needs an outside fix or an owner decision.
+
+### What is enforced by code
+
+- Mode and allowlists: Claude by the launch hook, Codex by GSwitch.
+- LOW usage, Claude model overrides, scope and worktree-gone edit blocks.
+- A plan is required; a passed or unverified task cannot launch again; a failed worker cannot
+  launch again for the same task, except a Codex thread resumed for repair.
+- Approval prompts for a worker below the floor, attempts after 3 failures,
+  and workers above Opus medium's cost.
+
+### What is still the orchestrator's judgment
+
+- Classification, and the outcome and reason recorded for each attempt.
+- Repairs through SendMessage; only the owner check is enforced there.
+- Putting the `TASK:` line in a Codex brief; a Codex invoke without one is not
+  checked against the plan.
+- Choosing among candidates.
 
 ## How the defaults were chosen
 
@@ -169,18 +216,14 @@ cache writes and output) where it has a number, and its Intelligence Index runs
 for Opus below max. All numbers, prices and sources are in
 [`model-benchmarks.md`](./model-benchmarks.md).
 
-The starts and ladders follow the owner's short-ladder rule, not a search. Every
-task starts at the cheapest rung (Haiku low in `claude` and `mixed`), whatever
-its difficulty, because a failure there costs little (Haiku low $0.14, Sonnet
-max $14.19 is no longer a rung). Each escalation must buy a worker at a
-score the owner accepts: the middle rung is the cheapest worker at Opus medium's
-level (Opus medium ~60 for $1.45 in `claude`; Sol medium 61 for $0.70 in
-`mixed` and `codex`, so `mixed` gets one Codex try before Claude). The top
-rung is Opus high (~63), the most the router uses. After that the orchestrator
-stops and asks. The trade-off: more tasks end in "stop and ask" instead of
-climbing to Sonnet max, in exchange for much lower cost and time. The expected
-cost, minutes and unsolved share per difficulty are in
-[`model-benchmarks.md`](./model-benchmarks.md#default-start-per-difficulty);
+Floors sit at the scores of the cheapest reasonable worker at each level:
+Sonnet low 42 for moderate, Sonnet high 55 for hard, Opus medium about 60 for
+high-risk. Candidates then use the cheapest allowed worker that meets the
+floor. With the default allowlists and capability failures, moderate work is
+$1.56 and 16 minutes in claude mode, $1.20 and 15 minutes in mixed mode.
+The share still unsolved when the owner is asked is 14.5% and 14.1%.
+The expected paths, cost, minutes and unsolved share for every difficulty are in
+[`model-benchmarks.md`](./model-benchmarks.md#capability-floors-and-expected-cost);
 `scripts/router-ladder-calc.mjs` prints them.
 
 The estimates assume that failures are mostly caused by difficulty (a task one
@@ -199,29 +242,34 @@ replaced when the router's own results reach 10 per worker and difficulty
 or prices change and update `model-benchmarks.md`, this guide and the route
 skill together.
 
-A task routed straight to Codex starts at a Codex rung. In `codex` mode the
-orchestrator never writes the code itself after the last rung; it reports what
-each rung tried and asks.
+A task routed straight to Codex uses allowed Codex candidates. In `codex`
+mode the orchestrator never writes the code itself when recovery stops; it
+reports what each attempt tried and asks.
 
 ## Results log
 
 Every attempt is logged to `~/.gswitchtool-router/results.jsonl` (never in the
-project), so the ladders can move from benchmark numbers to your own:
+project), so routing can be compared with your own results:
+
+- `router plan` records the task id, kind, difficulty and title. Task state
+  uses these plans and outcomes to track failures, failed workers and whether
+  the task passed or is unverified.
 
 - When a Claude worker stops, a hook reads its transcript and records the
   worker's total so far: duration and tokens of all its runs (idle time between
   a stop and a resume is excluded). Tokens count input, cache writes, cache
   reads and output; each API response counts once.
 - The orchestrator records each attempt's outcome with `router result`: task
-  id and short title, difficulty, worker, start or escalation, pass or fail and
-  why, and for Codex the GSwitch job and thread, which link to GSwitch's
+  id and short title, difficulty, worker, step (start, escalation, repair or retry), outcome
+  (pass, fail, unverified or blocked), and a required reason on fail, and for Codex the GSwitch job and thread, which link to GSwitch's
   Activity numbers.
 - When the orchestrator edits the code itself (a "Yourself" case or an
   owner-requested direct edit), it records `--worker orchestrator` with no
   agent or Codex fields. These records are not worker attempts: they are left
   out of success rates and `/router:stats` shows them as a separate count line.
 - `/router:stats` shows attempts, success rate, median time and tokens per
-  worker and difficulty.
+  worker and difficulty. Unverified counts as a pass; blocked is excluded
+  from worker attempts and success rates.
 - `node scripts/router-ladder-calc.mjs --results <file>` prints your observed
   success rate next to the assumed one once a worker and difficulty has 10 or
   more results. The defaults change only when you decide so.
@@ -268,7 +316,9 @@ The final report lists every scope request and who decided it.
 2. Review: `gswitch-review` runs in `mixed` and `codex` mode. In `claude` mode it
    runs when the review setting is on (default) and Invoke Mode is on; otherwise
    the orchestrator reviews the diff itself, and the report says why.
-3. Pass: the orchestrator reports. Fail: next rung.
+3. Record the outcome and step. A fail needs a reason: run `router plan` again
+   and repair, retry, escalate or ask the owner according to the cause. Report
+   passes, unverified work and blocks with the evidence.
 
 The report says what changed, which worker did it (model and effort), every
 escalation, scope requests, review result, and what was not tested.
@@ -284,7 +334,7 @@ Claude accounts, and hitting the limit stops the whole session.
   session. A status line you already use is run by the router's script and its
   output kept.
 - When 30% or less of the 5-hour window is left, every Claude worker type stops:
-  `mixed` sends new work to Codex and skips the Claude rungs; `claude` stops and
+  `mixed` sends new work to Codex and leaves out Claude candidates; `claude` stops and
   asks the owner.
 - Graceful wrap-up: no new workers start; running ones finish their step; a
   script records unfinished work (tasks, kept worktrees, Codex threads, next
@@ -309,6 +359,6 @@ Claude accounts, and hitting the limit stops the whole session.
 `~/.gswitchtool-dev/claude-setup.json`. The Dev plugins are silent until you type
 `/router-dev:dev-on` (or `/codex-dev:dev-on`) in a session; then only that session
 gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins. Not provable by unit tests and checked
-by hand in a real session: hook inputs for subagents, worktree isolation, the approval
-prompt for workers above Opus medium's cost, status line support in the desktop app, and Codex's
+by hand in a real session: hook inputs for subagents, Bash invoke and SendMessage, worktree isolation,
+the approval prompt for the owner check and workers above Opus medium's cost, status line support in the desktop app, and Codex's
 behavior after a declined file change.

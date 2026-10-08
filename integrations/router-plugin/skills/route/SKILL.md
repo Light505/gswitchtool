@@ -24,58 +24,54 @@ source is `GSwitch setup`. To change them, tell the owner to use that panel.
   unavailable, say once "Router paused: Invoke Mode is off; working as a normal
   session" and work normally. Never start Claude workers instead.
 - `LOW` (30% or less of the 5-hour window left): no new Claude workers. In
-  `mixed`, new work uses the codex ladder (Sol low → Sol medium) and skips
-  Claude rungs. In `claude`, follow
-  "Wrap up" now. Workers already running may finish their current step.
+  `mixed`, `router plan` leaves Claude workers out, so new work goes to Codex.
+  In `claude`, follow "Wrap up" now. Workers already running may finish their
+  current step.
 - `Claude 5h: unknown`: the threshold cannot apply; say so once in the report.
 
-## 2. Choose the first worker
+## 2. Classify and plan
 
-Every task starts at the mode's first rung, whatever its difficulty. Move up the
-ladder only after a failure (section 5); never start higher "to be safe".
+Classify each task yourself, in your head, before any worker starts (no extra
+model call):
 
-| Difficulty | `claude` | `mixed` | `codex` |
-| --- | --- | --- | --- |
-| Trivial, small, moderate, hard | Haiku low | Haiku low | Sol low |
+- kind: `implement`, `debug`, `refactor`, `test`, `docs`, `review`, `research`
+  or `architecture`;
+- difficulty: `trivial` (one obvious edit), `small` (one function or file, clear
+  fix), `moderate` (several functions or files, some reading needed), `hard`
+  (cross-module, unclear cause, or design inside the code) or `high-risk`
+  (credentials, account switching and failover, concurrency, money and data
+  logic, data deletion, release and update code, security, whatever the size);
+- how it is verified: a test or build command (`VERIFY:`), review only, or
+  nothing objective (docs, analysis).
 
-High-risk work starts one rung up: credentials, account switching and failover,
-concurrency, money and data logic, data deletion, release and update code,
-security. Start at Opus medium in `claude`, Sol medium in `mixed` and `codex`.
+A product decision or unclear requirement is not a task for a worker: ask the
+owner first.
 
-| Mode | Ladder |
-| --- | --- |
-| `claude` | Haiku low → Opus medium → Opus high (owner approves) → stop and ask |
-| `mixed` | Haiku low → Sol medium → Opus high (owner approves) → stop and ask |
-| `mixed` with LOW | Sol low → Sol medium → stop and ask |
-| `codex` | Sol low → Sol medium → stop and ask |
+Then run, once per task (and again after each failure):
 
-High-risk ladders: `claude` Opus medium → Opus high (owner approves) → stop and
-ask; `mixed` Sol medium → Opus high (owner approves) → stop and ask; `codex`
-Sol medium → stop and ask.
+`router plan ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --kind
+<kind> --difficulty <difficulty> --title "<short title>" [--codex
+"<model>:<efforts>;<model>:<efforts>"]`
 
-Workers: Claude `router:<model>-<effort>`; Codex `gpt-6.1-sol` low or medium
-through `gswitch-delegate`.
+In `mixed` and `codex`, add `--codex` copied from `invoke-status`'s allowed
+list, for example `--codex "gpt-6.1-sol:low,medium,high;gpt-6-luna:low,medium,high,xhigh,max"`.
+Use one task id (`t1`, `t2`, …) for all attempts at the same task.
 
-Why these (the owner's rule): every task starts at Haiku low, the cheapest
-worker, in `claude` and `mixed`, because a failure there costs little (Haiku low
-is USD 0.14 against USD 14.19 for Sonnet max). At most two escalations. The
-middle rung is the cheapest worker at Opus medium's level: Opus medium in
-`claude`, and Sol medium in `mixed` (61 for USD 0.70, where Opus medium scores
-about 60 for USD 1.45). The top rung is Opus high, or a cheaper worker at the
-same level if one exists; nothing above Opus high. After the last rung, stop and
-ask the owner, with what each rung tried. The point is not to spend usage
-passing a task around. The numbers and the method are in
-`docs/model-benchmarks.md` of the GSwitch repository. The owner may name a
-different start for a task; follow it.
+The plan prints the task's capability floor, its failures so far, the recovery
+for the last failure, and the candidates: workers your settings allow (Claude
+workers from the GSwitch Claude Code panel, Codex from Invoke Mode, families by
+mode, no Claude workers when LOW) whose agent-benchmark score meets the floor,
+cheapest first. Floors: trivial and small 0, moderate 42, hard 55, high-risk 60;
+`debug` counts as at least moderate and `architecture` as at least hard.
 
-Not used (the owner's choice): Haiku medium and above, all Sonnet efforts, Opus
-low, Opus xhigh, Opus max, Sol high, Sol max, and all Luna efforts. Sol xhigh is
-not allowed by the owner's GSwitch setup. Use these only when the owner asks.
+Pick the first candidate unless the task gives a reason for another listed one
+(for example a debugging task where a Codex model scores much higher on
+terminal work for a few cents more). Never pick a worker that is not listed. The
+owner may name a worker for a task; follow it (the hook asks the owner to
+confirm a worker below the floor).
 
-Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
-model or effort `invoke-status` does not allow. Worker type:
-`router:<model>-<effort>`. The hook rejects anything else, a `model` override,
-and any worker that is not allowed.
+The numbers and the method are in `docs/model-benchmarks.md` of the GSwitch
+repository.
 
 ## 3. Write the brief
 
@@ -83,18 +79,25 @@ The worker sees the repository, not this conversation. The brief states:
 
 - Goal and done-criteria, the constraints that matter, and the files to start
   from.
-- `SCOPE: <glob,glob>` on its own line (required). Write it generously: the
-  task's files plus their tests and type files.
+- `TASK: <id>` and `SCOPE: <glob,glob>`, each on its own line (both required).
+  Write the scope generously: the task's files plus their tests and type files.
 - `VERIFY: <command>` when a test command exists.
-- For an escalation: what the previous rung tried and why it failed (the
-  verify output or review finding), in a few lines.
+- After a failure: what the earlier attempts changed, the verify output or
+  review finding, and why they failed, in a few lines. Name the approach that
+  failed so the next worker does not repeat it.
 
 Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief
 as prompt, no `model`. Codex: the `gswitch-delegate` skill, with `--write`,
-`--scope` and `--verify`, at the rung's model and effort. Approval prompts
-(every Claude worker that costs more per attempt than Opus medium) are the
-owner's decision; if denied, stop and ask. Codex has no such prompt: never use
-Sol max without the owner's yes.
+`--scope` and `--verify`, at the chosen model and effort, with the `TASK:` line
+in the brief.
+
+Hooks enforce the plan for both Claude workers and Codex: a launch without a
+planned `TASK:` is denied, as is a task that already passed and a worker that
+already failed it (resume that worker or Codex thread for a repair instead).
+The hook shows the owner an approval prompt for a worker below the task's
+floor, for any attempt after 3 failed ones, and for any worker that costs more
+per attempt than Opus medium (Opus high and above, Sonnet xhigh and above, Haiku
+max, Sol max). If the owner denies it, stop and ask.
 
 ## 4. Check the result
 
@@ -112,34 +115,73 @@ Trust tool facts only; the worker's text is a claim.
 - Read diffs only after a warning, a failed verify, or changes in the high-risk
   list, and then only those files.
 
-Record every attempt, pass or fail, before you report or escalate. This data
-replaces the benchmark's success rates over time, so never skip it:
+Decide the outcome from tool facts:
+
+- `pass`: verify passed (or the change is reviewable only and the review is
+  clean), scope warnings resolved, apply succeeded.
+- `fail`: verify failed, a serious review finding, the worker stopped, or it
+  did only part of the task.
+- `unverified`: done, but nothing objective can check it (docs, analysis); you
+  read the change. Say so in the report.
+- `blocked`: cannot go on without an outside fix or an owner decision.
+
+Record every attempt before you report or recover. The hooks count these
+records, and this data replaces the benchmark's success rates over time, so
+never skip it:
 
 `router result ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --title
-"<short title>" --difficulty <trivial|small|moderate|hard|high-risk> --worker
-<router:<model>-<effort> | codex:<model>/<effort> | orchestrator> --step <start|escalation>
---outcome <pass|fail> [--reason verify|review|scope|stopped|other]
-[--agent <agentId>] [--codex-job <job>] [--codex-thread <thread>]`
+"<short title>" --difficulty <difficulty> --worker <router:<model>-<effort> |
+codex:<model>/<effort> | orchestrator> --step <start|escalation|repair|retry>
+--outcome <pass|fail|unverified|blocked> [--reason <reason>] [--agent
+<agentId>] [--codex-job <job>] [--codex-thread <thread>]`
 
-Use one task id (for example `t1`, `t2`) for all attempts at the same task.
-Record the difficulty you judged at the start, even if the task turned out
-harder.
+A `fail` needs a reason (section 5). Record the difficulty you judged at the
+start, even if the task turned out harder.
 
 Use `--worker orchestrator` when you made the edit yourself (the "Yourself"
 cases or an owner-requested direct edit). Omit `--agent` and `--codex-*`. Never
 record a worker that did not run. These records are not counted in worker
 success rates.
 
-Pass: report. Fail (verify failed or a serious review finding): next rung.
+## 5. Recover from a failure
 
-## 5. Escalation ladder
+Find the cause from the evidence (verify output, review finding, the worker's
+`STOPPED:` line, `invoke` codes, apply output), record it as the reason, then
+run `router plan` again. It prints the recovery for that reason and the new
+candidates. The reasons:
 
-On a failed verify or a serious review finding, go to the next rung of the
-mode's ladder (section 2). Each rung gets the brief plus what the previous
-rung tried and why it failed. Never resend the same failed fix to the same
-rung, and never go down or sideways. At most two escalations per task. After
-the last rung, stop: report what each rung tried and ask the owner; do not
-write the code yourself.
+| Reason | Means | Recovery |
+| --- | --- | --- |
+| `verify` | the change fails its tests or build | repair once: resume the same worker or Codex thread with the failing output; then escalate |
+| `review` | a serious review finding | repair once with the finding; then escalate |
+| `incomplete` | parts of the brief not done or done wrong | repair once with what is missing; then escalate |
+| `capability` | `STOPPED: too hard`, no progress, the same wrong fix twice | escalate |
+| `context` | `STOPPED: unclear brief`, a needed fact missing | supply the context and retry the same worker; a product decision goes to the owner |
+| `tool` | `STOPPED: environment`, a broken verify command, a crash | fix it, then retry the same worker; never escalate for this |
+| `scope` | a scope request | decide it (section 6), then resume the same worker |
+| `usage` | Codex or Claude usage ran out | Codex: GSwitch fails over by itself; on a pause, follow the Codex skill's pause rule. Claude LOW: see section 1 |
+| `worktree` | apply conflict, worktree gone | tell the owner the kept path and reason; retry on a fresh worktree or ask |
+| `stopped` | the owner stopped it | ask the owner |
+
+Escalating means the plan's next candidate: each distinct worker that failed
+for `verify`, `review`, `incomplete`, `capability` or `other` raises the floor
+one difficulty level and above that worker's score, and is not offered again.
+A stronger model is not always right: when the failure looks specific to one
+model family in `mixed` (misread instructions, tool trouble), a listed worker
+of the other family is a good next pick. Effort is part of the worker, so a
+higher effort of the same model is escalation too when it is listed.
+
+Bounds:
+
+- Repairs are once per worker per task, and count as attempts. Codex already
+  retried a failed verify once inside `invoke`; after `Verify: FAILED after 1
+  retry`, escalate instead of repairing.
+- After 3 failed attempts on a task, ask the owner before each further attempt:
+  say what each attempt tried and why it failed, and what you would try next.
+  The launch hook shows the owner a prompt too.
+- Stop and ask the owner when the plan lists no candidate, when the task is
+  blocked, or when a recovery needs a decision or an outside fix. Do not write
+  the code yourself.
 
 ## 6. Scope requests
 
@@ -169,7 +211,7 @@ was not tested, and anything kept (worktrees, Codex threads).
 
 ## Yourself
 
-Only: one-line fixes left after a passing rung (a typo, an import), and edits
+Only: one-line fixes left after a passing attempt (a typo, an import), and edits
 where a brief would be as long as the edit. Never in `codex` mode.
 
 ## Wrap up
