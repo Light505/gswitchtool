@@ -7,7 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { costPerTask, needsApproval, workerNames } from "../scripts/workers.mjs";
-import { appendResult, readResults, attemptRecord, aggregateStats, statsOptions, statsTable } from "../scripts/results.mjs";
+import { appendResult, readResults, attemptRecord, transcriptRun, resultRecord, aggregateStats, statsOptions, statsTable } from "../scripts/results.mjs";
 import { projectKey } from "../scripts/router.mjs";
 
 const plugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -108,7 +108,7 @@ test("SubagentStop records only bound router workers, nullable metrics and key-o
   } });
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1", agent_type: "router:haiku-low", usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 5 }, duration_ms: 42, last_assistant_message: "SECRET_VALUE" }), {});
   const r = readResults(f.file)[0];
-  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], durationMs: 42, tokens: 65,
+  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], durationMs: null, tokens: 65,
     raw: { input: ["session_id", "cwd", "agent_id", "agent_type", "usage", "duration_ms", "last_assistant_message"], tool_response: [] } });
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /SECRET_VALUE|input_tokens|output_tokens/);
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1" }), {});
@@ -132,7 +132,10 @@ test("PostToolUse Agent/Task records worker, response child ID, scope and suppli
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /SECRET_VALUE|parent|total_tokens/);
   assert.deepEqual(f.hook("PostToolUse", { tool_name: "Task", tool_input: { subagent_type: "router:haiku-low", prompt: "SCOPE: a/*, b/*" }, tool_response: { agent_id: "a2", usage: { input_tokens: 7, output_tokens: 9 } }, duration_ms: 55 }), {});
   r = readResults(f.file)[1];
-  assert.equal(r.agentId, "a2"); assert.equal(r.tokens, 16); assert.equal(r.durationMs, 55); assert.deepEqual(r.scope, ["a/*", "b/*"]);
+  assert.equal(r.agentId, "a2"); assert.equal(r.tokens, 16); assert.equal(r.durationMs, null); assert.deepEqual(r.scope, ["a/*", "b/*"]);
+  assert.deepEqual(f.hook("PostToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "SCOPE: a/*" },
+    tool_response: { isAsync: true, agentId: "a3", status: "async_launched" }, duration_ms: 1500 }), {});
+  assert.equal(readResults(f.file).length, 2);
   assert.deepEqual(f.hook("PostToolUse", { agent_id: "parent", tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low" } }), {});
   r = readResults(f.file)[2];
   assert.equal(r.agentId, null); assert.equal(r.tokens, null); assert.equal(r.durationMs, null); assert.deepEqual(r.scope, []);
@@ -150,7 +153,7 @@ test("telemetry accepts usage totals, counts, camel case and zero; ignores inval
     [{ tool_response: { usage: { total_tokens: 6, input_tokens: 100 } } }, null, 6],
     [{ tool_response: { usage: { inputTokens: 2, outputTokens: 3 } } }, null, 5],
     [{ tool_response: { usage: 7 } }, null, 7],
-    [{ usage: { total_tokens: 8 }, duration_ms: 5 }, 5, 8],
+    [{ usage: { total_tokens: 8 }, duration_ms: 5 }, null, 8],
     [{ tool_response: { totalDurationMs: -1, totalTokens: "9", usage: {} }, usage: { input_tokens: 3, output_tokens: 4 } }, null, 7],
     [{ tool_response: { usage: { input_tokens: -1, output_tokens: "4" } }, duration_ms: "5" }, null, null],
     [{ tool_response: ["private"] }, null, null]
@@ -195,7 +198,7 @@ test("stats merges completion metrics without double counting and isolates reuse
   const records = [
     result(), result({ task: "t2", agentId: "a2", outcome: "fail" }), result({ task: "t3", agentId: null }),
     attempt({ durationMs: 100 }), attempt({ tokens: 40 }), attempt(), attempt({ agentId: "a2", durationMs: 300, tokens: 80 }),
-    attempt({ sessionId: "other", durationMs: 999, tokens: 999 }), attempt({ project: `${project}/other`, durationMs: 999, tokens: 999 }),
+    attempt({ sessionId: "other", durationMs: 999, tokens: 999 }), attempt({ agentId: "a3", project: `${project}/other`, durationMs: 999, tokens: 999 }),
     attempt({ worker: "router:opus-low", durationMs: 999, tokens: 999 }), attempt({ agentId: "unmatched", durationMs: 999, tokens: 999 }),
     result({ worker: "codex:gpt-6.1-sol/low", agentId: null, codexJobId: "j1", difficulty: "hard" }),
     result({ worker: "codex:gpt-6.1-sol/low", agentId: null, codexJobId: "j1", difficulty: "hard", outcome: "fail" }),
@@ -236,6 +239,95 @@ test("stats filters by normalized project and elapsed days and validates options
   const empty = path.join(f.home, "empty.jsonl"); assert.deepEqual(readResults(empty), []);
 });
 
+test("transcript run takes the last run, counts each message ID once and ignores bad lines", (t) => {
+  const f = fixture(t), at = (s) => `2026-10-08T10:00:${s}.000Z`;
+  const usage = { input_tokens: 10, cache_creation_input_tokens: 5, cache_read_input_tokens: 30, output_tokens: 20 };
+  const file = path.join(f.home, "agent.jsonl");
+  fs.writeFileSync(file, [
+    { type: "user", uuid: "u1", timestamp: at("00"), message: { role: "user", content: "brief" } },
+    { type: "assistant", uuid: "x1", timestamp: at("01"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "assistant", uuid: "x2", timestamp: at("02"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "user", uuid: "u2", timestamp: at("10"), message: { role: "user", content: "resume" } },
+    { type: "assistant", uuid: "x3", timestamp: at("12"), message: { id: "m2", model: "claude-sonnet-5-5", usage: { input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 } } },
+    { type: "user", uuid: "u3", timestamp: at("13"), message: { role: "user", content: [{ type: "tool_result" }] } },
+    { type: "attachment", uuid: "x4", timestamp: at("15") }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n{corrupt}\n");
+  assert.deepEqual(transcriptRun(file), { run: "u2", durationMs: 5000, inputTokens: 1, cacheCreationTokens: 4, cacheReadTokens: 3, outputTokens: 2,
+    tokens: 10, models: ["claude-sonnet-5-5"] });
+  assert.equal(transcriptRun(path.join(f.home, "missing.jsonl")), null);
+  fs.writeFileSync(file, JSON.stringify({ type: "assistant", uuid: "x", timestamp: at("01"), message: { id: "m", usage } }) + "\n");
+  assert.equal(transcriptRun(file), null);
+});
+
+test("transcript run follows the latest promptId across injected meta lines", (t) => {
+  const f = fixture(t), file = path.join(f.home, "agent-prompt-id.jsonl");
+  const at = (second) => "2026-10-08T10:00:" + second + ".000Z";
+  const usage = (input, output) => ({ input_tokens: input, output_tokens: output });
+  fs.writeFileSync(file, [
+    { type: "user", uuid: "u1", promptId: "p1", timestamp: at("00"), message: { role: "user", content: "brief" } },
+    { type: "assistant", timestamp: at("01"), message: { id: "m1", model: "claude-haiku-5-5", usage: usage(100, 10) } },
+    { type: "user", uuid: "meta1", promptId: "p1", isMeta: true, timestamp: at("02"), message: { role: "user", content: "<system-reminder>..." } },
+    { type: "assistant", timestamp: at("10"), message: { id: "m2", model: "claude-haiku-5-5", usage: usage(200, 20) } },
+    { type: "user", uuid: "u2", promptId: "p2", timestamp: at("20"), message: { role: "user", content: "resume" } },
+    { type: "assistant", timestamp: at("21"), message: { id: "m3", model: "claude-sonnet-5-5", usage: usage(30, 3) } },
+    { type: "user", uuid: "meta2", promptId: "p2", isMeta: true, timestamp: at("39"), message: { role: "user", content: "[handback-send-enforce]..." } },
+    { type: "assistant", timestamp: at("40"), message: { id: "m4", model: "claude-opus-5-5", usage: usage(40, 4) } }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+  assert.deepEqual(transcriptRun(file), {
+    run: "p2", durationMs: 20_000, inputTokens: 70, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 7,
+    tokens: 77, models: ["claude-sonnet-5-5", "claude-opus-5-5"]
+  });
+});
+
+test("transcript run fallback ignores meta user lines when promptId is absent", (t) => {
+  const f = fixture(t), file = path.join(f.home, "agent-no-prompt-id.jsonl");
+  const usage = { input_tokens: 2, output_tokens: 3 };
+  fs.writeFileSync(file, [
+    { type: "user", uuid: "u1", timestamp: "2026-10-08T10:00:00.000Z", message: { role: "user", content: "brief" } },
+    { type: "assistant", timestamp: "2026-10-08T10:00:01.000Z", message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "user", uuid: "meta", isMeta: true, timestamp: "2026-10-08T10:00:02.000Z", message: { role: "user", content: "<system-reminder>..." } },
+    { type: "assistant", timestamp: "2026-10-08T10:00:10.000Z", message: { id: "m2", model: "claude-haiku-5-5", usage } }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+  assert.deepEqual(transcriptRun(file), {
+    run: "u1", durationMs: 10_000, inputTokens: 4, cacheCreationTokens: 0, cacheReadTokens: 0, outputTokens: 6,
+    tokens: 10, models: ["claude-haiku-5-5"]
+  });
+});
+
+test("SubagentStop reads the transcript run once per stop and stats sum runs", (t) => {
+  const f = fixture(t), file = path.join(f.home, "agent.jsonl"), time = new Date().toISOString();
+  const at = (s) => `2026-10-08T10:00:${s}.000Z`, usage = { input_tokens: 10, output_tokens: 20 };
+  fs.writeFileSync(file, [
+    { type: "user", uuid: "u1", timestamp: at("00"), message: { role: "user", content: "brief" } },
+    { type: "assistant", uuid: "x1", timestamp: at("03"), message: { id: "m1", model: "claude-haiku-5-5", usage } },
+    { type: "user", uuid: "u2", timestamp: at("10"), message: { role: "user", content: "resume" } },
+    { type: "assistant", uuid: "x2", timestamp: at("12"), message: { id: "m2", model: "claude-haiku-5-5", usage } },
+    { type: "assistant", uuid: "x3", timestamp: at("14"), message: { id: "m2", model: "claude-haiku-5-5", usage } }
+  ].map((line) => JSON.stringify(line)).join("\n") + "\n");
+  f.writeSession({ mode: "claude", bindings: { a1: { type: "router:haiku-low", scope: [] } } });
+  f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
+  f.hook("SubagentStop", { agent_id: "a1", agent_transcript_path: file });
+  let r = readResults(f.file)[0];
+  assert.equal(r.run, "u2"); assert.equal(r.durationMs, 4000); assert.equal(r.tokens, 30); assert.deepEqual(r.models, ["claude-haiku-5-5"]);
+  assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /brief|resume/);
+  const base = { type: "attempt", time, sessionId: "s1", project: projectKey(f.project), worker: "router:haiku-low", agentId: "a5" };
+  const result = { type: "result", time, sessionId: "s1", project: projectKey(f.project), task: "t1", worker: "router:haiku-low", difficulty: "small", outcome: "pass", agentId: "a5" };
+  const records = [result, { ...base, run: "u1", durationMs: 1000, tokens: 10 }, { ...base, run: "u1", durationMs: 1000, tokens: 10 },
+    { ...base, run: "u2", durationMs: 500, tokens: 5 }, { ...base, run: "u2", durationMs: 500, tokens: 5 }];
+  assert.equal(aggregateStats(records)[0].medianDurationMs, 1500);
+  assert.equal(aggregateStats(records)[0].medianTokens, 15);
+  assert.equal(aggregateStats([{ ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" }], { normalizeProject: projectKey })[0].worker, "codex-dev:gpt-6.1-sol/low");
+  const codexDev = aggregateStats([
+    { ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" },
+    { ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" },
+    { ...result, task: "t2", worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j2" }
+  ]);
+  assert.equal(codexDev[0].linkedJobs, 2);
+  assert.match(statsTable(codexDev), /codex-dev:gpt-6\.1-sol\/low\s+small\s+3\s+3\s+100\.0%\s+-\s+-\s+2$/);
+  assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router-dev").worker, "codex-dev:gpt-6.1-sol/low");
+  assert.throws(() => resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router"), /Invalid worker/);
+});
+
 test("hooks always return JSON on malformed inputs and unwritable results, never log payload values", (t) => {
   const f = fixture(t);
   f.writeSession({ mode: "claude", bindings: { a1: { type: "router:haiku-low", scope: [] } } });
@@ -271,7 +363,7 @@ test("PostToolUse registration and stats skill preserve explicit user invocation
   assert.match(hooks.PostToolUse[0].hooks[0].command, /hook PostToolUse$/);
   assert.match(hooks.PreToolUse[0].hooks[0].command, /hook PreToolUse$/);
   const skill = fs.readFileSync(path.join(plugin, "skills/stats/SKILL.md"), "utf8");
-  assert.match(skill, /^---\nname: stats\n/);
+  assert.match(skill, /^---\r?\nname: stats\r?\n/);
   assert.match(skill, /disable-model-invocation: true/);
   assert.match(skill, /Added by Light505 for gswitchtool \(2026\)\./);
   assert.match(skill, /router\.mjs" stats \$ARGUMENTS/);

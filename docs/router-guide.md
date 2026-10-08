@@ -69,6 +69,10 @@ global default). Session choices live in `sessions/<session id>.json` and are
 removed after 7 days. A hook adds one line with the current mode to every
 message, so the mode survives long sessions and summaries.
 
+- Start the Claude Code session in the repository folder itself. The router uses the session's project folder (`CLAUDE_PROJECT_DIR`) for worktrees, `router apply` and the results log. Changing the folder later in the session does not change it. A folder that is not a git repository breaks worker worktrees.
+- Set `"worktree": { "baseRef": "head" }` in the project's Claude Code settings. Without it, Claude Code starts each worker's worktree from the remote's default branch (`origin/HEAD`, usually `main`), not from the branch you are on.
+- The Claude Code desktop app does not run status line commands, so the router's Claude 5h usage stays "unknown" there and the 30% rule cannot apply. It works in the terminal CLI.
+
 ## Workers
 
 Claude workers are agent types shipped by the router; model and effort are
@@ -180,7 +184,10 @@ each rung tried and asks.
 Every attempt is logged to `~/.gswitchtool-router/results.jsonl` (never in the
 project), so the ladders can move from benchmark numbers to your own:
 
-- A hook records each Claude worker's duration and tokens when it finishes.
+- When a Claude worker stops, a hook reads its transcript and records the
+  duration and tokens of that worker's last run (its brief or latest resume
+  message through its final line). Tokens count input, cache writes, cache
+  reads and output; each API response counts once.
 - The orchestrator records each attempt's outcome with `router result`: task
   id and short title, difficulty, worker, start or escalation, pass or fail and
   why, and for Codex the GSwitch job and thread, which link to GSwitch's

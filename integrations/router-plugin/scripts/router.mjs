@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { models, efforts, workerNames, defaultAllowed, needsApproval } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, attemptRecord, aggregateStats, statsOptions, statsTable } from "./results.mjs";
+import { appendResult, readResults, resultRecord, attemptRecord, transcriptRun, aggregateStats, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -237,6 +237,8 @@ function hook(event, input) {
   // Observe completions even when the owner turned routing off mid-attempt.
   if (event === "PostToolUse" && ["Agent", "Task"].includes(input.tool_name) && isWorker(input.tool_input?.subagent_type)) {
     const response = object(input.tool_response);
+    // A background launch receipt has no work yet; SubagentStop records the finished attempt.
+    if (response.isAsync === true) return {};
     // input.agent_id identifies the caller, not the Agent tool's child.
     const agentId = [response.agentId, response.agent_id].find((value) => typeof value === "string" && value) || null;
     const worker = input.tool_input.subagent_type;
@@ -249,8 +251,8 @@ function hook(event, input) {
     const bound = sess.bindings[input.agent_id];
     if (!sess.finished.some((worker) => worker.agentId === input.agent_id)) sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
     saveSession(id, sess);
-    appendResult(data("results.jsonl"), attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
-      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }));
+    appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
+      agentId: input.agent_id, worker: bound.type, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptRun(input.agent_transcript_path) });
     return {};
   }
   if (event === "SessionStart") {

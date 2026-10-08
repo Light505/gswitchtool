@@ -14,8 +14,8 @@ const text = (value) => typeof value === "string" && value.trim().length > 0 && 
 export function isResultWorker(worker, namespace = "router") {
   if (typeof worker !== "string") return false;
   if (workerNames.some((name) => worker === `${namespace}:${name}`)) return true;
-  const codex = worker.match(/^codex:([a-zA-Z0-9][a-zA-Z0-9._-]*)\/([a-z]+)$/);
-  return !!codex && efforts.includes(codex[2]);
+  const codex = worker.match(/^(codex(?:-dev)?):([a-zA-Z0-9][a-zA-Z0-9._-]*)\/([a-z]+)$/);
+  return !!codex && efforts.includes(codex[3]) && (codex[1] === "codex" || namespace === "router-dev");
 }
 
 // One O_APPEND write per record; callers serialize writes with the router lock.
@@ -93,15 +93,42 @@ export function attemptRecord(input, { sessionId, project, agentId = null, worke
   const response = object(input.tool_response);
   return {
     type: "attempt", time: new Date().toISOString(), sessionId: sessionId ?? null, project, agentId, worker, scope,
-    durationMs: firstNumber(response.totalDurationMs, response.duration_ms, input.duration_ms),
+    durationMs: firstNumber(response.totalDurationMs, response.duration_ms),
     tokens: firstNumber(response.totalTokens, usageTokens(response.usage), usageTokens(input.usage)),
     raw: { input: Object.keys(input), tool_response: Object.keys(response) }
   };
 }
 
+// The last run is the worker's latest brief or resume message through its final line.
+export function transcriptRun(file) {
+  let entries;
+  try { entries = fs.readFileSync(file, "utf8").split(/\r?\n/).map((line) => { try { return object(JSON.parse(line)); } catch { return {}; } }); }
+  catch { return null; }
+  const promptId = entries.findLast((entry) => typeof entry.promptId === "string" && entry.promptId.length > 0)?.promptId;
+  const start = promptId === undefined
+    ? entries.findLastIndex((entry) => entry.type === "user" && entry.isMeta !== true && typeof object(entry.message).content === "string")
+    : entries.findIndex((entry) => entry.promptId === promptId);
+  if (start < 0) return null;
+  const run = entries.slice(start), first = Date.parse(run[0].timestamp);
+  const last = run.map((entry) => Date.parse(entry.timestamp)).filter(Number.isFinite).at(-1);
+  // One API response is written as several lines with the same message ID and usage.
+  const messages = new Map();
+  for (const entry of run) {
+    const message = object(entry.message);
+    if (entry.type === "assistant" && typeof message.id === "string" && message.usage) messages.set(message.id, message);
+  }
+  const usages = [...messages.values()].map((message) => object(message.usage));
+  const sum = (field) => usages.reduce((total, usage) => total + (number(usage[field]) ? usage[field] : 0), 0);
+  const inputTokens = sum("input_tokens"), cacheCreationTokens = sum("cache_creation_input_tokens"), cacheReadTokens = sum("cache_read_input_tokens"), outputTokens = sum("output_tokens");
+  return { run: promptId ?? (text(run[0].uuid) ? run[0].uuid : null), durationMs: number(last - first) ? last - first : null,
+    inputTokens, cacheCreationTokens, cacheReadTokens, outputTokens,
+    tokens: messages.size ? inputTokens + cacheCreationTokens + cacheReadTokens + outputTokens : null,
+    models: [...new Set([...messages.values()].map((message) => message.model).filter(text))] };
+}
+
 export function validResult(record) {
   return record.type === "result" && text(record.sessionId) && text(record.project) && text(record.task) && text(record.worker) &&
-    isResultWorker(record.worker, record.worker?.startsWith("router-dev:") ? "router-dev" : "router") &&
+    isResultWorker(record.worker, /^(router-dev|codex-dev):/.test(record.worker) ? "router-dev" : "router") &&
     difficulties.includes(record.difficulty) && ["pass", "fail"].includes(record.outcome) &&
     typeof record.time === "string" && Number.isFinite(Date.parse(record.time));
 }
@@ -111,17 +138,28 @@ const median = (values) => {
   const ordered = [...values].sort((a, b) => a - b), mid = Math.floor(ordered.length / 2);
   return ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
 };
-const identity = (record, normalize) => JSON.stringify([record.sessionId, normalize(record.project), record.worker, record.agentId]);
+const identity = (record) => JSON.stringify([record.sessionId, record.worker, record.agentId]);
+// Runs are summed once each; records without a run keep the latest supplied value.
+function measure(attempt = {}, field) {
+  const values = [...(attempt.runs ?? new Map()).values()].map((run) => run[field]).filter(number);
+  if (values.length) return values.reduce((sum, value) => sum + value, 0);
+  return number(attempt[field]) ? attempt[field] : null;
+}
 
 export function aggregateStats(records, { project, since, now = Date.now(), normalizeProject = (value) => value } = {}) {
   const telemetry = new Map();
   for (const r of records) {
     if (r.type !== "attempt" || !text(r.sessionId) || !text(r.project) || !text(r.worker) || !text(r.agentId)) continue;
-    const key = identity(r, normalizeProject), previous = telemetry.get(key) || {};
-    // Stop and tool completion describe one attempt. Keep the latest supplied
-    // value for each metric; an empty completion never erases measured data.
-    telemetry.set(key, { durationMs: number(r.durationMs) ? r.durationMs : previous.durationMs,
-      tokens: number(r.tokens) ? r.tokens : previous.tokens });
+    const key = identity(r), previous = telemetry.get(key) || { runs: new Map() };
+    // Stop and tool completion describe one attempt. An empty completion never erases measured data.
+    if (text(r.run)) {
+      const old = previous.runs.get(r.run) || {};
+      previous.runs.set(r.run, { durationMs: number(r.durationMs) ? r.durationMs : old.durationMs, tokens: number(r.tokens) ? r.tokens : old.tokens });
+    } else {
+      previous.durationMs = number(r.durationMs) ? r.durationMs : previous.durationMs;
+      previous.tokens = number(r.tokens) ? r.tokens : previous.tokens;
+    }
+    telemetry.set(key, previous);
   }
   const groups = new Map();
   for (const r of records) {
@@ -131,10 +169,10 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
     const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, attempts: 0, passes: 0, durations: [], tokens: [], jobs: new Set() };
     group.attempts++;
     if (r.outcome === "pass") group.passes++;
-    const attempt = text(r.agentId) ? telemetry.get(identity(r, normalizeProject)) : undefined;
-    if (number(attempt?.durationMs)) group.durations.push(attempt.durationMs);
-    if (number(attempt?.tokens)) group.tokens.push(attempt.tokens);
-    if (r.worker.startsWith("codex:") && text(r.codexJobId)) group.jobs.add(r.codexJobId);
+    const attempt = text(r.agentId) ? telemetry.get(identity(r)) : undefined;
+    if (number(measure(attempt, "durationMs"))) group.durations.push(measure(attempt, "durationMs"));
+    if (number(measure(attempt, "tokens"))) group.tokens.push(measure(attempt, "tokens"));
+    if (/^codex(?:-dev)?:/.test(r.worker) && text(r.codexJobId)) group.jobs.add(r.codexJobId);
     groups.set(key, group);
   }
   return [...groups.values()].sort((a, b) => a.worker.localeCompare(b.worker) || difficulties.indexOf(a.difficulty) - difficulties.indexOf(b.difficulty))
@@ -152,7 +190,7 @@ export function statsOptions(args, normalizeProject) {
 export function statsTable(groups) {
   const rows = [["Worker", "Difficulty", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Codex jobs"],
     ...groups.map((g) => [g.worker, g.difficulty, String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
-      String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), g.worker.startsWith("codex:") ? String(g.linkedJobs) : "-"])];
+      String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => row[i].length)));
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
 }
