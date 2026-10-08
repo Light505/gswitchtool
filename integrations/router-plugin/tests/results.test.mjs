@@ -386,6 +386,21 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
   assert.throws(() => resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router"), /Invalid worker/);
 });
 
+test("stats table shows - for Median USD when no attempt has a cost", () => {
+  const time = "2026-01-01T00:00:00.000Z";
+  const project = "p1";
+  const base = { type: "attempt", time, sessionId: "s1", project, worker: "router:haiku-low", agentId: "a5" };
+  const result = { type: "result", time, sessionId: "s1", project, task: "t1", worker: "router:haiku-low", difficulty: "small", outcome: "pass", agentId: "a5" };
+  const stats = aggregateStats([result, { ...base, durationMs: 1500, tokens: 15 }, { ...base, durationMs: 1500, tokens: 15 }]);
+  assert.equal(stats[0].medianUsd, null);
+  const lines = statsTable(stats).split("\n");
+  assert.match(lines[1], /15\s+-\s+-$/);
+  assert.match(lines[1], /^router:haiku-low\s+small\s+1\s+1\s+100\.0%\s+1500\s+15\s+-\s+-$/);
+  const header = lines[0].split(/\s{2,}/);
+  const cells = lines[1].split(/\s{2,}/);
+  assert.equal(cells[header.indexOf("Median USD")], "-");
+});
+
 test("hooks always return JSON on malformed inputs and unwritable results, never log payload values", (t) => {
   const f = fixture(t);
   f.setup({}); f.writeSession({ bindings: { a1: { type: "router:haiku-low", scope: [] } } });
