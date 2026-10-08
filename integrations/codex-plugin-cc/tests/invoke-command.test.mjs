@@ -36,6 +36,7 @@ async function startFakeGSwitch({
   maxTasks = null,
   taskDefaults = null,
   exclusiveModel = null,
+  signedOut = false,
   stopTask = false,
   killAppServerAfterMs = null
 } = {}) {
@@ -60,6 +61,7 @@ async function startFakeGSwitch({
             : [],
           workers_running: 0,
           codex_home: codexHome,
+          codex_signed_out: signedOut,
           failover_in_progress: waitingForCodex,
           ...(waitingForCodex ? { waiting_for_codex_to_close: true } : {}),
           ...(paused ? { paused } : {}),
@@ -192,6 +194,7 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
       invoke_mode: true,
       allowed_invocation_profiles: PROFILES,
       workers_running: 0,
+      codex_signed_out: false,
       failover_in_progress: false
     });
     assert.equal(gswitch.requests[0].token, TOKEN);
@@ -199,6 +202,18 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
     const text = await companion(["invoke-status"], ctx);
     assert.match(text.stdout, /- model-a: high, xhigh/);
     assert.match(text.stdout, /- model-b: medium/);
+    assert.doesNotMatch(text.stdout, /signed out/);
+  }));
+
+test("invoke-status says first that Codex is signed out in GSwitch", () =>
+  withGSwitch({ signedOut: true }, undefined, async (ctx) => {
+    const result = await companion(["invoke-status"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(
+      result.stdout,
+      /^Codex is signed out in GSwitch: runs will be refused \(CODEX_SIGNED_OUT\) until the user presses Switch on an account allowed in Invoke Mode\.\n/
+    );
+    assert.match(result.stdout, /- model-a: high, xhigh/);
   }));
 
 test("invoke-status marks a model only some accounts offer", () =>

@@ -219,12 +219,14 @@ async fn dispatch(
                 Vec::new()
             };
             let (running, failover) = coordinator.status();
+            let codex_home = endpoint.codex_home()?;
             Ok(json!({
                 "invoke_mode": settings.invoke_mode,
                 "allowed_invocation_profiles": profiles,
                 "task_defaults": settings.task_defaults,
                 "workers_running": running,
-                "codex_home": endpoint.codex_home()?.display().to_string(),
+                "codex_home": codex_home.display().to_string(),
+                "codex_signed_out": crate::codex::signed_out(&codex_home).unwrap_or(false),
                 "failover_in_progress": failover,
                 "waiting_for_codex_to_close": coordinator.waiting_for_codex().is_some(),
                 "max_concurrent_tasks": settings.max_concurrent_tasks,
@@ -651,6 +653,7 @@ mod tests {
                 "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
                 "workers_running": 0,
                 "codex_home": dir.join("codex-home").display().to_string(),
+                "codex_signed_out": false,
                 "failover_in_progress": false,
                 "waiting_for_codex_to_close": false,
                 "max_concurrent_tasks": 2,
@@ -667,6 +670,10 @@ mod tests {
             manual["result"]["task_defaults"]["review"]["model"],
             "model-a"
         );
+
+        std::fs::remove_file(dir.join("codex-home").join("auth.json")).expect("sign out");
+        let signed_out = call(&request("status", Value::Null), &endpoint);
+        assert_eq!(signed_out["result"]["codex_signed_out"], true);
         let _ = std::fs::remove_dir_all(dir);
     }
 

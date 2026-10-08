@@ -1060,6 +1060,14 @@ async function handleCancel(argv) {
 }
 
 function renderInvokeStatus(report) {
+  const text = renderInvokeStatusBody(report);
+  if (report.available && report.invoke_mode && report.codex_signed_out) {
+    return `Codex is signed out in GSwitch: runs will be refused (CODEX_SIGNED_OUT) until the user presses Switch on an account allowed in Invoke Mode.\n${text}`;
+  }
+  return text;
+}
+
+function renderInvokeStatusBody(report) {
   if (!report.available) {
     return `${report.message}\n`;
   }
