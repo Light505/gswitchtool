@@ -24,51 +24,53 @@ source is `GSwitch setup`. To change them, tell the owner to use that panel.
   unavailable, say once "Router paused: Invoke Mode is off; working as a normal
   session" and work normally. Never start Claude workers instead.
 - `LOW` (30% or less of the 5-hour window left): no new Claude workers. In
-  `mixed`, send new work to Codex and skip Claude rungs. In `claude`, follow
+  `mixed`, new work uses the codex ladder (Sol low → Sol medium) and skips
+  Claude rungs. In `claude`, follow
   "Wrap up" now. Workers already running may finish their current step.
 - `Claude 5h: unknown`: the threshold cannot apply; say so once in the report.
 
 ## 2. Choose the first worker
 
-Judge the task's difficulty and start at that difficulty's default worker.
-Move up the mode's ladder only after a failure (section 5); never start higher
-"to be safe", except for high-risk work.
+Every task starts at the mode's first rung, whatever its difficulty. Move up the
+ladder only after a failure (section 5); never start higher "to be safe".
 
 | Difficulty | `claude` | `mixed` | `codex` |
 | --- | --- | --- | --- |
-| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Sol low |
-| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Sol low |
-| Moderate: a normal feature or tests from a spec, a few files | Haiku low | Haiku low | Sol medium |
-| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol medium |
-| High-risk: credentials, account switching and failover, concurrency, money and data logic, data deletion, release and update code, security | Opus medium | Sol high | Sol high |
+| Trivial, small, moderate, hard | Haiku low | Haiku low | Sol low |
+
+High-risk work starts one rung up: credentials, account switching and failover,
+concurrency, money and data logic, data deletion, release and update code,
+security. Start at Opus medium in `claude`, Sol medium in `mixed` and `codex`.
 
 | Mode | Ladder |
 | --- | --- |
-| `claude` | Haiku low → Haiku medium → Sonnet low → Sonnet medium → Sonnet high → Opus medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
-| `mixed` | Haiku low → Sonnet low → Sonnet medium → Sol low → Sol medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
+| `claude` | Haiku low → Opus medium → Opus high (owner approves) → stop and ask |
+| `mixed` | Haiku low → Sol medium → Opus high (owner approves) → stop and ask |
+| `mixed` with LOW | Sol low → Sol medium → stop and ask |
 | `codex` | Sol low → Sol medium → stop and ask |
 
-A high-risk task in `mixed` starts at Sol high, then Opus high (owner approves) →
-Sonnet max (owner approves) → stop and ask. A high-risk task in `codex` starts at
-Sol high, then stop and ask.
+High-risk ladders: `claude` Opus medium → Opus high (owner approves) → stop and
+ask; `mixed` Sol medium → Opus high (owner approves) → stop and ask; `codex`
+Sol medium → stop and ask.
 
-Workers: Claude `router:<model>-<effort>`; Codex `gpt-6.1-sol` low, medium or
-high through `gswitch-delegate`.
+Workers: Claude `router:<model>-<effort>`; Codex `gpt-6.1-sol` low or medium
+through `gswitch-delegate`.
 
-Why these: each default and ladder has the lowest expected cost plus USD 0.05
-per minute of waiting (about USD 3 per hour), counting failed attempts and
-escalations. Each attempt costs its worker's price plus USD 0.30 of orchestrator
-and review overhead, and takes its worker's minutes plus 3 minutes of
-orchestrator and review time. Cheap first attempts still pay off because a
-failure costs little: Haiku low is USD 0.14 against USD 14.19 for Sonnet max.
-The numbers and the method are in `docs/model-benchmarks.md` of the GSwitch
-repository. The owner may name a different start for a task; follow it.
+Why these (the owner's rule): every task starts at Haiku low, the cheapest
+worker, in `claude` and `mixed`, because a failure there costs little (Haiku low
+is USD 0.14 against USD 14.19 for Sonnet max). At most two escalations. The
+middle rung is the cheapest worker at Opus medium's level: Opus medium in
+`claude`, and Sol medium in `mixed` (61 for USD 0.70, where Opus medium scores
+about 60 for USD 1.45). The top rung is Opus high, or a cheaper worker at the
+same level if one exists; nothing above Opus high. After the last rung, stop and
+ask the owner, with what each rung tried. The point is not to spend usage
+passing a task around. The numbers and the method are in
+`docs/model-benchmarks.md` of the GSwitch repository. The owner may name a
+different start for a task; follow it.
 
-Not on any ladder (a cheaper rung scores as high, or the step adds too little
-for its cost): Haiku high/xhigh/max, Sonnet xhigh, Opus low, Opus xhigh, Opus
-max, Sol max, Luna (all efforts; Luna max is the slowest attempt), and Haiku
-medium in `mixed`. Sol high is only the high-risk start. Sol xhigh is not
-allowed by the owner's GSwitch setup. Use these only when the owner asks.
+Not used (the owner's choice): Haiku medium and above, all Sonnet efforts, Opus
+low, Opus xhigh, Opus max, Sol high, Sol max, and all Luna efforts. Sol xhigh is
+not allowed by the owner's GSwitch setup. Use these only when the owner asks.
 
 Skip rungs whose worker is not in the `Claude workers:` list, or whose Codex
 model or effort `invoke-status` does not allow. Worker type:
@@ -135,8 +137,9 @@ Pass: report. Fail (verify failed or a serious review finding): next rung.
 On a failed verify or a serious review finding, go to the next rung of the
 mode's ladder (section 2). Each rung gets the brief plus what the previous
 rung tried and why it failed. Never resend the same failed fix to the same
-rung, and never go down or sideways. After the last rung, report what each rung tried
-and ask; do not write the code yourself.
+rung, and never go down or sideways. At most two escalations per task. After
+the last rung, stop: report what each rung tried and ask the owner; do not
+write the code yourself.
 
 ## 6. Scope requests
 

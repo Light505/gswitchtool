@@ -126,40 +126,39 @@ override is refused, and the approval rule above applies.
 
 ## Routing
 
-For each task the orchestrator judges its difficulty, writes a brief (goal,
-scope and verify command) and starts at that difficulty's default worker. It
-moves up the mode's ladder only after a failure: a failed verify or a serious
-review finding. The owner may name a different start for a task.
+For each task the orchestrator writes a brief (goal, scope and verify command)
+and starts at the mode's first rung, whatever the difficulty. It moves up the
+ladder only after a failure: a failed verify or a serious review finding. The
+owner may name a different start for a task.
 
 | Difficulty | `claude` | `mixed` | `codex` |
 | --- | --- | --- | --- |
-| Trivial: rename, move, simple wiring, one-file mechanical edit | Haiku low | Haiku low | Sol low |
-| Small: a bounded change in one or two files with a clear spec | Haiku low | Haiku low | Sol low |
-| Moderate: a normal feature or tests from a spec, a few files | Haiku low | Haiku low | Sol medium |
-| Hard: unclear, cross-module, long, or needs design | Sonnet low | Sol low | Sol medium |
-| High-risk | Opus medium | Sol high | Sol high |
+| Trivial, small, moderate, hard | Haiku low | Haiku low | Sol low |
 
 High-risk list: credentials, account switching and failover, concurrency,
 money and data logic, data deletion, release and update code, security. These
-start stronger on purpose: a wrong change that passes the tests costs more
-there than a few extra cents.
+start one rung up on purpose: Opus medium in `claude`, Sol medium in `mixed` and
+`codex`. A wrong change that passes the tests costs more there than a few extra
+cents.
 
 ## Escalation ladders
 
 | Mode | Ladder |
 | --- | --- |
-| `claude` | Haiku low → Haiku medium → Sonnet low → Sonnet medium → Sonnet high → Opus medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
-| `mixed` | Haiku low → Sonnet low → Sonnet medium → Sol low → Sol medium → Opus high (owner approves) → Sonnet max (owner approves) → stop and ask |
+| `claude` | Haiku low → Opus medium → Opus high (owner approves) → stop and ask |
+| `mixed` | Haiku low → Sol medium → Opus high (owner approves) → stop and ask |
+| `mixed` with LOW | Sol low → Sol medium → stop and ask |
 | `codex` | Sol low → Sol medium → stop and ask |
 
-A high-risk task starts at Sol high in `mixed` and `codex`. In `mixed` it then
-climbs Opus high (owner approves) → Sonnet max (owner approves) → stop and ask;
-in `codex` it stops and asks after Sol high.
+High-risk tasks start one rung up: `claude` at Opus medium → Opus high (owner
+approves) → stop and ask; `mixed` at Sol medium → Opus high (owner approves) →
+stop and ask; `codex` at Sol medium → stop and ask.
 
-The next worker gets the brief plus what the previous one tried and why it
-failed. Rungs that are not allowed are skipped. Along each ladder every rung
-scores higher than the one before. Codex workers are `gpt-6.1-sol` at low,
-medium or high; Sol xhigh is not allowed by the owner's GSwitch setup.
+There are at most two escalations per task. The next worker gets the brief plus
+what the previous one tried and why it failed. Rungs that are not allowed are
+skipped. After the last rung the orchestrator stops and asks the owner, with
+what each rung tried. Codex workers are `gpt-6.1-sol` at low or medium; Sol
+high and xhigh are not used.
 
 ## How the defaults were chosen
 
@@ -170,20 +169,26 @@ cache writes and output) where it has a number, and its Intelligence Index runs
 for Opus below max. All numbers, prices and sources are in
 [`model-benchmarks.md`](./model-benchmarks.md).
 
-For every possible start, a script computed the expected value of solving a
-task: expected cost plus $0.05 per expected minute of waiting (about $3 per
-hour). Each attempt costs its worker's price plus $0.30 of orchestrator and
-review overhead, and takes its worker's minutes plus 3 minutes of orchestrator
-and review time. Failures count as mostly caused by difficulty (a task one
+The starts and ladders follow the owner's short-ladder rule, not a search. Every
+task starts at the cheapest rung (Haiku low in `claude` and `mixed`), whatever
+its difficulty, because a failure there costs little (Haiku low $0.14, Sonnet
+max $14.19 is no longer a rung). Each escalation must buy a worker at a
+score the owner accepts: the middle rung is the cheapest worker at Opus medium's
+level (Opus medium ~60 for $1.45 in `claude`; Sol medium 61 for $0.70 in
+`mixed` and `codex`, so `mixed` gets one Codex try before Claude). The top
+rung is Opus high (~63), the most the router uses. After that the orchestrator
+stops and asks. The trade-off: more tasks end in "stop and ask" instead of
+climbing to Sonnet max, in exchange for much lower cost and time. The expected
+cost, minutes and unsolved share per difficulty are in
+[`model-benchmarks.md`](./model-benchmarks.md#default-start-per-difficulty);
+`scripts/router-ladder-calc.mjs` prints them.
+
+The estimates assume that failures are mostly caused by difficulty (a task one
 worker fails is likely hard for the next one too). Easier difficulties fail less
 often (assumed: moderate half as often as the benchmark's hard tasks, small a
-quarter, trivial a tenth). The owner approved the defaults and ladders above;
-the script evaluates them and prints each one's cost, time and unsolved share,
-and the best start under the same method. Escalation steps must raise the score.
-
-The result: cheap first attempts pay off, because a failure costs little
-(Haiku low $0.14, Sonnet max $14.19). Speed matters: a Codex start moves from
-Luna max to Sol low because Luna max takes about 21 minutes per attempt.
+quarter, trivial a tenth). Each attempt costs its worker's price plus $0.30 of
+orchestrator and review overhead, and takes its worker's minutes plus 3 minutes
+of orchestrator and review time.
 
 Limits: one benchmark of hard agentic tasks, so one or two points are noise;
 Opus below max is estimated from the Intelligence Index runs; plan limits count

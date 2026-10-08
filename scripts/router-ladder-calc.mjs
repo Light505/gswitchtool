@@ -1,5 +1,5 @@
 // Added by Light505 for gswitchtool (2026).
-// Recomputes the router default start per difficulty from docs/model-benchmarks.md.
+// Evaluates the router's ladders and high-risk paths with the numbers in docs/model-benchmarks.md.
 // Run: node scripts/router-ladder-calc.mjs
 // Optional: --results <results.jsonl> reports observed rates without changing picks.
 import { readResults, validResult } from "../integrations/router-plugin/scripts/results.mjs";
@@ -10,27 +10,22 @@ const W = {
   "Opus medium*": [60, 1.45, 11], "Opus high*": [63, 2.16, 16], "Opus xhigh*": [65, 4.82, 30],
   "Luna max": [41, .18, 21.4], "Sol low": [57, .50, 8.6], "Sol medium": [61, .70, 10.9], "Sol high": [60, .89, 13.3],
 };
-// Search candidates: Sol high is dominated by Sol medium, so it is left out of the search.
-const candidates = {
-  claude: ["Haiku low", "Haiku medium", "Sonnet low", "Sonnet medium", "Sonnet high", "Opus medium*", "Opus high*", "Opus xhigh*", "Sonnet max"],
-  mixed: ["Haiku low", "Haiku medium", "Luna max", "Sonnet low", "Sonnet medium", "Sonnet high", "Sol low", "Sol medium", "Opus medium*", "Opus high*", "Opus xhigh*", "Sonnet max"],
-  codex: ["Luna max", "Sol low", "Sol medium"],
-};
-// Approved ladders (owner): each rung must score higher than the one before.
+// Owner's short ladders: every task starts at the first rung; at most two escalations.
+// Mixed LOW (Claude usage at 30% or less) and codex use the Codex ladder.
 const ladders = {
-  claude: ["Haiku low", "Haiku medium", "Sonnet low", "Sonnet medium", "Sonnet high", "Opus medium*", "Opus high*", "Sonnet max"],
-  mixed: ["Haiku low", "Sonnet low", "Sonnet medium", "Sol low", "Sol medium", "Opus high*", "Sonnet max"],
+  claude: ["Haiku low", "Opus medium*", "Opus high*"],
+  mixed: ["Haiku low", "Sol medium", "Opus high*"],
+  "mixed LOW": ["Sol low", "Sol medium"],
   codex: ["Sol low", "Sol medium"],
 };
-// Approved start per difficulty (high-risk starts are not in the calculation).
-const starts = {
-  claude: { trivial: "Haiku low", small: "Haiku low", moderate: "Haiku low", hard: "Sonnet low" },
-  mixed: { trivial: "Haiku low", small: "Haiku low", moderate: "Haiku low", hard: "Sol low" },
-  codex: { trivial: "Sol low", small: "Sol low", moderate: "Sol medium", hard: "Sol medium" },
+// High-risk work starts one rung up.
+const highRisk = {
+  claude: ["Opus medium*", "Opus high*"],
+  mixed: ["Sol medium", "Opus high*"],
+  codex: ["Sol medium"],
 };
 const classes = { trivial: 0.1, small: 0.25, moderate: 0.5, hard: 1 };
-// Objective per task = expected cost + lambda x expected minutes (about $3 per hour of waiting).
-const o = 0.3, oT = 3, a = 0.8, lambda = 0.05;
+const o = 0.3, oT = 3, a = 0.8;
 
 // Expected cost and minutes of a fixed path of ladder rungs.
 function evalPath(path, cls) { let cost = 0, time = 0, reach = 1, prev = null;
@@ -40,17 +35,6 @@ function evalPath(path, cls) { let cost = 0, time = 0, reach = 1, prev = null;
     reach *= f; prev = s; }
   return { cost, time, unsolved: reach }; }
 
-// DP over candidates sorted by score: a move from rung i to j needs a higher score.
-function search(names, cls, weight) {
-  const k = classes[cls];
-  const s = names.map((n) => W[n][0] / 100), c = names.map((n) => W[n][1] + o), t = names.map((n) => W[n][2] + oT);
-  const g = c.map((x, j) => x + weight * t[j]), top = names.length - 1;
-  const fail = (i, j) => { const fj = k * (1 - s[j]); if (i < 0) return fj; return a * Math.min(1, fj / (k * (1 - s[i]))) + (1 - a) * fj; };
-  const V = Array(names.length).fill(0), nx = Array(names.length).fill(null);
-  for (let i = top - 1; i >= 0; i--) { let b = Infinity; for (let j = i + 1; j <= top; j++) { const v = g[j] + fail(i, j) * V[j]; if (v < b) { b = v; nx[i] = j; } } V[i] = b; }
-  const opts = names.map((n, j) => ({ n, value: g[j] + fail(-1, j) * V[j], j }));
-  return { opts, nx };
-}
 let observations = [];
 try {
   const args = process.argv.slice(2);
@@ -62,25 +46,17 @@ try {
   console.error(`Router ladder: ${error.message}`);
   process.exit(1);
 }
-console.log(`\n== Search: min expected cost + $${lambda} per minute (overhead $${o} + ${oT} min per attempt, correlation ${a}) ==`);
-for (const [mode, names] of Object.entries(candidates)) {
-  const sorted = [...names].sort((x, y) => W[x][0] - W[y][0]);
+console.log("\n== Chosen defaults (owner's short ladders: every task starts at the first rung; high-risk one rung up) ==");
+for (const [mode, path] of Object.entries(ladders)) {
   for (const cls of Object.keys(classes)) {
-    const best = search(sorted, cls, lambda), cheap = search(sorted, cls, 0);
-    const start = best.opts.reduce((x, y) => (y.value < x.value ? y : x));
-    const cheapStart = cheap.opts.reduce((x, y) => (y.value < x.value ? y : x));
-    const path = [start.j]; while (best.nx[path[path.length - 1]] !== null) path.push(best.nx[path[path.length - 1]]);
-    const names2 = path.map((j) => sorted[j]), r = evalPath(names2, cls);
-    console.log(`${mode.padEnd(7)} ${cls.padEnd(9)} BEST ${start.n} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; cheapest ${cheapStart.n} $${cheapStart.value.toFixed(2)})\n          PATH ${names2.join(" → ")}`);
+    const r = evalPath(path, cls);
+    console.log(`${mode.padEnd(10)} ${cls.padEnd(9)} START ${path[0]} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; unsolved ${(r.unsolved * 100).toFixed(1)}%)`);
   }
 }
-
-console.log("\n== Chosen defaults (approved starts and ladders; high-risk not in calculation) ==");
-for (const [mode, byClass] of Object.entries(starts)) {
-  for (const [cls, start] of Object.entries(byClass)) {
-    const path = ladders[mode].slice(ladders[mode].indexOf(start));
+for (const [mode, path] of Object.entries(highRisk)) {
+  for (const cls of ["moderate", "hard"]) {
     const r = evalPath(path, cls);
-    console.log(`${mode.padEnd(7)} ${cls.padEnd(9)} START ${start} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; unsolved ${(r.unsolved * 100).toFixed(1)}%)`);
+    console.log(`${mode.padEnd(10)} high-risk ${cls.padEnd(9)} START ${path[0]} ($${r.cost.toFixed(2)}, ${r.time.toFixed(0)}m; unsolved ${(r.unsolved * 100).toFixed(1)}%)`);
   }
 }
 if (process.argv.includes("--results")) {
