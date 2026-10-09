@@ -38,6 +38,7 @@ invoke --model <model> --effort <effort> [--write] [--worktree] [--scope "src/**
 ```
 
 - Add `--write` when Codex should edit files; omit it for review or research.
+- Under **Orchestrator decides**, pass `--speed fast --speed-reason "<why>"` only when the owner is waiting on this result to continue (it blocks the next step); otherwise omit it for Normal. Review and research calls omit `--speed`. Under **Normal** or **Fast**, the speed flag is ignored; GSwitch applies the setting and cutoff.
 - Use `--worktree` only when two or more write tasks run at the same time on the same repository. A single task edits the working tree directly. Untracked files are not included in the worktree snapshot. If output says `Worktree kept`, tell the user its path and reason; do not delete it. Resume it with `--resume-thread <thread> --worktree-dir <dir>`.
 - Codex sees the repository, not this conversation. The brief states the goal and constraints.
   Pass `--scope` for expected paths and `--verify` when there is a known test command; do not

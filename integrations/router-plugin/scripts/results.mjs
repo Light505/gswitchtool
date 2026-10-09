@@ -184,7 +184,14 @@ const median = (values) => {
   return ordered.length % 2 ? ordered[mid] : (ordered[mid - 1] + ordered[mid]) / 2;
 };
 const identity = (record) => JSON.stringify([record.sessionId, record.worker, record.agentId]);
-export function aggregateStats(records, { project, since, now = Date.now(), normalizeProject = (value) => value } = {}) {
+const codexWorker = (worker) => /^codex(?:-dev)?:/.test(worker);
+const runIndex = (runs) => new Map(runs.filter((r) => text(r.jobId)).map((r) => [r.jobId, r]));
+const selected = (r, { project, since, now = Date.now(), normalizeProject = (value) => value }) =>
+  validResult(r) && r.outcome !== "blocked" && (!project || normalizeProject(r.project) === normalizeProject(project)) &&
+  (since === undefined || Date.parse(r.time) >= now - since * 86400000);
+
+export function aggregateStats(records, options = {}) {
+  const runs = runIndex(options.codexRuns ?? []);
   const telemetry = new Map();
   for (const r of records) {
     if (r.type !== "attempt" || !text(r.sessionId) || !text(r.project) || !text(r.worker) || !text(r.agentId)) continue;
@@ -194,21 +201,22 @@ export function aggregateStats(records, { project, since, now = Date.now(), norm
   }
   const groups = new Map();
   for (const r of records) {
-    if (!validResult(r) || r.outcome === "blocked" || (project && normalizeProject(r.project) !== normalizeProject(project)) ||
-        (since !== undefined && Date.parse(r.time) < now - since * 86400000)) continue;
-    const key = JSON.stringify([r.worker, r.difficulty]);
-    const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, attempts: 0, passes: 0, durations: [], tokens: [], usd: [], jobs: new Set() };
+    if (!selected(r, options)) continue;
+    const codex = codexWorker(r.worker), run = codex && text(r.codexJobId) ? runs.get(r.codexJobId) : undefined;
+    const speed = ["fast", "normal", "mixed"].includes(run?.speed) ? run.speed : "-";
+    const key = JSON.stringify([r.worker, r.difficulty, speed]);
+    const group = groups.get(key) || { worker: r.worker, difficulty: r.difficulty, speed, attempts: 0, passes: 0, durations: [], tokens: [], usd: [], jobs: new Set() };
     group.attempts++;
     if (["pass", "unverified"].includes(r.outcome)) group.passes++;
-    const attempt = text(r.agentId) ? telemetry.get(identity(r)) : undefined;
+    const attempt = codex ? { durationMs: run?.codexMs, tokens: run?.tokens } : text(r.agentId) ? telemetry.get(identity(r)) : undefined;
     if (number(attempt?.durationMs)) group.durations.push(attempt.durationMs);
     if (number(attempt?.tokens)) group.tokens.push(attempt.tokens);
     if (number(attempt?.usd)) group.usd.push(attempt.usd);
     if (/^codex(?:-dev)?:/.test(r.worker) && text(r.codexJobId)) group.jobs.add(r.codexJobId);
     groups.set(key, group);
   }
-  return [...groups.values()].sort((a, b) => a.worker.localeCompare(b.worker) || difficulties.indexOf(a.difficulty) - difficulties.indexOf(b.difficulty))
-    .map((g) => ({ worker: g.worker, difficulty: g.difficulty, attempts: g.attempts, passes: g.passes,
+  return [...groups.values()].sort((a, b) => a.worker.localeCompare(b.worker) || difficulties.indexOf(a.difficulty) - difficulties.indexOf(b.difficulty) || a.speed.localeCompare(b.speed))
+    .map((g) => ({ worker: g.worker, difficulty: g.difficulty, speed: g.speed, attempts: g.attempts, passes: g.passes,
       successRate: g.passes / g.attempts, medianDurationMs: median(g.durations), medianTokens: median(g.tokens), medianUsd: median(g.usd), linkedJobs: g.jobs.size }));
 }
 
@@ -228,9 +236,30 @@ export function statsOptions(args, normalizeProject) {
 }
 
 export function statsTable(groups) {
-  const rows = [["Worker", "Difficulty", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Median USD", "Codex jobs"],
-    ...groups.map((g) => [g.worker, g.difficulty, String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
+  const rows = [["Worker", "Difficulty", "Speed", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Median USD", "Codex jobs"],
+    ...groups.map((g) => [g.worker, g.difficulty, g.speed, String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
       String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), number(g.medianUsd) ? g.medianUsd.toFixed(3) : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => row[i].length)));
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
+}
+
+// Compare finished jobs once each, pooling times across the selected difficulties.
+export function speedComparisons(records, options = {}) {
+  const runs = runIndex(options.codexRuns ?? []), workers = new Map();
+  for (const r of records) {
+    if (!selected(r, options) || !codexWorker(r.worker)) continue;
+    const run = runs.get(r.codexJobId);
+    if (!["fast", "normal"].includes(run?.speed) || !number(run.codexMs)) continue;
+    const jobs = workers.get(r.worker) ?? new Map();
+    jobs.set(r.codexJobId, run); workers.set(r.worker, jobs);
+  }
+  const lines = [];
+  for (const [worker, jobs] of [...workers].sort(([a], [b]) => a.localeCompare(b))) {
+    const times = (speed) => [...jobs.values()].filter((r) => r.speed === speed).map((r) => r.codexMs);
+    const fast = times("fast"), normal = times("normal"), f = median(fast), n = median(normal);
+    if (!fast.length || !normal.length || f === 0 || n === 0) continue;
+    const faster = n >= f, ratio = faster ? n / f : f / n;
+    lines.push(`Fast vs Normal, ${worker}: ${fast.length} fast, median ${(f / 1000).toFixed(1)}s · ${normal.length} normal, median ${(n / 1000).toFixed(1)}s · ${ratio.toFixed(2)}x ${faster ? "faster" : "slower"}`);
+  }
+  return lines;
 }

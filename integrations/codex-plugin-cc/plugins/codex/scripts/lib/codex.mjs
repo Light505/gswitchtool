@@ -339,6 +339,9 @@ function createTurnCaptureState(threadId, options = {}) {
     messages: [],
     fileChanges: [],
     commandExecutions: [],
+    tokens: null,
+    tokenTotals: new Map(),
+    completedAt: null,
     onProgress: options.onProgress ?? null
   };
 }
@@ -357,6 +360,7 @@ function completeTurn(state, turn = null, options = {}) {
 
   clearCompletionTimer(state);
   state.completed = true;
+  state.completedAt = performance.now();
 
   if (turn) {
     state.finalTurn = turn;
@@ -545,6 +549,18 @@ function applyTurnNotification(state, message) {
       state.error = message.params.error;
       emitProgress(state.onProgress, `Codex error: ${message.params.error.message}`, "failed");
       break;
+    case "thread/tokenUsage/updated": {
+      const usage = message.params.tokenUsage;
+      const last = usage?.last?.totalTokens;
+      const total = usage?.total?.totalTokens;
+      if (Number.isSafeInteger(last) && last >= 0) {
+        const previous = state.tokenTotals.get(message.params.threadId);
+        const added = previous !== undefined && Number.isSafeInteger(total) && total >= previous ? total - previous : last;
+        state.tokens = (state.tokens ?? 0) + added;
+        if (Number.isSafeInteger(total) && total >= 0) state.tokenTotals.set(message.params.threadId, total);
+      }
+      break;
+    }
     case "turn/completed":
       if ((message.params.threadId ?? null) !== state.threadId) {
         state.activeSubagentTurns.delete(message.params.threadId);
@@ -588,6 +604,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     applyTurnNotification(state, message);
   });
 
+  const startedAt = performance.now();
   try {
     const response = await startRequest();
     options.onResponse?.(response, state);
@@ -617,6 +634,7 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     });
     return await Promise.race([state.completion, exited]);
   } finally {
+    options.onTurnMetrics?.({ codexMs: Math.max(0, Math.round((state.completedAt ?? performance.now()) - startedAt)), tokens: state.tokens });
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }
@@ -1158,9 +1176,10 @@ export async function runAppServerTurn(cwd, options = {}) {
           input: buildTurnInput(prompt),
           model: options.model ?? null,
           effort: options.effort ?? null,
-          outputSchema: options.outputSchema ?? null
+          outputSchema: options.outputSchema ?? null,
+          ...(options.serviceTierForTurn ? { serviceTierForTurn: options.serviceTierForTurn } : {})
         }),
-      { onProgress: options.onProgress }
+      { onProgress: options.onProgress, onTurnMetrics: options.onTurnMetrics }
     );
 
     return {

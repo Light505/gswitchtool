@@ -191,6 +191,26 @@ once and choose a setup.
 `/codex:invoke-status` shows the setup first. `/codex:gswitch-invoke <task>`
 still works for a one-off task in any setup when Invoke Mode is on.
 
+### Speed
+
+When the setup uses Codex, the **Claude Code** panel offers **Normal**, **Fast**,
+or **Orchestrator decides**. Normal is the default. Fast asks for Codex's
+`priority` tier on each turn; Orchestrator decides uses Normal unless Claude
+passes `--speed fast --speed-reason "<why>"` because the owner is waiting on
+that result to continue.
+
+**Fast only above (% usage left)** defaults to 20%, accepts 0–90, and falls
+back to Normal below the cutoff or when usage is unknown. A model without a
+Fast tier also uses Normal. GSwitch checks the account for each run, including
+retries and failovers; a resumed thread does not retain Fast. Fast draws
+subscription limits at about 2.5× the Normal rate.
+
+Invoke results show the actual speed and fallback notes. Rust keeps timing,
+token totals when reported, and speed decisions in `codex-runs.jsonl` beside
+`claude-setup.json` (`~/.gswitchtool`, or Dev's `~/.gswitchtool-dev`), retaining
+the newest 5,000 finished tasks. The log contains no credentials or account
+identifiers.
+
 ## 4. Install the Claude Code plugin
 
 In Claude Code, add this repository's plugin. It replaces OpenAI's stock Codex

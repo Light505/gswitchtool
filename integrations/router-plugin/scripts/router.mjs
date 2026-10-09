@@ -5,8 +5,9 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { directoryName, appDataDirectory } from "./setup.mjs";
 import { models, efforts, prefers, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, planRecord, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable } from "./results.mjs";
+import { appendResult, readResults, resultRecord, planRecord, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable, speedComparisons } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -19,11 +20,9 @@ function readJSON(file, fallback = {}) {
   catch { return fallback; }
 }
 const target = readJSON(path.join(pluginRoot, "router-target.json"));
-const directoryName = (value, fallback) => typeof value === "string" && /^[\w.-]+$/.test(value) && ![".", ".."].includes(value)
-  ? value : fallback;
 const dataName = directoryName(target.dataDir, ".gswitchtool-router");
 const dataDir = path.join(home, dataName);
-const setupFile = path.join(home, directoryName(target.appDataDir, ".gswitchtool"), "claude-setup.json");
+const setupFile = path.join(appDataDirectory(home, target), "claude-setup.json");
 const pluginName = readJSON(path.join(pluginRoot, ".claude-plugin", "plugin.json")).name || "router";
 const data = (...parts) => path.join(dataDir, ...parts);
 
@@ -78,12 +77,18 @@ function allowedList(allowed = config().claudeAllowed) {
   return models.filter(({ short }) => allowed[short]?.length)
     .map(({ short }) => `${short} ${allowed[short].join(", ")}`).join(" · ") || "none";
 }
+export function normalizeCodexSpeed(value) {
+  return { mode: ["normal", "fast", "orchestrator"].includes(value?.mode) ? value.mode : "normal",
+    fastMinRemaining: Number.isInteger(value?.fastMinRemaining) && value.fastMinRemaining >= 0 && value.fastMinRemaining <= 90
+      ? value.fastMinRemaining : 20 };
+}
 function config() {
   const setup = readJSON(setupFile);
   const valid = setup.version === 1 && ["claude-only", "claude-codex", "router"].includes(setup.setup) &&
     modes.slice(1).includes(setup.router?.mode) && reviews.includes(setup.router?.claudeOnlyReview);
   const value = valid ? setup.router : {};
   return { mode: valid && setup.setup === "router" ? value.mode : "off",
+    codexSpeed: normalizeCodexSpeed(setup.codexSpeed),
     prefer: prefers.includes(value.prefer) ? value.prefer : "codex",
     claudeOnlyReview: value.claudeOnlyReview ?? "on", claudeAllowed: claudeAllowed(value.claudeAllowed) };
 }
@@ -106,12 +111,13 @@ function saveSession(id, value) { atomicJSON(sessionFile(id), { ...value, update
 function resolved() {
   const cfg = config();
   return { mode: { value: cfg.mode, source: "GSwitch setup" },
-    review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" }, prefer: cfg.prefer };
+    review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" }, prefer: cfg.prefer, codexSpeed: cfg.codexSpeed };
 }
 function routerLine(state) {
   const label = { off: "Off", mixed: "Mixed", codex: "Codex only", claude: "Claude only" }[state.mode.value];
   const prefer = { codex: "Codex", claude: "Claude", price: "Lowest API price" }[state.prefer];
-  return `Router: ${label} (${state.mode.source}) · Codex review: ${state.review.value} (${state.review.source})${state.mode.value === "mixed" ? ` · Use first: ${prefer} (${state.mode.source})` : ""}`;
+  const speed = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[state.codexSpeed.mode];
+  return `Router: ${label} (${state.mode.source}) · Codex review: ${state.review.value} (${state.review.source})${state.mode.value === "mixed" ? ` · Use first: ${prefer} (${state.mode.source})` : ""}${["mixed", "codex"].includes(state.mode.value) ? ` · Speed: ${speed} (GSwitch setup)` : ""}`;
 }
 function resetMilliseconds(value) {
   return typeof value === "number" ? value * 1000 : Date.parse(value);
@@ -351,7 +357,7 @@ function hook(event, input) {
   if (event === "UserPromptSubmit") {
     if (state.mode.value === "off") return {};
     const window = usage();
-    return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value}${state.mode.value === "mixed" ? ` · Use first: ${state.prefer}` : ""} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}`);
+    return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value}${state.mode.value === "mixed" ? ` · Use first: ${state.prefer}` : ""} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}${["mixed", "codex"].includes(state.mode.value) ? ` · Speed: ${state.codexSpeed.mode}` : ""}`);
   }
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {
     const bound = sess.bindings[input.tool_input?.to];
@@ -661,6 +667,11 @@ function planView(state) {
     else lines.push(`Candidates (${order}):`, ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
   }
   if (text == null && ["mixed", "codex"].includes(mode)) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
+  const speed = config().codexSpeed;
+  if (["mixed", "codex"].includes(mode)) {
+    if (speed.mode === "orchestrator") lines.push(`Codex speed: Orchestrator decides — add --speed fast --speed-reason "<why>" only when the owner is waiting on this result to continue; otherwise Normal. Fast falls back to Normal below ${speed.fastMinRemaining}% usage left.`);
+    else if (speed.mode === "fast") lines.push(`Codex speed: Fast (falls back to Normal below ${speed.fastMinRemaining}% usage left)`);
+  }
   lines.push(`Brief lines: TASK: ${record.task} · SCOPE: <globs> · VERIFY: <command>`);
   return lines.join("\n");
 }
@@ -722,7 +733,8 @@ function command(args, raw) {
   if (name === "stats") {
     const records = readResults(data("results.jsonl")), options = statsOptions(rest, comparable);
     const edits = orchestratorEdits(records, options);
-    const table = statsTable(aggregateStats(records, options));
+    options.codexRuns = readResults(path.join(appDataDirectory(home, target), "codex-runs.jsonl"));
+    const table = [statsTable(aggregateStats(records, options)), ...speedComparisons(records, options)].join("\n");
     return edits ? `${table}\nOrchestrator edits (not worker attempts): ${edits}` : table;
   }
   if (name === "workers") return workers(rest);

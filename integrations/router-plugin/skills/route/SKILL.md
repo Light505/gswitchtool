@@ -14,7 +14,7 @@ write task code yourself while the mode is on, except the small fixes listed und
 
 Each message carries `Router: mode=<m> (<source>) · Codex review in claude mode:
 <on|off>[ · Use first: <codex|claude|price>] · Claude 5h: <n% left|unknown>[ ·
-LOW: no Claude workers] · Claude workers: <allowed list>`. Use the newest one.
+LOW: no Claude workers] · Claude workers: <allowed list>[ · Speed: <normal|fast|orchestrator>]`. Use the newest one.
 In mixed mode, Use first decides the candidate order in `router plan`.
 
 Mode, review and allowed workers come from GSwitch's Claude Code panel; their
@@ -95,6 +95,10 @@ Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief
 as prompt, no `model`. Codex: the `gswitch-delegate` skill, with `--write`,
 `--scope` and `--verify`, at the chosen model and effort, with the `TASK:` line
 in the brief.
+
+When Speed is orchestrator, add `--speed fast --speed-reason "<why>"` only when
+the owner is waiting on this result to continue; otherwise use Normal. Fast
+falls back to Normal below the usage cutoff shown by `router plan`.
 
 Hooks enforce the plan for both Claude workers and Codex: a launch without a
 planned `TASK:` is denied, as is a task that already passed and a worker that
@@ -231,7 +235,7 @@ An edit outside the scope that got through (a `WARNING: changed outside
 
 ## 7. Report
 
-What changed (in user terms), which worker did it (model and effort), every
+What changed (in user terms), which worker did it (model and effort), the Codex speed used, every
 escalation, every scope request and who decided it, the review result, what
 was not tested, and anything kept (worktrees, Codex threads).
 

@@ -69,7 +69,8 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
     "prefer": "codex",
     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
     "claudeOnlyReview": "on"
-  }
+  },
+  "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 }
 }
 ```
 
@@ -79,11 +80,15 @@ and `router`; modes are `mixed`, `claude`, and `codex`; review is `on` or
 xhigh, max. Defaults allow Haiku low/medium and every listed effort for Sonnet
 and Opus, with mixed mode, Codex first and review on. `prefer` accepts `codex`,
 `claude`, or `price`; older files without it default to `codex`. Rust rejects
-unknown options; plugin readers treat invalid `prefer` values as missing.
+unknown options other than lenient preferences; Rust and plugin readers treat invalid `prefer` values as missing.
 Publication failure returns a save error and attempts to restore the saved
 policy; startup logs publication failure and continues. A successful human
 setup save ends an Invoke pause. Plugins consume the setup starting with the
 next message.
+
+`codexSpeed` in the same setup owns `mode` (`normal`, `fast`, `orchestrator`) and `fastMinRemaining` (0–90, default 20); missing or invalid values default independently without resetting policy.
+`run_begin` resolves the turn-only `default` or `priority` tier for every run from the owner setting, lease request, catalog Fast support and current account usage; it never sets the thread tier.
+Rust owns the best-effort `codex-runs.jsonl` comparison log beside `claude-setup.json`, retaining the newest 5,000 finished tasks with speed, timing and optional tokens, without credentials or account identifiers.
 
 Unknown, stale, timed-out, or conflicting state remains unknown. A cache is a
 projection, not a second authority over runtime or provider facts.

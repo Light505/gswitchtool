@@ -38,7 +38,9 @@ async function startFakeGSwitch({
   exclusiveModel = null,
   signedOut = false,
   stopTask = false,
-  killAppServerAfterMs = null
+  killAppServerAfterMs = null,
+  codexSpeed = { mode: "normal", fastMinRemaining: 20 },
+  runSpeeds = null
 } = {}) {
   const configDir = makeTempDir("gswitch-config-");
   const endpoint =
@@ -56,6 +58,7 @@ async function startFakeGSwitch({
       case "status":
         return ok({
           invoke_mode: policy.invokeMode,
+          codex_speed: codexSpeed,
           allowed_invocation_profiles: policy.invokeMode
             ? PROFILES.map((profile) => (profile.model === exclusiveModel ? { ...profile, exclusive: true } : profile))
             : [],
@@ -89,7 +92,10 @@ async function startFakeGSwitch({
           }, killAppServerAfterMs);
         }
         return ok();
-      case "run_begin":
+      case "run_begin": {
+        const index = requests.filter((entry) => entry.method === "run_begin").length - 1;
+        return ok(runSpeeds?.[index] ?? { service_tier: "default", speed: "normal", speed_note: null });
+      }
       case "run_thread":
         return ok();
       case "run_end":
@@ -192,6 +198,7 @@ test("invoke-status reports the allowed profiles while Invoke Mode is on", () =>
     assert.deepEqual(JSON.parse(json.stdout), {
       available: true,
       invoke_mode: true,
+      codex_speed: { mode: "normal", fastMinRemaining: 20 },
       allowed_invocation_profiles: PROFILES,
       workers_running: 0,
       codex_signed_out: false,
@@ -712,7 +719,11 @@ test("a task the user stops in GSwitch is reported as stopped, not retried", () 
     assert.equal(readFakeState(ctx.statePath).turns.length, 1, "nothing resumes after a stop");
     assert.ok(!gswitch.methods().includes("limit_reached"));
     const reported = gswitch.requests.find((request) => request.method === "task_result");
-    assert.deepEqual(reported.params, { lease_id: "lease-1", status: "failed", code: "STOPPED_BY_USER" });
+    assert.deepEqual(reported.params, {
+      lease_id: "lease-1", status: "failed", code: "STOPPED_BY_USER",
+      job_id: payload.jobId, thread_id: payload.threadId, codex_ms: payload.codexMs,
+      total_ms: payload.totalMs, tokens: null
+    });
   }));
 
 for (const [when, killAfterMs] of [["while Codex starts", 20], ["while its turn runs", 800]]) {
@@ -732,7 +743,12 @@ test("a finished task reports its result to GSwitch", () =>
     const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
     assert.equal(result.status, 0, result.stderr);
     const reported = gswitch.requests.find((request) => request.method === "task_result");
-    assert.deepEqual(reported.params, { lease_id: "lease-1", status: "completed", code: null });
+    const payload = JSON.parse(result.stdout);
+    assert.deepEqual(reported.params, {
+      lease_id: "lease-1", status: "completed", code: null,
+      job_id: payload.jobId, thread_id: payload.threadId, codex_ms: payload.codexMs,
+      total_ms: payload.totalMs, tokens: null
+    });
   }));
 
 test("switching GSwitch to Manual Mode stops automatic failover", () =>
@@ -804,5 +820,83 @@ test("Codex delegation is explicit while GSwitch reviews may be chosen by Claude
   for (const command of ["review.md"]) {
     const source = fs.readFileSync(path.join(ROOT, "plugins", "codex", "commands", command), "utf8");
     assert.match(frontmatter(source), /disable-model-invocation:\s*true/, command);
+  }
+});
+
+test("invoke requires a reason for Fast and rejects unknown speed flags before opening a lease", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    for (const args of [["--speed", "fast"], ["--speed", "fast", "--speed-reason", "  "], ["--speed", "slow"]]) {
+      const result = await companion(["invoke", "--model", "model-a", "--effort", "high", ...args, "do the work"], ctx);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /--speed (fast requires --speed-reason|must be fast or normal)/);
+    }
+    assert.deepEqual(gswitch.requests, []);
+  }));
+
+test("invoke forwards Fast as a turn override on every verification retry and totals only this job's tokens", () =>
+  withGSwitch({ runSpeeds: [
+    { service_tier: "priority", speed: "fast", speed_note: null },
+    { service_tier: "priority", speed: "fast", speed_note: null }
+  ] }, "slow-task", async (ctx, gswitch) => {
+    const counter = path.join(ctx.repo, "speed-verify-count");
+    const script = path.join(ctx.repo, "speed-verify.mjs");
+    fs.writeFileSync(script, `import fs from "node:fs";\nconst file = ${JSON.stringify(counter)};\nconst n = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : 0) + 1;\nfs.writeFileSync(file, String(n));\nsetTimeout(() => process.exit(n === 1 ? 1 : 0), 150);\n`);
+    ctx.env = { GSWITCH_TEST_TOKEN_USAGE: "[5,7]", GSWITCH_TEST_DUPLICATE_USAGE: "1" };
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high",
+      "--speed", "fast", "--speed-reason", "blocks the next step", "--verify", "node speed-verify.mjs", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.speed, "fast");
+    assert.equal(payload.speedRequested, "fast");
+    assert.equal(payload.speedReason, "blocks the next step");
+    assert.deepEqual(payload.speedNotes, []);
+    assert.equal(payload.tokens, 24, "exclude the old thread total and duplicate updates");
+    assert.ok(payload.codexMs >= 700, `turns measured: ${payload.codexMs}`);
+    assert.ok(payload.totalMs >= payload.codexMs + 250, "verification is in total time only");
+    const state = readFakeState(ctx.statePath);
+    assert.deepEqual(state.turns.map((turn) => turn.serviceTierForTurn), ["priority", "priority"]);
+    assert.equal(state.turns[0].threadId, state.turns[1].threadId);
+    assert.equal(state.lastThreadRequest.serviceTier, undefined);
+    const lease = gswitch.requests.find((request) => request.method === "lease_open").params;
+    assert.equal(lease.speed, "fast");
+    assert.equal(lease.speed_reason, "blocks the next step");
+    const reports = gswitch.requests.filter((request) => request.method === "task_result");
+    assert.equal(reports.length, 1);
+    assert.deepEqual(reports[0].params, {
+      lease_id: "lease-1", status: "completed", code: null, job_id: payload.jobId,
+      thread_id: payload.threadId, codex_ms: payload.codexMs, total_ms: reports[0].params.total_ms, tokens: 24
+    });
+    assert.ok(reports[0].params.total_ms <= payload.totalMs);
+  }));
+
+test("invoke reuses the thread with Normal after failover and reports mixed speed", () =>
+  withGSwitch({ runSpeeds: [
+    { service_tier: "priority", speed: "fast", speed_note: null },
+    { service_tier: "default", speed: "normal", speed_note: "usage left 14% is below the 20% Fast cutoff" }
+  ] }, "usage-limit-once", async (ctx, gswitch) => {
+    ctx.env = { GSWITCH_TEST_TOKEN_USAGE: "[5,7]" };
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high",
+      "--speed", "fast", "--speed-reason", "blocks the next step", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.speed, "mixed");
+    assert.deepEqual(payload.speedNotes, ["usage left 14% is below the 20% Fast cutoff"]);
+    assert.equal(payload.tokens, 24);
+    assert.deepEqual(readFakeState(ctx.statePath).turns.map((turn) => turn.serviceTierForTurn), ["priority", "default"]);
+    assert.equal(gswitch.methods().filter((method) => method === "task_result").length, 1);
+  }));
+
+test("invoke text shows Fast reason and Normal fallback note, with null tokens when absent", async () => {
+  for (const [speed, tier, note, line] of [
+    ["fast", "priority", null, "Speed: Fast (priority) — blocks the next step"],
+    ["normal", "default", "usage unknown", "Speed: Normal — usage unknown"]
+  ]) {
+    await withGSwitch({ runSpeeds: [{ service_tier: tier, speed, speed_note: note }] }, undefined, async (ctx, gswitch) => {
+      const result = await companion(["invoke", "--model", "model-a", "--effort", "high",
+        "--speed", "fast", "--speed-reason", "blocks the next step", "do the work"], ctx);
+      assert.equal(result.status, 0, result.stderr);
+      assert.ok(result.stdout.includes(line));
+      assert.equal(gswitch.requests.find((request) => request.method === "task_result").params.tokens, null);
+    });
   }
 });

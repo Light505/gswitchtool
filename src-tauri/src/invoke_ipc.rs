@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use uuid::Uuid;
 
 use crate::{
-    failover::{Coordinator, FailoverCode, LeaseRequest},
+    failover::{Coordinator, FailoverCode, LeaseRequest, TaskMetrics},
     invoke::InvokeState,
     storage,
 };
@@ -222,6 +222,7 @@ async fn dispatch(
             let codex_home = endpoint.codex_home()?;
             Ok(json!({
                 "invoke_mode": settings.invoke_mode,
+                "codex_speed": settings.claude_setup.codex_speed,
                 "allowed_invocation_profiles": profiles,
                 "task_defaults": settings.task_defaults,
                 "workers_running": running,
@@ -249,11 +250,28 @@ async fn dispatch(
             if crate::codex::signed_out(&codex_home).unwrap_or(false) {
                 return Err("CODEX_SIGNED_OUT".to_string());
             }
+            let speed = match params.get("speed") {
+                None | Some(Value::Null) => None,
+                Some(value) if value == "fast" => Some(crate::types::CodexSpeedMode::Fast),
+                Some(value) if value == "normal" => Some(crate::types::CodexSpeedMode::Normal),
+                _ => return Err("BAD_REQUEST".to_string()),
+            };
+            let speed_reason = params
+                .get("speed_reason")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|reason| !reason.is_empty())
+                .map(str::to_string);
+            if speed == Some(crate::types::CodexSpeedMode::Fast) && speed_reason.is_none() {
+                return Err("BAD_REQUEST".to_string());
+            }
             let lease_id = coordinator.open_lease(
                 connection,
                 LeaseRequest {
                     model,
                     reasoning_effort,
+                    speed,
+                    speed_reason,
                     write: params
                         .get("write")
                         .and_then(Value::as_bool)
@@ -271,14 +289,15 @@ async fn dispatch(
             }))
         }
         "run_begin" => {
+            let lease_id = text("lease_id")?;
             coordinator
-                .begin_run(&text("lease_id")?)
+                .begin_run(&lease_id)
                 .await
                 .map_err(|failure| match failure {
                     FailoverCode::InvokePaused => paused(coordinator, failure),
                     _ => code(failure),
                 })?;
-            Ok(json!({}))
+            Ok(json!(coordinator.run_speed(&lease_id).map_err(code)?))
         }
         "run_app_server" => {
             let pid = params
@@ -302,7 +321,7 @@ async fn dispatch(
             Ok(json!({ "outcome": outcome }))
         }
         "task_result" => {
-            coordinator
+            let run = coordinator
                 .record_task_result(
                     &text("lease_id")?,
                     text("status")?,
@@ -310,8 +329,24 @@ async fn dispatch(
                         .get("code")
                         .and_then(Value::as_str)
                         .map(str::to_string),
+                    TaskMetrics {
+                        job_id: params
+                            .get("job_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        thread_id: params
+                            .get("thread_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                        codex_ms: params.get("codex_ms").and_then(Value::as_u64),
+                        total_ms: params.get("total_ms").and_then(Value::as_u64),
+                        tokens: params.get("tokens").and_then(Value::as_u64),
+                    },
                 )
                 .map_err(code)?;
+            if let Some(run) = run {
+                endpoint.invoke.append_codex_run(&run);
+            }
             Ok(json!({}))
         }
         "limit_reached" => {
@@ -538,6 +573,7 @@ mod tests {
             model: "model-a".into(),
             display_name: "Model A".into(),
             supported_reasoning_efforts: vec!["medium".into(), "high".into()],
+            service_tiers: Vec::new(),
             default_reasoning_effort: None,
             is_default: true,
             only_on: None,
@@ -649,6 +685,7 @@ mod tests {
             response["result"],
             json!({
                 "invoke_mode": true,
+                "codex_speed": { "mode": "normal", "fastMinRemaining": 20 },
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
                 "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
                 "workers_running": 0,
@@ -751,6 +788,105 @@ mod tests {
     }
 
     #[test]
+    fn invoke_speed_requests_are_validated_and_finished_tasks_log_once() {
+        let dir = temp_dir("speed");
+        let endpoint = endpoint(&dir, true);
+        let status = call(&request("status", Value::Null), &endpoint);
+        assert_eq!(
+            status["result"]["codex_speed"],
+            json!({ "mode": "normal", "fastMinRemaining": 20 })
+        );
+        for extra in [
+            json!({ "speed": "bad" }),
+            json!({ "speed": true }),
+            json!({ "speed": "fast" }),
+            json!({ "speed": "fast", "speed_reason": "  " }),
+        ] {
+            let mut params = json!({ "model": "model-a", "reasoning_effort": "high" });
+            params
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            assert_eq!(
+                call(&request("lease_open", params), &endpoint)["error"]["code"],
+                "BAD_REQUEST"
+            );
+        }
+        let opened = call(
+            &request(
+                "lease_open",
+                json!({
+                    "model": "model-a", "reasoning_effort": "high", "write": false,
+                    "cwd": "/private/folder", "speed": "fast", "speed_reason": "blocks the next step"
+                }),
+            ),
+            &endpoint,
+        );
+        let lease = opened["result"]["lease_id"].as_str().unwrap();
+        let speed = call(
+            &request("run_begin", json!({ "lease_id": lease })),
+            &endpoint,
+        );
+        assert_eq!(
+            speed["result"],
+            json!({ "service_tier": "default", "speed": "normal", "speed_note": "Speed setting is Normal" })
+        );
+        let result = request(
+            "task_result",
+            json!({
+                "lease_id": lease, "status": "completed", "job_id": "task-1", "thread_id": "thread-1",
+                "codex_ms": 100, "total_ms": 200, "tokens": 300
+            }),
+        );
+        assert_eq!(call(&result, &endpoint)["result"], json!({}));
+        assert_eq!(call(&result, &endpoint)["result"], json!({}));
+        let content = std::fs::read_to_string(dir.join("codex-runs.jsonl")).unwrap();
+        assert_eq!(content.lines().count(), 1);
+        let run: Value = serde_json::from_str(content.trim()).unwrap();
+        assert_eq!(run["jobId"], "task-1");
+        assert_eq!(run["threadId"], "thread-1");
+        assert_eq!(run["speedRequested"], "fast");
+        assert_eq!(run["speed"], "normal");
+        assert_eq!(run["codexMs"], 100);
+        assert_eq!(run["totalMs"], 200);
+        assert_eq!(run["tokens"], 300);
+        assert!(!content.contains("/private/folder"));
+        assert!(!content.contains("active"));
+        assert!(!content.contains(lease));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invoke_task_result_succeeds_when_the_comparison_log_cannot_be_written() {
+        let dir = temp_dir("run-log-failure");
+        let endpoint = endpoint(&dir, true);
+        std::fs::create_dir(dir.join("codex-runs.jsonl")).unwrap();
+        let opened = call(
+            &request(
+                "lease_open",
+                json!({
+                    "model": "model-a", "reasoning_effort": "high"
+                }),
+            ),
+            &endpoint,
+        );
+        let lease = opened["result"]["lease_id"].as_str().unwrap();
+        assert_eq!(
+            call(
+                &request(
+                    "task_result",
+                    json!({
+                        "lease_id": lease, "status": "failed", "code": "CODEX_FAILED"
+                    })
+                ),
+                &endpoint
+            )["result"],
+            json!({})
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn a_worker_run_is_registered_and_reported_in_status() {
         let dir = temp_dir("lease");
         let endpoint = endpoint(&dir, true);
@@ -777,7 +913,10 @@ mod tests {
                 .extend(extra.as_object().cloned().unwrap_or_default());
             call(&request(method, params), &endpoint)
         };
-        assert_eq!(ok("run_begin", json!({}))["result"], json!({}));
+        assert_eq!(
+            ok("run_begin", json!({}))["result"],
+            json!({ "service_tier": "default", "speed": "normal", "speed_note": null })
+        );
         assert_eq!(
             ok("run_app_server", json!({"pid": 4242}))["result"],
             json!({})
@@ -837,7 +976,10 @@ mod tests {
             .expect("lease")
             .to_string();
         let ok = |method: &str| call(&request(method, json!({ "lease_id": lease })), &endpoint);
-        assert_eq!(ok("run_begin")["result"], json!({}));
+        assert_eq!(
+            ok("run_begin")["result"],
+            json!({ "service_tier": "default", "speed": "normal", "speed_note": null })
+        );
         assert_eq!(ok("run_end")["result"]["outcome"], "unchanged");
         assert_eq!(ok("limit_reached")["result"]["failover"], "started");
         // No saved account can take over, so no reset time is known.

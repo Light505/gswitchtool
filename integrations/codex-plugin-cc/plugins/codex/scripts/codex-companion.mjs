@@ -88,7 +88,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
       "  node scripts/codex-companion.mjs invoke-status [--json]",
-      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--worktree] [--worktree-dir <dir>] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--cwd <dir>] [--json] [prompt]",
+      "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--worktree] [--worktree-dir <dir>] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--speed <fast|normal>] [--speed-reason \"<text>\"] [--cwd <dir>] [--json] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -511,6 +511,8 @@ async function executeTaskRun(request) {
     onProgress: request.onProgress,
     onAppServer: request.onAppServer,
     appServerEnv: request.appServerEnv,
+    serviceTierForTurn: request.serviceTierForTurn,
+    onTurnMetrics: request.onTurnMetrics,
     approvalPolicy: request.onFileChangeApproval ? INVOKE_SCOPE_APPROVAL_POLICY : undefined,
     onFileChangeApproval: request.onFileChangeApproval,
     persistThread: true,
@@ -1065,7 +1067,10 @@ function renderInvokeStatus(report) {
     : { "claude-only": "Claude only", "claude-codex": "Claude + Codex" }[setup?.setup];
   const first = label ? `Claude Code setup: ${label} (change it in GSwitch: Claude Code button)\n`
     : "Claude Code setup: unknown (open GSwitch once)\n";
-  const text = renderInvokeStatusBody(report);
+  const speed = report.codex_speed ?? setup?.codexSpeed;
+  const speedLabel = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[speed?.mode];
+  const speedText = speedLabel ? `Codex speed: ${speedLabel}${speed.mode === "normal" ? "" : ` (Fast falls back to Normal below ${speed.fastMinRemaining}% usage left)`}\n${speed.mode === "orchestrator" ? 'Request Fast with --speed fast --speed-reason "<why>" only when the owner is waiting on this result to continue; otherwise omit --speed (Normal).\n' : ""}` : "";
+  const text = speedText + renderInvokeStatusBody(report);
   if (report.available && report.invoke_mode && report.codex_signed_out) {
     return `${first}Codex is signed out in GSwitch: runs will be refused (CODEX_SIGNED_OUT) until the user presses Switch on an account allowed in Invoke Mode.\n${text}`;
   }
@@ -1560,6 +1565,9 @@ function renderInvokeResult(result) {
   if (result.write) facts.push("write");
   if (result.failovers) facts.push(`resumed after ${result.failovers} account switch${result.failovers === 1 ? "" : "es"}`);
   lines.push(`[codex invoke] ${facts.join(" · ")}`);
+  const speedLabel = result.speed === "fast" ? "Fast (priority)" : result.speed === "mixed" ? "Mixed (Fast / Normal)" : "Normal";
+  const speedDetail = result.speed === "fast" ? result.speedReason ?? "Speed setting is Fast" : result.speedNotes?.join("; ");
+  lines.push(`Speed: ${speedLabel}${speedDetail ? ` — ${speedDetail}` : ""}`);
   if (result.scopeRequests) {
     for (const request of result.scopeRequests) lines.push(`SCOPE REQUEST: ${request.path}${request.reason ? ` — ${request.reason}` : ""}`);
     lines.push(`Scope: ${result.scopeRequests.length} change(s) declined`);
@@ -1597,8 +1605,10 @@ const MAX_FAILOVERS_PER_INVOKE = 3;
 const SIMULATE_USAGE_LIMIT_ENV = "GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT";
 
 async function handleInvoke(argv) {
+  const startedAt = performance.now();
+  const metrics = { codexMs: 0, tokens: null, speeds: [], speedNotes: [], jobId: null, threadId: null };
   const { options, positionals } = parseCommandInput(argv, {
-    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify", "worktree-dir"],
+    valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify", "worktree-dir", "speed", "speed-reason"],
     repeatableOptions: ["scope"],
     booleanOptions: ["json", "write", "worktree"],
     aliasMap: {
@@ -1614,6 +1624,15 @@ async function handleInvoke(argv) {
   if (!model || !effort) {
     throw new Error("invoke requires --model and --effort chosen from invoke-status.");
   }
+  const speedRequested = options.speed ?? null;
+  const speedReason = String(options["speed-reason"] ?? "").trim() || null;
+  if (speedRequested !== null && !["fast", "normal"].includes(speedRequested)) throw new Error("--speed must be fast or normal.");
+  if (speedRequested === "fast" && !speedReason) throw new Error('--speed fast requires --speed-reason "<why the owner is waiting on this result>".');
+  const speedResult = () => ({
+    speed: new Set(metrics.speeds).size > 1 ? "mixed" : metrics.speeds[0] ?? "normal",
+    speedRequested, speedReason, speedNotes: metrics.speedNotes,
+    codexMs: metrics.codexMs, totalMs: Math.max(0, Math.round(performance.now() - startedAt)), tokens: metrics.tokens
+  });
   const resumeThreadId = normalizeResumeThreadId(options["resume-thread"]);
   const brief = readTaskPrompt(cwd, options, positionals);
   // The reply format fits edits; a review or investigation answers in its own shape.
@@ -1630,6 +1649,7 @@ async function handleInvoke(argv) {
   const useWorktree = Boolean(options.worktree || options["worktree-dir"]);
   const base = { model, reasoningEffort: effort, write };
   const finish = (result) => {
+    if (result.speed === undefined) Object.assign(result, speedResult());
     if (scopedWrite && result.jobId) result.scopeRequests = scopeRequests(declined, result.output);
     const payload = options.json && result.answerFile
       ? { ...result, output: compactInvokeAnswer(result.output).text }
@@ -1685,7 +1705,7 @@ async function handleInvoke(argv) {
   let codexHome = null;
   try {
     session = await GSwitchSession.open();
-    const lease = await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: useWorktree ? actualCwd : workspaceRoot });
+    const lease = await session.request("lease_open", { model, reasoning_effort: effort, write, cwd: useWorktree ? actualCwd : workspaceRoot, speed: speedRequested, speed_reason: speedReason });
     leaseId = lease.lease_id;
     codexHome = lease.codex_home ?? null;
   } catch (error) {
@@ -1725,7 +1745,7 @@ async function handleInvoke(argv) {
     const onFileChangeApproval = scopedWrite ? scopeApproval(gitBefore?.root ?? runWorkspaceRoot, scopedPatterns, declined, () => { scopeCancels += 1; }) : null;
     const countScopeCancels = () => scopeCancels;
     const result = await runInvokeWithFailover({
-      base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
+      base, session, leaseId, codexHome, metrics, cwd: actualCwd, workspaceRoot: runWorkspaceRoot, prompt, resumeThreadId,
       onFileChangeApproval, scopedPatterns, countScopeCancels,
       verifyCommand: options.verify ? String(options.verify) : null
     });
@@ -1788,7 +1808,7 @@ async function handleInvoke(argv) {
             if (merge.status !== 0 && files.length) {
               const conflictPrompt = `The user's tree changed while you worked. Resolve the merge conflicts listed below, keeping both sides' intent. Do not touch other files.\n\nConflicting files:\n${files.map((file) => `- ${file}`).join("\n")}`;
               const resumed = await runInvokeWithFailover({
-                base, session, leaseId, codexHome, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
+                base, session, leaseId, codexHome, metrics, cwd: actualCwd, workspaceRoot: runWorkspaceRoot,
                 onFileChangeApproval, scopedPatterns, countScopeCancels,
                 prompt: conflictPrompt, resumeThreadId: result.threadId
               });
@@ -1841,16 +1861,21 @@ async function handleInvoke(argv) {
         }
       }
     }
-    // GSwitch keeps the result in its activity history; older versions do not.
+    Object.assign(result, speedResult());
+    // GSwitch keeps one comparison entry for the whole task, including retries.
     await session
-      .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null })
+      .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null, job_id: result.jobId, thread_id: result.threadId, codex_ms: result.codexMs, total_ms: result.totalMs, tokens: result.tokens })
       .catch(() => {});
     finish(result);
   } catch (error) {
-    if (!worktreeState) throw error;
+    const timing = speedResult();
     await session
-      .request("task_result", { lease_id: leaseId, status: "failed", code: "WORKTREE_RUN_FAILED" })
+      .request("task_result", { lease_id: leaseId, status: "failed", code: worktreeState ? "WORKTREE_RUN_FAILED" : "CODEX_FAILED", job_id: metrics.jobId, thread_id: metrics.threadId, codex_ms: timing.codexMs, total_ms: timing.totalMs, tokens: timing.tokens })
       .catch(() => {});
+    if (!worktreeState) {
+      finish({ ...base, status: "failed", code: "CODEX_FAILED", message: error instanceof Error ? error.message : String(error), jobId: metrics.jobId, threadId: metrics.threadId, ...timing });
+      return;
+    }
     finish({
       ...base,
       status: "failed",
@@ -1877,8 +1902,9 @@ async function handleInvoke(argv) {
  * exhausted, GSwitch alone switches accounts; this worker then resumes the same
  * thread with the same model, effort, sandbox, and working directory.
  */
-async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null, onFileChangeApproval = null, scopedPatterns = [], countScopeCancels = () => 0 }) {
+async function runInvokeWithFailover({ base, session, leaseId, codexHome = null, metrics, cwd, workspaceRoot, prompt, resumeThreadId, verifyCommand = null, onFileChangeApproval = null, scopedPatterns = [], countScopeCancels = () => 0 }) {
   const job = buildTaskJob(workspaceRoot, buildTaskRunMetadata({ prompt, resumeLast: Boolean(resumeThreadId) }), base.write);
+  metrics.jobId ??= job.id;
   const { logFile, progress } = createTrackedProgress(job, { stderr: false });
   let threadId = resumeThreadId;
   // GSwitch learns the thread from the first run's progress, a resumed one included.
@@ -1903,8 +1929,12 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
   });
 
   for (;;) {
+    let serviceTierForTurn;
     try {
-      await session.request("run_begin", { lease_id: leaseId });
+      const runSpeed = await session.request("run_begin", { lease_id: leaseId });
+      serviceTierForTurn = runSpeed.service_tier ?? "default";
+      metrics.speeds.push(runSpeed.speed ?? "normal");
+      if (runSpeed.speed_note && !metrics.speedNotes.includes(runSpeed.speed_note)) metrics.speedNotes.push(runSpeed.speed_note);
     } catch (error) {
       return failed(error.code ?? "GSWITCH_UNAVAILABLE", error.message);
     }
@@ -1927,6 +1957,11 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
             write: base.write,
             resumeLast: false,
             resumeThreadId: threadId,
+            serviceTierForTurn,
+            onTurnMetrics: (turn) => {
+              metrics.codexMs += turn.codexMs;
+              if (turn.tokens !== null) metrics.tokens = (metrics.tokens ?? 0) + turn.tokens;
+            },
             jobId: job.id,
             appServerEnv: codexHome ? { ...process.env, CODEX_HOME: codexHome } : undefined,
             onFileChangeApproval,
@@ -1936,6 +1971,7 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
               const reported = typeof event === "object" ? event?.threadId : null;
               if (reported && reported !== reportedThreadId) {
                 threadId = reported;
+                metrics.threadId = reported;
                 reportedThreadId = reported;
                 session.request("run_thread", { lease_id: leaseId, thread_id: reported }).catch(() => {});
               }

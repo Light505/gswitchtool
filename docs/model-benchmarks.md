@@ -64,9 +64,11 @@ lead (64% versus 49%) is AA-only.
 Agent sessions often pass 100K tokens of context, where Haiku costs 5× more.
 That is why Haiku is cheap in the II runs but not in Claude Code (CAI).
 
-Codex Fast mode for GPT-6 models draws subscription limits at 2.5×. OpenAI
-publishes no speed-up for GPT-6 models and no benchmark measures it; the router
-does not use it.
+Codex Fast mode (service tier `priority`) draws subscription limits at about 2.5x.
+Codex's own model catalog (`model/list`, Codex 0.162, 2026-10-10) claims 2x speed
+for GPT-6.1 Sol and GPT-6 Astra, 1.5x for GPT-6 Sol and GPT-6 Luna; no independent
+benchmark measures it. GSwitch uses it only as the Speed setting allows, and
+router stats compare Fast and Normal runs.
 
 ## Coding Agent Index (real agent harness)
 

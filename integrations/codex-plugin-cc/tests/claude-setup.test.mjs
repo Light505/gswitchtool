@@ -104,3 +104,39 @@ test("delegate accepts Claude + Codex and router context while remaining model-i
   assert.match(section, /mode=mixed or mode=codex/);
   assert.match(section, /Invoke Mode is off[\s\S]*do not delegate/);
 });
+
+test("Codex speed defaults leniently without resetting the rest of the setup", (t) => {
+  const f = fixture(t);
+  const normalize = (speed) => {
+    const value = setup("router", "codex");
+    value.router.prefer = "claude";
+    if (speed !== undefined) value.codexSpeed = speed;
+    f.write(value);
+    const result = readClaudeSetup(f.env);
+    assert.deepEqual(result.router, value.router);
+    assert.equal(result.setup, "router");
+    return result.codexSpeed;
+  };
+  for (const speed of [undefined, null, false, 42, [], "fast", {},
+    { mode: "bad", fastMinRemaining: 91 }, { mode: false, fastMinRemaining: -1 },
+    { mode: null, fastMinRemaining: 20.5 }, { mode: {}, fastMinRemaining: "20" },
+    { mode: [], fastMinRemaining: null }]) {
+    assert.deepEqual(normalize(speed), { mode: "normal", fastMinRemaining: 20 });
+  }
+  for (const mode of ["normal", "fast", "orchestrator"]) {
+    for (const cutoff of [0, 20, 90]) assert.deepEqual(normalize({ mode, fastMinRemaining: cutoff }), { mode, fastMinRemaining: cutoff });
+  }
+  assert.deepEqual(normalize({ mode: "bad", fastMinRemaining: 35 }), { mode: "normal", fastMinRemaining: 35 });
+  assert.deepEqual(normalize({ mode: "fast", fastMinRemaining: 99 }), { mode: "fast", fastMinRemaining: 20 });
+});
+
+test("invoke-status explains speed modes, cutoff, and orchestrator flags from shared setup", (t) => {
+  const f = fixture(t);
+  for (const [mode, label] of [["normal", "Normal"], ["fast", "Fast"], ["orchestrator", "Orchestrator decides"]]) {
+    f.write({ ...setup("claude-codex"), codexSpeed: { mode, fastMinRemaining: 35 } });
+    const text = f.run("codex-companion.mjs", ["invoke-status"]);
+    assert.ok(text.includes("Codex speed: " + label + (mode === "normal" ? "\n" : " (Fast falls back to Normal below 35% usage left)\n")));
+    if (mode === "orchestrator") assert.match(text, /--speed fast --speed-reason "<why>".*owner is waiting/);
+    else assert.doesNotMatch(text, /Request Fast with/);
+  }
+});

@@ -1540,6 +1540,8 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
   t: Translator;
 }) {
   const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
+  const [fastMinRemaining, setFastMinRemaining] = useState(String(settings.claude_setup.codexSpeed.fastMinRemaining));
+  const usesCodex = draft.setup === "claude-codex" || (draft.setup === "router" && draft.router.mode !== "claude");
   const [showInvokeSettings, setShowInvokeSettings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1556,10 +1558,16 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
     });
   };
   const save = async () => {
+    const cutoffVisible = usesCodex && draft.codexSpeed.mode !== "normal";
+    const cutoff = cutoffVisible ? Number(fastMinRemaining) : settings.claude_setup.codexSpeed.fastMinRemaining ?? 20;
+    if (cutoffVisible && (!fastMinRemaining.trim() || !Number.isInteger(cutoff) || cutoff < 0 || cutoff > 90)) {
+      setError("Fast cutoff must be an integer between 0 and 90 percent.");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      onSaved(await api.setClaudeSetup(draft));
+      onSaved(await api.setClaudeSetup({ ...draft, codexSpeed: { ...draft.codexSpeed, fastMinRemaining: cutoff } }));
     } catch (failure) {
       setError(friendlyError(t, failure, t("claudeSetup.saveError")));
     } finally {
@@ -1641,6 +1649,26 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
                   <option value="claude">Claude</option>
                   <option value="price">Lowest API price</option>
                 </select>
+              </label>
+            ) : null}
+          </div>
+        ) : null}
+        {usesCodex ? (
+          <div className="claude-router-options">
+            <label className="claude-router-mode">
+              <span>Speed</span>
+              <select disabled={saving} value={draft.codexSpeed.mode}
+                onChange={(event) => setDraft((current) => ({ ...current, codexSpeed: { ...current.codexSpeed, mode: event.target.value as ClaudeSetup["codexSpeed"]["mode"] } }))}>
+                <option value="normal">Normal</option>
+                <option value="fast">Fast</option>
+                <option value="orchestrator">Orchestrator decides</option>
+              </select>
+            </label>
+            {draft.codexSpeed.mode !== "normal" ? (
+              <label className="claude-router-mode">
+                <span>Fast only above (% usage left)</span>
+                <input disabled={saving} max={90} min={0} step={1} type="number" value={fastMinRemaining}
+                  onChange={(event) => setFastMinRemaining(event.target.value)} />
               </label>
             ) : null}
           </div>

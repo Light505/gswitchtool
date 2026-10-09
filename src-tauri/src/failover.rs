@@ -18,7 +18,10 @@ use crate::{
     accounts::AppState,
     invoke::InvokeState,
     quota, runtime, switching,
-    types::{AccountKind, AccountView, QuotaBucketKind, QuotaSnapshot, SwitchFailureCode},
+    types::{
+        AccountKind, AccountView, CodexSpeed, CodexSpeedMode, QuotaBucketKind, QuotaSnapshot,
+        QuotaStatus, QuotaView, SwitchFailureCode,
+    },
 };
 
 /// Why a failover, or a worker request about one, did not succeed.
@@ -159,6 +162,8 @@ pub struct LeaseRequest {
     pub reasoning_effort: String,
     pub write: bool,
     pub cwd: String,
+    pub speed: Option<CodexSpeedMode>,
+    pub speed_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,6 +192,77 @@ pub struct WorkerView {
     pub stopping: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RunSpeed {
+    pub service_tier: &'static str,
+    pub speed: &'static str,
+    pub speed_note: Option<String>,
+}
+
+pub fn resolve_speed(
+    policy: &CodexSpeed,
+    requested: Option<CodexSpeedMode>,
+    has_fast_tier: bool,
+    capacity: Option<u8>,
+) -> RunSpeed {
+    let wanted = match policy.mode {
+        CodexSpeedMode::Normal => false,
+        CodexSpeedMode::Fast => true,
+        CodexSpeedMode::Orchestrator => requested == Some(CodexSpeedMode::Fast),
+    };
+    let note = if !wanted {
+        (requested == Some(CodexSpeedMode::Fast)).then(|| "Speed setting is Normal".to_string())
+    } else if !has_fast_tier {
+        Some("model has no Fast tier".to_string())
+    } else {
+        match capacity {
+            None => Some("usage unknown".to_string()),
+            Some(left) if left < policy.fast_min_remaining => Some(format!(
+                "usage left {left}% is below the {}% Fast cutoff",
+                policy.fast_min_remaining
+            )),
+            _ => None,
+        }
+    };
+    let fast = wanted && note.is_none();
+    RunSpeed {
+        service_tier: if fast { "priority" } else { "default" },
+        speed: if fast { "fast" } else { "normal" },
+        speed_note: note,
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct TaskMetrics {
+    pub job_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub codex_ms: Option<u64>,
+    pub total_ms: Option<u64>,
+    pub tokens: Option<u64>,
+}
+
+/// Finished-task comparison data. Never includes account identity, folders, or provider payloads.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRun {
+    pub version: u8,
+    pub time: String,
+    pub job_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub model: String,
+    pub effort: String,
+    pub write: bool,
+    pub status: String,
+    pub code: Option<String>,
+    pub speed_requested: Option<CodexSpeedMode>,
+    pub speed_reason: Option<String>,
+    pub speed: &'static str,
+    pub speed_notes: Vec<String>,
+    pub codex_ms: Option<u64>,
+    pub total_ms: Option<u64>,
+    pub tokens: Option<u64>,
+}
+
 struct Lease {
     connection: u64,
     request: LeaseRequest,
@@ -199,6 +275,7 @@ struct Lease {
     stopped: bool,
     /// The plugin's own result, reported before it disconnects.
     result: Option<(String, Option<String>)>,
+    speeds: Vec<RunSpeed>,
 }
 
 fn now_unix_ms() -> i64 {
@@ -260,6 +337,9 @@ pub struct SwitchAccounts {
 /// implementation is `AppOps`; tests substitute deterministic doubles.
 pub trait FailoverOps: Send + Sync {
     fn invoke_mode(&self) -> bool;
+    fn speed_for_run(&self, request: &LeaseRequest, _account: Option<&str>) -> RunSpeed {
+        resolve_speed(&CodexSpeed::default(), request.speed, true, None)
+    }
     fn active_account(&self) -> Option<String>;
     fn accounts(&self) -> Vec<AccountView>;
     fn read_quota(&self, account_id: &str) -> Option<QuotaSnapshot>;
@@ -405,6 +485,7 @@ impl Coordinator {
                 started_at: now_unix_ms(),
                 stopped: false,
                 result: None,
+                speeds: Vec::new(),
             },
         );
         self.ops.record(started);
@@ -449,14 +530,65 @@ impl Coordinator {
         lease_id: &str,
         status: String,
         code: Option<String>,
-    ) -> Result<(), FailoverCode> {
+        metrics: TaskMetrics,
+    ) -> Result<Option<CodexRun>, FailoverCode> {
         let mut inner = self.lock();
         let lease = inner
             .leases
             .get_mut(lease_id)
             .ok_or(FailoverCode::UnknownLease)?;
-        lease.result = Some((status, code));
-        Ok(())
+        if lease.result.is_some() {
+            return Ok(None);
+        }
+        lease.result = Some((status.clone(), code.clone()));
+        let mut speed_notes = Vec::new();
+        for note in lease
+            .speeds
+            .iter()
+            .filter_map(|run| run.speed_note.as_ref())
+        {
+            if !speed_notes.contains(note) {
+                speed_notes.push(note.clone());
+            }
+        }
+        let speed = lease
+            .speeds
+            .first()
+            .map(|run| run.speed)
+            .unwrap_or("normal");
+        let speed = if lease.speeds.iter().any(|run| run.speed != speed) {
+            "mixed"
+        } else {
+            speed
+        };
+        Ok(Some(CodexRun {
+            version: 1,
+            time: chrono::DateTime::from_timestamp_millis(now_unix_ms())
+                .unwrap_or_default()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            job_id: metrics.job_id,
+            thread_id: metrics.thread_id.or_else(|| lease.thread_id.clone()),
+            model: lease.request.model.clone(),
+            effort: lease.request.reasoning_effort.clone(),
+            write: lease.request.write,
+            status,
+            code,
+            speed_requested: lease.request.speed,
+            speed_reason: lease.request.speed_reason.clone(),
+            speed,
+            speed_notes,
+            codex_ms: metrics.codex_ms,
+            total_ms: metrics.total_ms,
+            tokens: metrics.tokens,
+        }))
+    }
+
+    pub fn run_speed(&self, lease_id: &str) -> Result<RunSpeed, FailoverCode> {
+        self.lock()
+            .leases
+            .get(lease_id)
+            .and_then(|lease| lease.speeds.last().cloned())
+            .ok_or(FailoverCode::UnknownLease)
     }
 
     /// Lets a worker start Codex once no failover is running and a task slot
@@ -539,6 +671,9 @@ impl Coordinator {
                             .leases
                             .get_mut(lease_id)
                             .ok_or(FailoverCode::UnknownLease)?;
+                        lease
+                            .speeds
+                            .push(self.ops.speed_for_run(&lease.request, account.as_deref()));
                         lease.run = RunState::Starting;
                         lease.account = account;
                         Some(Next::Started)
@@ -1232,6 +1367,23 @@ fn usable_capacity(snapshot: &QuotaSnapshot) -> Option<u8> {
     }
 }
 
+fn fast_capacity(view: &QuotaView) -> Option<u8> {
+    if view.status != QuotaStatus::Fresh {
+        return None;
+    }
+    let snapshot = view.snapshot.as_ref()?;
+    if snapshot
+        .buckets
+        .iter()
+        .filter(|bucket| bucket.kind == QuotaBucketKind::Codex)
+        .flat_map(|bucket| &bucket.windows)
+        .any(|window| window.remaining_percent.is_none())
+    {
+        return None;
+    }
+    usable_capacity(snapshot).filter(|left| *left > 0)
+}
+
 /// When the first of these accounts can use Codex again: each account's
 /// latest reset among its spent Codex windows, then the earliest account.
 fn earliest_reset(quotas: &[Option<QuotaSnapshot>]) -> Option<i64> {
@@ -1290,6 +1442,24 @@ pub struct AppOps {
 pub type ResumedCallback = Box<dyn Fn(&[PausedThread], bool) + Send + Sync>;
 
 impl FailoverOps for AppOps {
+    fn speed_for_run(&self, request: &LeaseRequest, account: Option<&str>) -> RunSpeed {
+        let policy = self
+            .invoke
+            .settings()
+            .map(|settings| settings.claude_setup.codex_speed)
+            .unwrap_or_default();
+        let capacity = account
+            .and_then(|account| quota::cached_quota(&self.state, account).ok())
+            .as_ref()
+            .and_then(fast_capacity);
+        resolve_speed(
+            &policy,
+            request.speed,
+            self.invoke.model_has_fast_tier(&request.model),
+            capacity,
+        )
+    }
+
     fn invoke_mode(&self) -> bool {
         self.invoke
             .settings()
@@ -1399,6 +1569,7 @@ mod tests {
         active: Option<String>,
         accounts: Vec<AccountView>,
         quotas: HashMap<String, QuotaSnapshot>,
+        quota_statuses: HashMap<String, QuotaStatus>,
         switch_result: Option<FailoverCode>,
         /// A refused switch leaves the live account unidentifiable, as a
         /// pending switch record does.
@@ -1417,6 +1588,8 @@ mod tests {
         /// (account, model) pairs known to be unavailable.
         missing_models: HashSet<(String, String)>,
         activities: Vec<crate::activity::Activity>,
+        speed_policy: CodexSpeed,
+        no_fast_models: HashSet<String>,
         resumed: Vec<(Vec<String>, bool)>,
     }
 
@@ -1429,6 +1602,30 @@ mod tests {
     }
 
     impl FailoverOps for FakeOps {
+        fn speed_for_run(&self, request: &LeaseRequest, account: Option<&str>) -> RunSpeed {
+            let world = self.world();
+            let capacity = account
+                .and_then(|account| {
+                    world.quotas.get(account).map(|snapshot| QuotaView {
+                        account_id: account.to_string(),
+                        status: world
+                            .quota_statuses
+                            .get(account)
+                            .cloned()
+                            .unwrap_or(QuotaStatus::Fresh),
+                        snapshot: Some(snapshot.clone()),
+                        message: None,
+                    })
+                })
+                .as_ref()
+                .and_then(fast_capacity);
+            resolve_speed(
+                &world.speed_policy,
+                request.speed,
+                !world.no_fast_models.contains(&request.model),
+                capacity,
+            )
+        }
         fn invoke_mode(&self) -> bool {
             self.world().invoke_mode
         }
@@ -1595,6 +1792,8 @@ mod tests {
             reasoning_effort: effort.into(),
             write: true,
             cwd: "/repo".into(),
+            speed: None,
+            speed_reason: None,
         }
     }
 
@@ -1623,6 +1822,219 @@ mod tests {
             .record_thread(&lease, format!("thread-{pid}"))
             .expect("thread");
         lease
+    }
+
+    #[test]
+    fn invoke_speed_obeys_mode_catalog_and_cutoff_in_order() {
+        use CodexSpeedMode::{Fast, Normal, Orchestrator};
+        let policy = |mode, cutoff| CodexSpeed {
+            mode,
+            fast_min_remaining: cutoff,
+        };
+        for (mode, requested, tier, left, expected, note) in [
+            (Normal, None, true, Some(90), "normal", None),
+            (
+                Normal,
+                Some(Fast),
+                false,
+                None,
+                "normal",
+                Some("Speed setting is Normal"),
+            ),
+            (Fast, Some(Normal), true, Some(20), "fast", None),
+            (Orchestrator, None, true, Some(90), "normal", None),
+            (Orchestrator, Some(Normal), true, Some(90), "normal", None),
+            (Orchestrator, Some(Fast), true, Some(20), "fast", None),
+            (
+                Fast,
+                None,
+                false,
+                None,
+                "normal",
+                Some("model has no Fast tier"),
+            ),
+            (
+                Fast,
+                None,
+                true,
+                Some(14),
+                "normal",
+                Some("usage left 14% is below the 20% Fast cutoff"),
+            ),
+            (Fast, None, true, None, "normal", Some("usage unknown")),
+        ] {
+            let speed = resolve_speed(&policy(mode, 20), requested, tier, left);
+            assert_eq!(speed.speed, expected);
+            assert_eq!(
+                speed.service_tier,
+                if expected == "fast" {
+                    "priority"
+                } else {
+                    "default"
+                }
+            );
+            assert_eq!(speed.speed_note.as_deref(), note);
+        }
+        assert_eq!(
+            resolve_speed(&policy(Fast, 0), None, true, Some(1)).speed,
+            "fast"
+        );
+        assert_eq!(
+            resolve_speed(&policy(Fast, 90), None, true, Some(90)).speed,
+            "fast"
+        );
+        assert_eq!(
+            resolve_speed(&policy(Fast, 90), None, true, Some(89)).speed,
+            "normal"
+        );
+    }
+
+    #[test]
+    fn invoke_speed_is_redecided_after_failover_and_logs_one_mixed_task() {
+        let mut world = world();
+        world.speed_policy = CodexSpeed {
+            mode: CodexSpeedMode::Orchestrator,
+            fast_min_remaining: 20,
+        };
+        world.quotas.insert("a".into(), quota(90, 90));
+        world.quotas.insert("b".into(), quota(14, 90));
+        world.quotas.insert("c".into(), quota(10, 90));
+        let (coordinator, ops) = setup(world);
+        let mut requested = request("model-a", "high");
+        requested.speed = Some(CodexSpeedMode::Fast);
+        requested.speed_reason = Some("blocks the next step".into());
+        let lease = coordinator.open_lease(1, requested);
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        assert_eq!(coordinator.run_speed(&lease).unwrap().speed, "fast");
+        ops.world().alive.insert(1234);
+        coordinator.record_app_server(&lease, 1234).unwrap();
+        coordinator
+            .record_thread(&lease, "thread-1".into())
+            .unwrap();
+        coordinator.report_limit(&lease).unwrap();
+        block_on(coordinator.await_failover(&lease)).unwrap();
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        let speed = coordinator.run_speed(&lease).unwrap();
+        assert_eq!(speed.service_tier, "default");
+        assert_eq!(
+            speed.speed_note.as_deref(),
+            Some("usage left 14% is below the 20% Fast cutoff")
+        );
+        // A verification retry on the same account records no duplicate note.
+        coordinator.end_run(&lease).unwrap();
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        let result = coordinator
+            .record_task_result(
+                &lease,
+                "completed".into(),
+                None,
+                TaskMetrics {
+                    job_id: Some("task-1".into()),
+                    codex_ms: Some(100),
+                    total_ms: Some(200),
+                    tokens: Some(300),
+                    ..TaskMetrics::default()
+                },
+            )
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.speed, "mixed");
+        assert_eq!(result.speed_requested, Some(CodexSpeedMode::Fast));
+        assert_eq!(result.speed_reason.as_deref(), Some("blocks the next step"));
+        assert_eq!(
+            result.speed_notes,
+            vec!["usage left 14% is below the 20% Fast cutoff"]
+        );
+        assert_eq!(result.thread_id.as_deref(), Some("thread-1"));
+        assert_eq!(result.codex_ms, Some(100));
+        assert!(chrono::DateTime::parse_from_rfc3339(&result.time).is_ok());
+        assert!(coordinator
+            .record_task_result(&lease, "completed".into(), None, TaskMetrics::default())
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn invoke_speed_treats_any_unknown_codex_window_as_unknown_usage() {
+        for separate_bucket in [false, true] {
+            let mut world = world();
+            world.speed_policy.mode = CodexSpeedMode::Fast;
+            let mut snapshot = quota(80, 80);
+            if separate_bucket {
+                snapshot.buckets.push(snapshot.buckets[0].clone());
+            }
+            snapshot.buckets.last_mut().unwrap().windows[1].remaining_percent = None;
+            world.quotas.insert("a".into(), snapshot);
+            let (coordinator, _) = setup(world);
+            let lease = coordinator.open_lease(1, request("model-a", "high"));
+            block_on(coordinator.begin_run(&lease)).unwrap();
+            let speed = coordinator.run_speed(&lease).unwrap();
+            assert_eq!(speed.speed, "normal");
+            assert_eq!(speed.service_tier, "default");
+            assert_eq!(speed.speed_note.as_deref(), Some("usage unknown"));
+        }
+    }
+
+    #[test]
+    fn invoke_speed_treats_stale_quota_as_unknown_usage() {
+        let mut world = world();
+        world.speed_policy.mode = CodexSpeedMode::Fast;
+        world.quotas.insert("a".into(), quota(80, 80));
+        world.quota_statuses.insert("a".into(), QuotaStatus::Stale);
+        let (coordinator, _) = setup(world);
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        let speed = coordinator.run_speed(&lease).unwrap();
+        assert_eq!(speed.speed, "normal");
+        assert_eq!(speed.service_tier, "default");
+        assert_eq!(speed.speed_note.as_deref(), Some("usage unknown"));
+    }
+
+    #[test]
+    fn invoke_speed_uses_fast_when_fresh_codex_windows_meet_the_cutoff() {
+        let mut world = world();
+        world.speed_policy.mode = CodexSpeedMode::Fast;
+        let mut snapshot = quota(80, 20);
+        snapshot.buckets.extend(quota(40, 30).buckets);
+        world.quotas.insert("a".into(), snapshot);
+        world.quota_statuses.insert("a".into(), QuotaStatus::Fresh);
+        let (coordinator, _) = setup(world);
+        let lease = coordinator.open_lease(1, request("model-a", "high"));
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        let speed = coordinator.run_speed(&lease).unwrap();
+        assert_eq!(speed.speed, "fast");
+        assert_eq!(speed.service_tier, "priority");
+        assert_eq!(speed.speed_note, None);
+    }
+
+    #[test]
+    fn invoke_read_only_speed_uses_owner_policy_and_unknown_usage_falls_back() {
+        let mut world = world();
+        world.speed_policy = CodexSpeed {
+            mode: CodexSpeedMode::Fast,
+            fast_min_remaining: 0,
+        };
+        world.quotas.clear();
+        let (coordinator, ops) = setup(world);
+        let mut request = request("model-a", "high");
+        request.write = false;
+        let lease = coordinator.open_lease(1, request);
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        assert_eq!(
+            coordinator.run_speed(&lease).unwrap().speed_note.as_deref(),
+            Some("usage unknown")
+        );
+        ops.world().quotas.insert("a".into(), quota(90, 90));
+        coordinator.end_run(&lease).unwrap();
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        assert_eq!(coordinator.run_speed(&lease).unwrap().speed, "fast");
+        ops.world().no_fast_models.insert("model-a".into());
+        coordinator.end_run(&lease).unwrap();
+        block_on(coordinator.begin_run(&lease)).unwrap();
+        assert_eq!(
+            coordinator.run_speed(&lease).unwrap().speed_note.as_deref(),
+            Some("model has no Fast tier")
+        );
     }
 
     #[test]
@@ -2441,7 +2853,7 @@ mod tests {
         let (coordinator, ops) = setup(world());
         let worker = running_worker(&coordinator, &ops, 7, 1101);
         coordinator
-            .record_task_result(&worker, "completed".into(), None)
+            .record_task_result(&worker, "completed".into(), None, TaskMetrics::default())
             .expect("result");
         coordinator.drop_connection(7);
         let activities = ops.world().activities.clone();

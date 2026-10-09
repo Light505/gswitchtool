@@ -120,6 +120,10 @@ export function readClaudeSetup(env = process.env) {
         !["mixed", "claude", "codex"].includes(value.router?.mode) ||
         !["on", "off"].includes(value.router?.claudeOnlyReview)) return null;
     value.router.prefer = ["codex", "claude", "price"].includes(value.router.prefer) ? value.router.prefer : "codex";
+    value.codexSpeed = {
+      mode: ["normal", "fast", "orchestrator"].includes(value.codexSpeed?.mode) ? value.codexSpeed.mode : "normal",
+      fastMinRemaining: Number.isInteger(value.codexSpeed?.fastMinRemaining) && value.codexSpeed.fastMinRemaining >= 0 && value.codexSpeed.fastMinRemaining <= 90 ? value.codexSpeed.fastMinRemaining : 20
+    };
     return value;
   } catch {
     return null;

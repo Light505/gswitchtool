@@ -131,6 +131,13 @@ A hook checks every worker launch: only allowed router worker types (plus
 Codex through `invoke`) may write code while the router is on; a model
 override is refused, and the approval rule above applies.
 
+Codex Speed comes from GSwitch: Normal, Fast, or Orchestrator decides. Fast
+falls back to Normal below the configured usage-left cutoff (20% by default).
+With Orchestrator decides, request Fast only when the owner is waiting on the
+result to continue; otherwise use Normal. Mixed and Codex Router lines show
+Speed, and router stats group linked runs by speed and compare Fast and Normal
+median times for each Codex model and effort.
+
 ## Routing
 
 The orchestrator classifies each task by kind, difficulty and how it can be
@@ -292,7 +299,7 @@ project), so routing can be compared with your own results:
   agent or Codex fields. These records are not worker attempts: they are left
   out of success rates and `/router:stats` shows them as a separate count line.
 - `/router:stats` shows attempts, success rate, median time, Median tokens and Median USD per
-  worker and difficulty. Unverified counts as a pass; blocked is excluded
+  worker, difficulty and Speed. Unverified counts as a pass; blocked is excluded
   from worker attempts and success rates.
   Median USD is estimated from the transcript and the price table in
   `docs/model-benchmarks.md`, with cache reads priced as cached input.

@@ -367,7 +367,7 @@ rl.on("line", (line) => {
           throw new Error("thread/start.persistFullHistory requires experimentalApi capability");
         }
         const thread = nextThread(state, message.params.cwd, message.params.ephemeral);
-        state.lastThreadRequest = { method: "thread/start", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer };
+        state.lastThreadRequest = { method: "thread/start", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer, serviceTier: message.params.serviceTier };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
         send({ method: "thread/started", params: { thread: { id: thread.id } } });
@@ -402,7 +402,7 @@ rl.on("line", (line) => {
         }
         const thread = ensureThread(state, message.params.threadId);
         thread.updatedAt = now();
-        state.lastThreadRequest = { method: "thread/resume", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer };
+        state.lastThreadRequest = { method: "thread/resume", threadId: thread.id, sandbox: message.params.sandbox ?? null, approvalPolicy: message.params.approvalPolicy, approvalsReviewer: message.params.approvalsReviewer, serviceTier: message.params.serviceTier };
         saveState(state);
         send({ id: message.id, result: { thread: buildThread(thread), model: message.params.model || "gpt-5.4", modelProvider: "openai", serviceTier: null, cwd: thread.cwd, approvalPolicy: "never", sandbox: { type: "readOnly", access: { type: "fullAccess" }, networkAccess: false }, reasoningEffort: null } });
         break;
@@ -506,6 +506,7 @@ rl.on("line", (line) => {
 	          turnId,
 	          model: message.params.model ?? null,
 	          effort: message.params.effort ?? null,
+              serviceTierForTurn: message.params.serviceTierForTurn ?? null,
 	          cwd: process.cwd(),
 	          nodeModulesLinked: fs.lstatSync(path.join(process.cwd(), "node_modules"), { throwIfNoEntry: false })?.isSymbolicLink() ?? false,
 	          readme: fs.existsSync(path.join(process.cwd(), "README.md")) ? fs.readFileSync(path.join(process.cwd(), "README.md"), "utf8") : null,
@@ -525,6 +526,18 @@ rl.on("line", (line) => {
           break;
         }
 	        send({ id: message.id, result: { turn: buildTurn(turnId) } });
+        const tokenUpdates = JSON.parse(process.env.GSWITCH_TEST_TOKEN_USAGE || "null");
+        if (Array.isArray(tokenUpdates)) {
+          let totalTokens = thread.totalTokens ?? 1000;
+          for (const last of tokenUpdates) {
+            totalTokens += last;
+            const notification = { method: "thread/tokenUsage/updated", params: { threadId: thread.id, tokenUsage: { total: { totalTokens }, last: { totalTokens: last } } } };
+            send(notification);
+            if (process.env.GSWITCH_TEST_DUPLICATE_USAGE === "1") send(notification);
+          }
+          thread.totalTokens = totalTokens;
+          saveState(state);
+        }
 
         const payload = message.params.outputSchema && message.params.outputSchema.properties && message.params.outputSchema.properties.verdict
           ? structuredReviewPayload(prompt)

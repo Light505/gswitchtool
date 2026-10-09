@@ -218,11 +218,56 @@ impl Default for ClaudeRouterOptions {
     }
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CodexSpeedMode {
+    #[default]
+    Normal,
+    Fast,
+    Orchestrator,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", from = "Value")]
+pub struct CodexSpeed {
+    pub mode: CodexSpeedMode,
+    pub fast_min_remaining: u8,
+}
+
+impl Default for CodexSpeed {
+    fn default() -> Self {
+        Self {
+            mode: CodexSpeedMode::Normal,
+            fast_min_remaining: 20,
+        }
+    }
+}
+
+impl From<Value> for CodexSpeed {
+    fn from(value: Value) -> Self {
+        Self {
+            mode: match value.get("mode").and_then(Value::as_str) {
+                Some("fast") => CodexSpeedMode::Fast,
+                Some("orchestrator") => CodexSpeedMode::Orchestrator,
+                _ => CodexSpeedMode::Normal,
+            },
+            fast_min_remaining: value
+                .get("fastMinRemaining")
+                .and_then(Value::as_f64)
+                .filter(|cutoff| cutoff.fract() == 0.0 && (0.0..=90.0).contains(cutoff))
+                .map(|cutoff| cutoff as u8)
+                .unwrap_or(20),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ClaudeSetup {
     pub setup: ClaudeSetupKind,
     pub router: ClaudeRouterOptions,
+    #[serde(default, rename = "codexSpeed")]
+    pub codex_speed: CodexSpeed,
 }
 
 impl ClaudeSetup {
@@ -234,6 +279,7 @@ impl ClaudeSetup {
                 ClaudeSetupKind::ClaudeOnly
             },
             router: ClaudeRouterOptions::default(),
+            codex_speed: CodexSpeed::default(),
         }
     }
 
@@ -377,6 +423,8 @@ pub struct CatalogModel {
     pub model: String,
     pub display_name: String,
     pub supported_reasoning_efforts: Vec<String>,
+    #[serde(default)]
+    pub service_tiers: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_reasoning_effort: Option<String>,
     pub is_default: bool,

@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
-import { projectKey, matchesScope } from "../scripts/router.mjs";
+import { projectKey, matchesScope, normalizeCodexSpeed } from "../scripts/router.mjs";
 import { models, efforts, workerNames, defaultAllowed, costPerTask } from "../scripts/workers.mjs";
 
 const plugin = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -104,7 +104,7 @@ test("the app alone supplies mode, review and allowed workers, read on each mess
     f.settings({ mode, claudeOnlyReview: "off", claudeAllowed: { haiku: ["medium"], sonnet: ["low"], opus: [] } });
     const line = f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext;
     assert.match(line, new RegExp(`^Router: mode=${mode} \\(GSwitch setup\\).*review in claude mode: off`));
-    assert.match(line, /Claude workers: haiku medium · sonnet low$/);
+    assert.ok(line.endsWith(`Claude workers: haiku medium · sonnet low${mode === "claude" ? "" : " · Speed: normal"}`));
   }
 });
 
@@ -284,13 +284,13 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Use first: codex · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Use first: codex · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Speed: normal");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Speed: normal$/);
   f.settings({ claudeAllowed: { ...defaultAllowed(), sonnet: ["max","low"] } });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max · Speed: normal$/);
   f.settings({ claudeAllowed: {} });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none · Speed: normal$/);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});
 });
 
@@ -585,4 +585,49 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   const rerun = spawnSync(process.execPath, [builder, "--no-install"], { cwd: f.project, env: f.env, encoding: "utf8", windowsHide: true });
   assert.equal(rerun.status, 0, rerun.stderr); assert.equal(fs.existsSync(path.join(dev, "stale.md")), false);
   assert.match(fs.readFileSync(path.join(dev, "skills/mode/SKILL.md"), "utf8"), /disable-model-invocation: true/);
+});
+
+test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
+  const f = fixture(t);
+  const plan = () => f.run(["plan", "s1", f.project, "--task", "speed", "--kind", "implement", "--difficulty", "small"]);
+  const setup = (mode, codexSpeed) => f.setup({ version: 1, setup: "router", router: { mode, claudeOnlyReview: "on" }, codexSpeed });
+  for (const value of [undefined, null, [], {}, { mode: "invalid", fastMinRemaining: 20 }]) {
+    assert.deepEqual(normalizeCodexSpeed(value), { mode: "normal", fastMinRemaining: 20 });
+    setup("mixed", value);
+    assert.match(f.run(["mode", "s1", f.project]), / · Speed: Normal \(GSwitch setup\)/);
+    assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, / · Speed: normal$/);
+    assert.doesNotMatch(plan(), /Codex speed:/);
+  }
+  for (const [value, expected] of [
+    [{ mode: "orchestrator" }, { mode: "orchestrator", fastMinRemaining: 20 }],
+    [{ mode: "fast", fastMinRemaining: 20.5 }, { mode: "fast", fastMinRemaining: 20 }],
+    [{ mode: "bogus", fastMinRemaining: 35 }, { mode: "normal", fastMinRemaining: 35 }],
+    ...[-1, 91, "20", undefined].map((fastMinRemaining) =>
+      [{ mode: "fast", fastMinRemaining }, { mode: "fast", fastMinRemaining: 20 }])
+  ]) {
+    assert.deepEqual(normalizeCodexSpeed(value), expected);
+    setup("mixed", value);
+    assert.ok(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext.endsWith(` · Speed: ${expected.mode}`));
+    if (expected.mode === "normal") assert.doesNotMatch(plan(), /Codex speed:/);
+    else assert.ok(plan().includes(`below ${expected.fastMinRemaining}% usage left`));
+  }
+  for (const mode of ["mixed", "codex", "claude"]) for (const speed of ["normal", "fast", "orchestrator"]) {
+    setup(mode, { mode: speed, fastMinRemaining: 35 });
+    const output = plan();
+    const line = f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext;
+    const status = f.run(["statusline"]);
+    if (mode === "claude") {
+      assert.doesNotMatch(line + status + output, /Speed:|Codex speed:/); continue;
+    }
+    assert.ok(line.endsWith(` · Speed: ${speed}`));
+    const label = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[speed];
+    assert.ok(status.includes(` · Speed: ${label} (GSwitch setup)`));
+    if (speed === "normal") assert.doesNotMatch(output, /Codex speed:/);
+    else if (speed === "fast") assert.ok(output.includes("Codex speed: Fast (falls back to Normal below 35% usage left)"));
+    else assert.ok(output.includes('Codex speed: Orchestrator decides — add --speed fast --speed-reason "<why>" only when the owner is waiting on this result to continue; otherwise Normal. Fast falls back to Normal below 35% usage left.'));
+  }
+  for (const cutoff of [0, 90]) {
+    setup("codex", { mode: "fast", fastMinRemaining: cutoff });
+    assert.ok(plan().includes(`below ${cutoff}% usage left`));
+  }
 });

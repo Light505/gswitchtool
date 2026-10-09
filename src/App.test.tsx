@@ -153,6 +153,7 @@ const staleQuota: QuotaView = {
 function claudeSetup(enabled = false): ClaudeSetup {
   return {
     setup: enabled ? "claude-codex" : "claude-only",
+    codexSpeed: { mode: "normal", fastMinRemaining: 20 },
     router: {
       mode: "mixed",
       claudeAllowed: {
@@ -2585,6 +2586,94 @@ describe("Invoke Mode", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     const initial = claudeSetup(false);
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "router", router: { ...initial.router, prefer } }));
+  });
+
+
+  it.each(["normal", "fast", "orchestrator"] as const)("saves Codex speed %s and retains the cutoff across setup modes", async (speed) => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    const control = within(panel).getByRole("combobox", { name: "Speed" });
+    expect(control).toHaveValue("normal");
+    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Normal", "Fast", "Orchestrator decides"]);
+    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    await userEvent.selectOptions(control, speed);
+    if (speed !== "normal") {
+      const cutoff = within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" });
+      expect(cutoff).toHaveValue(20);
+      await userEvent.clear(cutoff);
+      await userEvent.type(cutoff, "35");
+    }
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    const mode = within(panel).getByRole("combobox", { name: "Router mode" });
+    await userEvent.selectOptions(mode, "claude");
+    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    for (const value of ["codex", "mixed"]) {
+      await userEvent.selectOptions(mode, value);
+      expect(within(panel).getByRole("combobox", { name: "Speed" })).toHaveValue(speed);
+      if (speed !== "normal") expect(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" })).toHaveValue(35);
+    }
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    const initial = claudeSetup(false);
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({
+      ...initial, setup: "router", codexSpeed: { mode: speed, fastMinRemaining: speed === "normal" ? 20 : 35 },
+    }));
+  });
+
+  it("saves Normal after clearing the Fast cutoff", async () => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    const speed = within(panel).getByRole("combobox", { name: "Speed" });
+    await userEvent.selectOptions(speed, "fast");
+    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }));
+    await userEvent.selectOptions(speed, "normal");
+    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith(claudeSetup(true)));
+  });
+
+  it("keeps the saved cutoff when clearing it and switching to Claude only", async () => {
+    const initial = { ...claudeSetup(true), codexSpeed: { mode: "fast" as const, fastMinRemaining: 35 } };
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude only/ }));
+    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "claude-only" }));
+  });
+
+  it.each(["", "-1", "91", "20.5"])("refuses an invalid Fast cutoff %s", async (value) => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
+    const cutoff = within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" });
+    fireEvent.change(cutoff, { target: { value } });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+    expect(within(panel).getByRole("alert")).toHaveTextContent("integer between 0 and 90");
+  });
+
+  it.each(["0", "90"])("saves the Fast cutoff boundary %s", async (value) => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
+    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }), { target: { value } });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({
+      ...claudeSetup(true), codexSpeed: { mode: "fast", fastMinRemaining: Number(value) },
+    }));
   });
 
   it("cancels draft changes without saving", async () => {

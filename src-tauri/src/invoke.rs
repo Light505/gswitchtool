@@ -46,6 +46,7 @@ pub struct InvokeState {
     settings: Arc<Mutex<InvokeSettings>>,
     catalog: Arc<Mutex<Option<Vec<CatalogModel>>>>,
     model_access: Arc<Mutex<ModelAccess>>,
+    run_log: Arc<Mutex<()>>,
 }
 
 impl InvokeState {
@@ -66,6 +67,48 @@ impl InvokeState {
             settings: Arc::new(Mutex::new(settings)),
             catalog: Arc::new(Mutex::new(None)),
             model_access: Arc::new(Mutex::new(ModelAccess::default())),
+            run_log: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn model_has_fast_tier(&self, model: &str) -> bool {
+        self.cached_catalog().is_none_or(|catalog| {
+            catalog
+                .iter()
+                .find(|entry| entry.model == model)
+                .is_some_and(|entry| entry.service_tiers.iter().any(|tier| tier == "priority"))
+        })
+    }
+
+    /// Logging is best-effort and serialized across workers. Errors reveal no task or provider data.
+    pub fn append_codex_run(&self, run: &crate::failover::CodexRun) {
+        let append = || -> Result<(), String> {
+            let _guard = self
+                .run_log
+                .lock()
+                .map_err(|_| "Run log lock unavailable")?;
+            let path = self.path.with_file_name("codex-runs.jsonl");
+            fs::create_dir_all(path.parent().ok_or("Invalid run log path")?)
+                .map_err(|_| "Run log storage unavailable")?;
+            let mut content = match fs::read_to_string(&path) {
+                Ok(content) => content,
+                Err(error) if error.kind() == ErrorKind::NotFound => String::new(),
+                Err(_) => return Err("Run log unreadable".to_string()),
+            };
+            let line = serde_json::to_string(run).map_err(|_| "Run log serialization failed")?;
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&line);
+            content.push('\n');
+            let lines = content.lines().collect::<Vec<_>>();
+            if lines.len() > 5000 {
+                content = format!("{}\n", lines[lines.len() - 5000..].join("\n"));
+            }
+            storage::write_private_bytes_atomic(&path, content.as_bytes(), "Codex run log")
+        };
+        if append().is_err() {
+            eprintln!("Warning: unable to write Codex run log");
         }
     }
 
@@ -93,6 +136,9 @@ impl InvokeState {
 
     /// Serde rejects unknown setup/model/effort values before this boundary.
     pub fn set_claude_setup(&self, mut setup: ClaudeSetup) -> Result<InvokeSettings, String> {
+        if setup.codex_speed.fast_min_remaining > 90 {
+            return Err("Fast cutoff must be between 0 and 90 percent".to_string());
+        }
         setup.normalize();
         self.update_with_setup(
             |settings| {
@@ -442,6 +488,18 @@ fn parse_model_list(result: &Value) -> Result<(Vec<CatalogModel>, Option<String>
                     .to_string(),
                 model,
                 supported_reasoning_efforts,
+                service_tiers: entry
+                    .get("serviceTiers")
+                    .and_then(Value::as_array)
+                    .map(|tiers| {
+                        tiers
+                            .iter()
+                            .filter_map(|tier| {
+                                tier.get("id").and_then(Value::as_str).map(str::to_string)
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default(),
                 default_reasoning_effort: entry
                     .get("defaultReasoningEffort")
                     .and_then(Value::as_str)
@@ -608,6 +666,7 @@ mod tests {
                 for review in [ClaudeOnlyReview::On, ClaudeOnlyReview::Off] {
                     let setup = ClaudeSetup {
                         setup: kind,
+                        codex_speed: Default::default(),
                         router: ClaudeRouterOptions {
                             mode,
                             claude_only_review: review,
@@ -739,7 +798,8 @@ mod tests {
                     "prefer": "codex",
                     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
                     "claudeOnlyReview": "on"
-                }
+                },
+                "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 }
             })
         );
         assert!(content.find("\"haiku\"").unwrap() < content.find("\"sonnet\"").unwrap());
@@ -847,6 +907,186 @@ mod tests {
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }
 
+    #[test]
+    fn setup_speed_defaults_for_old_files_and_round_trips() {
+        let mut old = serde_json::to_value(ClaudeSetup::default()).unwrap();
+        old.as_object_mut().unwrap().remove("codexSpeed");
+        let setup: ClaudeSetup = serde_json::from_value(old).unwrap();
+        assert_eq!(setup.codex_speed, crate::types::CodexSpeed::default());
+        let path = temp_path("speed-round-trip");
+        let state = InvokeState::load(path.clone());
+        for mode in ["normal", "fast", "orchestrator"] {
+            for cutoff in [0, 20, 90] {
+                let mut value = serde_json::to_value(&setup).unwrap();
+                value["codexSpeed"] = json!({ "mode": mode, "fastMinRemaining": cutoff });
+                let parsed: ClaudeSetup = serde_json::from_value(value.clone()).unwrap();
+                assert_eq!(serde_json::to_value(&parsed).unwrap(), value);
+                let saved = state.set_claude_setup(parsed).unwrap();
+                assert_eq!(InvokeState::load(path.clone()).settings().unwrap(), saved);
+                let shared: Value = serde_json::from_slice(
+                    &fs::read(path.with_file_name("claude-setup.json")).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(shared["codexSpeed"], value["codexSpeed"]);
+            }
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn invalid_setup_speed_loads_without_resetting_policy() {
+        let path = temp_path("invalid-setup-speed");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let policy = json!({
+            "invoke_mode": true,
+            "claude_setup": {
+                "setup": "router",
+                "router": {
+                    "mode": "codex", "prefer": "claude",
+                    "claudeAllowed": { "haiku": ["high"], "sonnet": ["low"], "opus": [] },
+                    "claudeOnlyReview": "off"
+                }
+            },
+            "allowed_invocation_profiles": [{ "model": "gpt-6.1-sol", "reasoning_efforts": ["low"] }],
+            "task_defaults": { "research": { "model": "gpt-6.1-sol", "effort": "low" } },
+            "account_priority": ["saved-account"],
+            "preferred_min_remaining": 35, "max_concurrent_tasks": 3, "auto_wake": true,
+            "weekly_reserve": { "saved-account": 10 }
+        });
+        let expected: InvokeSettings = serde_json::from_value(policy.clone()).unwrap();
+        for speed in [
+            Value::Null,
+            json!(false),
+            json!(42),
+            json!([]),
+            json!("fast"),
+            json!({}),
+            json!({ "mode": "unknown", "fastMinRemaining": 91 }),
+            json!({ "mode": false, "fastMinRemaining": -1 }),
+            json!({ "mode": {}, "fastMinRemaining": 20.5 }),
+            json!({ "mode": [], "fastMinRemaining": "20" }),
+            json!({ "mode": null, "fastMinRemaining": null }),
+        ] {
+            let mut invalid = policy.clone();
+            invalid["claude_setup"]["codexSpeed"] = speed;
+            fs::write(&path, invalid.to_string()).unwrap();
+            assert_eq!(
+                InvokeState::load(path.clone()).settings().unwrap(),
+                expected
+            );
+        }
+        let mut integer = policy.clone();
+        integer["claude_setup"]["codexSpeed"] = json!({ "mode": "fast", "fastMinRemaining": 35.0 });
+        let loaded: InvokeSettings = serde_json::from_value(integer).unwrap();
+        assert_eq!(loaded.claude_setup.codex_speed.fast_min_remaining, 35);
+        let mut partial = policy.clone();
+        partial["claude_setup"]["codexSpeed"] = json!({ "mode": "bad", "fastMinRemaining": 35 });
+        let loaded: InvokeSettings = serde_json::from_value(partial.clone()).unwrap();
+        assert_eq!(loaded.claude_setup.codex_speed.fast_min_remaining, 35);
+        partial["claude_setup"]["codexSpeed"] = json!({ "mode": "fast", "fastMinRemaining": 99 });
+        let loaded: InvokeSettings = serde_json::from_value(partial).unwrap();
+        assert_eq!(
+            loaded.claude_setup.codex_speed.mode,
+            crate::types::CodexSpeedMode::Fast
+        );
+        assert_eq!(loaded.claude_setup.codex_speed.fast_min_remaining, 20);
+
+        let state = InvokeState::load(path.clone());
+        let mut invalid = expected.claude_setup.clone();
+        invalid.codex_speed.fast_min_remaining = 91;
+        assert!(state.set_claude_setup(invalid).is_err());
+        assert_eq!(state.settings().unwrap(), expected);
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    fn comparison_run() -> crate::failover::CodexRun {
+        crate::failover::CodexRun {
+            version: 1,
+            time: "2026-10-10T12:00:00.000Z".into(),
+            job_id: Some("task-1".into()),
+            thread_id: Some("thread-1".into()),
+            model: "model-a".into(),
+            effort: "high".into(),
+            write: false,
+            status: "completed".into(),
+            code: None,
+            speed_requested: Some(crate::types::CodexSpeedMode::Fast),
+            speed_reason: Some("blocks the next step".into()),
+            speed: "mixed",
+            speed_notes: vec!["usage unknown".into()],
+            codex_ms: Some(123),
+            total_ms: Some(456),
+            tokens: Some(789),
+        }
+    }
+
+    #[test]
+    fn invoke_fast_support_uses_the_catalog_only_when_known() {
+        let state = InvokeState::load(temp_path("fast-catalog"));
+        assert!(state.model_has_fast_tier("model-a"));
+        state.remember_catalog(catalog());
+        assert!(state.model_has_fast_tier("model-a"));
+        assert!(!state.model_has_fast_tier("model-b"));
+        assert!(!state.model_has_fast_tier("model-unknown"));
+    }
+
+    #[test]
+    fn invoke_run_log_has_exact_shape_and_keeps_the_newest_5000_entries() {
+        let path = temp_path("run-log");
+        let state = InvokeState::load(path.clone());
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let log = path.with_file_name("codex-runs.jsonl");
+        fs::write(
+            &log,
+            (0..5000)
+                .map(|n| format!("{{\"old\":{n}}}\n"))
+                .collect::<String>(),
+        )
+        .unwrap();
+        state.append_codex_run(&comparison_run());
+        let content = fs::read_to_string(&log).unwrap();
+        let lines = content.lines().collect::<Vec<_>>();
+        assert_eq!(lines.len(), 5000);
+        assert_eq!(lines[0], "{\"old\":1}");
+        assert_eq!(
+            serde_json::from_str::<Value>(lines[4999]).unwrap(),
+            json!({
+                "version": 1, "time": "2026-10-10T12:00:00.000Z", "jobId": "task-1",
+                "threadId": "thread-1", "model": "model-a", "effort": "high", "write": false,
+                "status": "completed", "code": null, "speedRequested": "fast",
+                "speedReason": "blocks the next step", "speed": "mixed",
+                "speedNotes": ["usage unknown"], "codexMs": 123, "totalMs": 456, "tokens": 789
+            })
+        );
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn invoke_run_log_serializes_workers_and_write_failure_is_best_effort() {
+        let path = temp_path("run-log-concurrency");
+        let state = InvokeState::load(path.clone());
+        let workers = (0..8)
+            .map(|_| {
+                let state = state.clone();
+                std::thread::spawn(move || state.append_codex_run(&comparison_run()))
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        let log = path.with_file_name("codex-runs.jsonl");
+        let content = fs::read_to_string(&log).unwrap();
+        assert_eq!(content.lines().count(), 8);
+        for line in content.lines() {
+            assert!(serde_json::from_str::<Value>(line).is_ok());
+        }
+        fs::remove_file(&log).unwrap();
+        fs::create_dir(&log).unwrap();
+        state.append_codex_run(&comparison_run());
+        assert!(log.is_dir());
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
     fn catalog() -> Vec<CatalogModel> {
         vec![
             CatalogModel {
@@ -858,6 +1098,7 @@ mod tests {
                     "high".into(),
                     "xhigh".into(),
                 ],
+                service_tiers: vec!["priority".into()],
                 default_reasoning_effort: Some("medium".into()),
                 is_default: true,
                 only_on: None,
@@ -866,6 +1107,7 @@ mod tests {
                 model: "model-b".into(),
                 display_name: "Model B".into(),
                 supported_reasoning_efforts: vec!["low".into(), "medium".into()],
+                service_tiers: Vec::new(),
                 default_reasoning_effort: None,
                 is_default: false,
                 only_on: None,
@@ -1079,6 +1321,7 @@ mod tests {
                     "hidden": false,
                     "isDefault": true,
                     "defaultReasoningEffort": "medium",
+                    "serviceTiers": [{ "id": "priority", "name": "Fast" }],
                     "supportedReasoningEfforts": [
                         {"reasoningEffort": "low", "description": ""},
                         {"reasoningEffort": "max", "description": ""}
@@ -1096,6 +1339,7 @@ mod tests {
                 model: "gpt-x".into(),
                 display_name: "GPT X".into(),
                 supported_reasoning_efforts: vec!["low".into(), "max".into()],
+                service_tiers: vec!["priority".into()],
                 default_reasoning_effort: Some("medium".into()),
                 is_default: true,
                 only_on: None,
