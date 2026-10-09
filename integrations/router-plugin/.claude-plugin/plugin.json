@@ -1,7 +1,7 @@
 {
   "metadata": { "$comment": "Added by Light505 for gswitchtool (2026)." },
   "name": "router",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": { "name": "Light505" },
   "description": "GSwitch router plugin (optional): picks a Claude worker or Codex for each coding task. Codex tasks go through the Codex plugin."
 }
