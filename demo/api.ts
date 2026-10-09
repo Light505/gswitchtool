@@ -92,7 +92,7 @@ const displayOnly = {
   onInvokeFailoverWaiting: async () => () => undefined,
   invokePause: async () => null,
   updateDelivery: async () => "installer_exits" as const,
-  appVersion: async () => ({ version: "1.12.1", dev: false }),
+  appVersion: async () => ({ version: "1.13.0", dev: false }),
   onInvokePaused: async () => () => undefined,
   onInvokeAutoWoke: async () => () => undefined,
   stopInvokeTask: async () => undefined,
