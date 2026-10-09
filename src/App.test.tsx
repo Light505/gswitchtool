@@ -161,6 +161,7 @@ function claudeSetup(enabled = false): ClaudeSetup {
         opus: ["low", "medium", "high", "xhigh", "max"],
       },
       claudeOnlyReview: "on",
+      prefer: "codex",
     },
   };
 }
@@ -2562,6 +2563,28 @@ describe("Invoke Mode", () => {
     expect(await screen.findByRole("button", { name: "Claude Code: " + name })).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Claude Code" })).not.toBeInTheDocument();
     expect(screen.queryAllByRole("switch")).toHaveLength(enabled ? 1 : 0);
+  });
+
+  it.each(["codex", "claude", "price"] as const)("saves Use first %s only in mixed mode", async (prefer) => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    expect(within(panel).queryByRole("combobox", { name: "Use first" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    const control = within(panel).getByRole("combobox", { name: "Use first" });
+    expect(control).toHaveValue("codex");
+    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Codex", "Claude", "Lowest API price"]);
+    await userEvent.selectOptions(control, prefer);
+    const mode = within(panel).getByRole("combobox", { name: "Router mode" });
+    for (const value of ["claude", "codex"]) {
+      await userEvent.selectOptions(mode, value);
+      expect(within(panel).queryByRole("combobox", { name: "Use first" })).not.toBeInTheDocument();
+    }
+    await userEvent.selectOptions(mode, "mixed");
+    expect(within(panel).getByRole("combobox", { name: "Use first" })).toHaveValue(prefer);
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    const initial = claudeSetup(false);
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "router", router: { ...initial.router, prefer } }));
   });
 
   it("cancels draft changes without saving", async () => {

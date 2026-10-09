@@ -47,6 +47,17 @@ test("each setup produces its exact per-message hook context", (t) => {
   assert.equal(JSON.parse(f.run("claude-setup-hook.mjs")).hookSpecificOutput.additionalContext, lines.router);
 });
 
+test("Use first defaults for old or invalid files and preserves valid preferences", (t) => {
+  const f = fixture(t);
+  for (const prefer of [undefined, "invalid", null, "codex", "claude", "price"]) {
+    const value = setup("router");
+    if (prefer !== undefined) value.router.prefer = prefer;
+    f.write(value);
+    assert.equal(readClaudeSetup(f.env).router.prefer, ["codex", "claude", "price"].includes(prefer) ? prefer : "codex");
+    assert.equal(JSON.parse(f.run("claude-setup-hook.mjs")).hookSpecificOutput.additionalContext, lines.router);
+  }
+});
+
 test("missing, unreadable, corrupt and invalid setup produces no output and exits zero", (t) => {
   const f = fixture(t);
   assert.equal(f.run("claude-setup-hook.mjs"), "");

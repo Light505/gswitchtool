@@ -64,7 +64,8 @@ session start reports another model, the router warns once.
 
 Use GSwitch's **Claude Code** button to choose the setup. In **Router** setup,
 choose `mixed`, `claude` or `codex`, the allowed Claude worker models and
-efforts, and whether to run Codex review in `claude` mode. To stop routing,
+efforts, whether to run Codex review in `claude` mode, and in `mixed` mode
+**Use first** (Codex, Claude or Lowest API price). To stop routing,
 choose **Claude only** or **Claude + Codex**.
 
 The plugins read the app's `~/.gswitchtool/claude-setup.json` (Dev:
@@ -138,7 +139,14 @@ and architecture. It runs `router plan` before starting a worker and again
 after each failure, using the same task id for every attempt.
 
 The plan lists allowed workers whose agent-benchmark score meets the task's
-capability floor, cheapest first. It leaves out workers without a benchmark
+capability floor. In mixed mode, **Use first** (`router.prefer`) selects Codex
+first (the default, including older files), Claude first, or Lowest API price
+(`price`). A preferred family comes before the other family; within each
+family, workers stay ordered by API cost, then score descending, then minutes.
+Lowest API price orders both families together by those same measures.
+Codex-only and Claude-only modes keep their existing order. This setting changes
+only ordering, including recovery candidates; floors, LOW handling and approval
+rules stay the same. It leaves out workers without a benchmark
 and workers beaten on score and cost by another eligible worker of the same
 family (Claude or Codex), so a cheap Claude worker stays listed when a Codex
 worker beats it. In mixed

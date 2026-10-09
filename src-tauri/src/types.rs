@@ -152,6 +152,27 @@ pub enum ClaudeOnlyReview {
     Off,
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClaudeRouterPrefer {
+    #[default]
+    Codex,
+    Claude,
+    Price,
+}
+
+fn deserialize_router_prefer<'de, D>(deserializer: D) -> Result<ClaudeRouterPrefer, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        Some("claude") => ClaudeRouterPrefer::Claude,
+        Some("price") => ClaudeRouterPrefer::Price,
+        _ => ClaudeRouterPrefer::Codex,
+    })
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeEffort {
@@ -175,6 +196,8 @@ pub struct ClaudeAllowed {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ClaudeRouterOptions {
     pub mode: ClaudeRouterMode,
+    #[serde(default, deserialize_with = "deserialize_router_prefer")]
+    pub prefer: ClaudeRouterPrefer,
     pub claude_allowed: ClaudeAllowed,
     pub claude_only_review: ClaudeOnlyReview,
 }
@@ -184,6 +207,7 @@ impl Default for ClaudeRouterOptions {
         use ClaudeEffort::{High, Low, Max, Medium, Xhigh};
         Self {
             mode: ClaudeRouterMode::Mixed,
+            prefer: ClaudeRouterPrefer::Codex,
             claude_allowed: ClaudeAllowed {
                 haiku: vec![Low, Medium],
                 sonnet: vec![Low, Medium, High, Xhigh, Max],

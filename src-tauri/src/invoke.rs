@@ -650,6 +650,73 @@ mod tests {
     }
 
     #[test]
+    fn setup_prefer_defaults_for_old_files_and_round_trips() {
+        use crate::types::ClaudeRouterPrefer;
+        let mut old = serde_json::to_value(ClaudeSetup::default()).unwrap();
+        old["router"].as_object_mut().unwrap().remove("prefer");
+        let setup: ClaudeSetup = serde_json::from_value(old).unwrap();
+        assert_eq!(setup.router.prefer, ClaudeRouterPrefer::Codex);
+        for prefer in ["codex", "claude", "price"] {
+            let mut value = serde_json::to_value(&setup).unwrap();
+            value["router"]["prefer"] = json!(prefer);
+            let parsed: ClaudeSetup = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn invalid_setup_prefer_loads_without_resetting_policy() {
+        use crate::types::ClaudeRouterPrefer;
+        let path = temp_path("invalid-setup-prefer");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let policy = json!({
+            "invoke_mode": true,
+            "claude_setup": {
+                "setup": "router",
+                "router": {
+                    "mode": "codex",
+                    "prefer": "codex",
+                    "claudeAllowed": { "haiku": ["high"], "sonnet": ["low"], "opus": [] },
+                    "claudeOnlyReview": "off"
+                }
+            },
+            "allowed_invocation_profiles": [{ "model": "gpt-6.1-sol", "reasoning_efforts": ["low"] }],
+            "account_priority": ["saved-account"],
+            "preferred_min_remaining": 35,
+            "max_concurrent_tasks": 3,
+            "auto_wake": true
+        });
+        let expected: InvokeSettings = serde_json::from_value(policy.clone()).unwrap();
+        let mut omitted = policy.clone();
+        omitted["claude_setup"]["router"]
+            .as_object_mut()
+            .unwrap()
+            .remove("prefer");
+        fs::write(&path, omitted.to_string()).unwrap();
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().unwrap(),
+            expected
+        );
+        for prefer in [
+            json!("unknown"),
+            Value::Null,
+            json!(42),
+            json!(false),
+            json!([]),
+            json!({}),
+        ] {
+            let mut invalid = policy.clone();
+            invalid["claude_setup"]["router"]["prefer"] = prefer;
+            fs::write(&path, invalid.to_string()).unwrap();
+            let loaded = InvokeState::load(path.clone()).settings().unwrap();
+            assert_eq!(loaded.claude_setup.router.prefer, ClaudeRouterPrefer::Codex);
+            assert!(loaded.invoke_mode);
+            assert_eq!(loaded, expected);
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn shared_setup_has_exact_shape_order_and_leaves_no_temporary_file() {
         use crate::types::ClaudeEffort;
         let path = temp_path("shared-setup");
@@ -669,6 +736,7 @@ mod tests {
                 "setup": "claude-only",
                 "router": {
                     "mode": "mixed",
+                    "prefer": "codex",
                     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
                     "claudeOnlyReview": "on"
                 }

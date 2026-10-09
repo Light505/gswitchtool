@@ -5,7 +5,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { models, efforts, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
+import { models, efforts, prefers, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
 import { appendResult, readResults, resultRecord, planRecord, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -84,6 +84,7 @@ function config() {
     modes.slice(1).includes(setup.router?.mode) && reviews.includes(setup.router?.claudeOnlyReview);
   const value = valid ? setup.router : {};
   return { mode: valid && setup.setup === "router" ? value.mode : "off",
+    prefer: prefers.includes(value.prefer) ? value.prefer : "codex",
     claudeOnlyReview: value.claudeOnlyReview ?? "on", claudeAllowed: claudeAllowed(value.claudeAllowed) };
 }
 // Only status-line passthrough state remains in the router's old config file.
@@ -105,11 +106,12 @@ function saveSession(id, value) { atomicJSON(sessionFile(id), { ...value, update
 function resolved() {
   const cfg = config();
   return { mode: { value: cfg.mode, source: "GSwitch setup" },
-    review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" } };
+    review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" }, prefer: cfg.prefer };
 }
 function routerLine(state) {
   const label = { off: "Off", mixed: "Mixed", codex: "Codex only", claude: "Claude only" }[state.mode.value];
-  return `Router: ${label} (${state.mode.source}) · Codex review: ${state.review.value} (${state.review.source})`;
+  const prefer = { codex: "Codex", claude: "Claude", price: "Lowest API price" }[state.prefer];
+  return `Router: ${label} (${state.mode.source}) · Codex review: ${state.review.value} (${state.review.source})${state.mode.value === "mixed" ? ` · Use first: ${prefer} (${state.mode.source})` : ""}`;
 }
 function resetMilliseconds(value) {
   return typeof value === "number" ? value * 1000 : Date.parse(value);
@@ -349,7 +351,7 @@ function hook(event, input) {
   if (event === "UserPromptSubmit") {
     if (state.mode.value === "off") return {};
     const window = usage();
-    return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}`);
+    return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value}${state.mode.value === "mixed" ? ` · Use first: ${state.prefer}` : ""} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}`);
   }
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {
     const bound = sess.bindings[input.tool_input?.to];
@@ -652,9 +654,11 @@ function planView(state) {
   if (state.done) lines.push(`Task ${record.task} already passed; start a new task id for new work.`);
   else {
     const rows = workerTable({ claudeAllowed: config().claudeAllowed, codexAllowed: codex, mode, low: usage()?.left <= 30, namespace: pluginName });
-    const choices = candidates(rows, { floor, exclude: state.failedWorkers.map(({ worker }) => worker) }).slice(0, 6);
+    const prefer = config().prefer;
+    const choices = candidates(rows, { floor, exclude: state.failedWorkers.map(({ worker }) => worker), prefer }).slice(0, 6);
+    const order = mode !== "mixed" || prefer === "price" ? "cheapest first" : prefer === "codex" ? "Codex first, then cheapest" : "Claude first, then cheapest";
     if (!choices.length) lines.push(`No allowed worker meets floor ${floor}: stop and ask the owner.`);
-    else lines.push("Candidates (cheapest first):", ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
+    else lines.push(`Candidates (${order}):`, ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
   }
   if (text == null && ["mixed", "codex"].includes(mode)) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
   lines.push(`Brief lines: TASK: ${record.task} · SCOPE: <globs> · VERIFY: <command>`);

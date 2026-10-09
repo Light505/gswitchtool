@@ -284,7 +284,7 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Use first: codex · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max$/);
   f.settings({ claudeAllowed: { ...defaultAllowed(), sonnet: ["max","low"] } });
@@ -292,6 +292,21 @@ test("UserPromptSubmit exact context and LOW threshold", (t) => {
   f.settings({ claudeAllowed: {} });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none$/);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});
+});
+
+test("Use first appears only in mixed mode and labels the configured preference", (t) => {
+  const f = fixture(t);
+  f.settings({ mode: "claude", prefer: "price" });
+  assert.doesNotMatch(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Use first/);
+  assert.doesNotMatch(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Use first/);
+  assert.doesNotMatch(f.run(["mode", "s1", f.project]), /Use first/);
+  assert.doesNotMatch(f.run(["statusline"]), /Use first/);
+
+  f.settings({ mode: "mixed", prefer: "price" });
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Codex review in claude mode: on · Use first: price · Claude 5h:/);
+  assert.match(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Use first: Lowest API price \(GSwitch setup\)/);
+  assert.match(f.run(["mode", "s1", f.project]), /Use first: Lowest API price \(GSwitch setup\)/);
+  assert.match(f.run(["statusline"]), /Use first: Lowest API price \(GSwitch setup\)/);
 });
 
 test("Agent and Task permissions, fixed models, low usage, scope, approval and helpers", (t) => {

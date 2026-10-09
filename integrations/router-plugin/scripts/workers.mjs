@@ -13,6 +13,7 @@ export const ownerCheckAfter = 3;
 export const failureReasons = ["verify", "review", "capability", "incomplete", "context", "tool", "scope", "usage", "worktree", "stopped", "other"];
 export const workerFailures = ["verify", "review", "capability", "incomplete", "other"];
 export const efforts = ["low", "medium", "high", "xhigh", "max"];
+export const prefers = ["codex", "claude", "price"];
 export const workerNames = models.flatMap(({ short }) => efforts.map((effort) => `${short}-${effort}`));
 // Agent benchmark per attempt: score, API USD cost and minutes. basis: measured, estimated (Opus) or none (no benchmark).
 export const benchmarks = Object.freeze({
@@ -71,10 +72,12 @@ export function taskFloor(kind, difficulty, failedScores = [], level = 0) {
   const scores = failedScores.filter((score) => typeof score === "number" && Number.isFinite(score));
   return { floor: Math.max(difficultyFloor[used], scores.length ? Math.max(...scores) + 1 : 0), level: used };
 }
-export function candidates(rows, { floor, exclude = [] }) {
+export function candidates(rows, { floor, exclude = [], prefer = "codex" }) {
+  const preferred = prefer === "claude" ? ["router", "router-dev"] : ["codex", "codex-dev"];
+  const rank = (row) => prefer === "price" || preferred.includes(row.worker.split(":")[0]) ? 0 : 1;
   const allowed = rows.filter((row) => row.basis !== "none" && row.score !== null && row.score >= floor && !exclude.includes(row.worker));
   return allowed.filter((row) => !allowed.some((other) => other.worker === row.dominatedBy))
-    .sort((a, b) => a.cost - b.cost || b.score - a.score || a.minutes - b.minutes);
+    .sort((a, b) => rank(a) - rank(b) || a.cost - b.cost || b.score - a.score || a.minutes - b.minutes);
 }
 export function defaultAllowed() {
   return {

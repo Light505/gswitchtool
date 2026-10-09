@@ -22,9 +22,9 @@ function fixture(t, mode = "mixed") {
     const dest = path.join(data, name); fs.mkdirSync(path.dirname(dest), { recursive: true });
     fs.writeFileSync(dest, JSON.stringify(value));
   }
-  function setup(mode, claudeAllowed) {
+  function setup(mode, claudeAllowed, prefer) {
     const directory = path.join(home, ".gswitchtool"); fs.mkdirSync(directory, { recursive: true });
-    fs.writeFileSync(path.join(directory, "claude-setup.json"), JSON.stringify({ version: 1, setup: mode === "off" ? "claude-only" : "router", router: { mode, claudeOnlyReview: "on", ...(claudeAllowed ? { claudeAllowed } : {}) } }));
+    fs.writeFileSync(path.join(directory, "claude-setup.json"), JSON.stringify({ version: 1, setup: mode === "off" ? "claude-only" : "router", router: { mode, claudeOnlyReview: "on", ...(claudeAllowed ? { claudeAllowed } : {}), ...(prefer === undefined ? {} : { prefer }) } }));
   }
   setup(mode);
   const invoke = (args, input = "") => spawnSync(process.execPath, [script, ...args], { cwd: home, env, input: typeof input === "string" ? input : JSON.stringify(input), encoding: "utf8", windowsHide: true });
@@ -66,14 +66,14 @@ test("floors, kind minima, distinct worker escalation and benchmark identities",
 test("candidates honor listed rows, floors, exclusions, domination and cheapest order", () => {
   for (const [mode, difficulty, worker] of [["mixed", "small", "router:haiku-low"], ["mixed", "moderate", "router:sonnet-low"], ["mixed", "hard", "codex:gpt-6.1-sol/low"], ["mixed", "high-risk", "codex:gpt-6.1-sol/medium"], ["claude", "hard", "router:sonnet-high"], ["claude", "high-risk", "router:opus-medium"], ["codex", "moderate", "codex:gpt-6.1-sol/low"]]) {
     const rows = workerTable({ mode, claudeAllowed: defaultAllowed(), codexAllowed });
-    const choices = candidates(rows, taskFloor("implement", difficulty));
+    const choices = candidates(rows, { ...taskFloor("implement", difficulty), prefer: "price" });
     assert.equal(choices[0].worker, worker);
     assert.ok(choices.every((row) => rows.includes(row) && row.basis !== "none" && row.score >= difficultyFloor[difficulty]));
     assert.ok(choices.every((row, i) => !i || row.cost >= choices[i - 1].cost));
     assert.ok(!choices.some((row) => choices.some((other) => other.worker === row.dominatedBy)));
   }
   const mixed = workerTable({ mode: "mixed", claudeAllowed: defaultAllowed(), codexAllowed: { "gpt-6-luna": ["max"] } });
-  assert.deepEqual(candidates(mixed, taskFloor("implement", "small")).slice(0, 3).map((row) => row.worker),
+  assert.deepEqual(candidates(mixed, { ...taskFloor("implement", "small"), prefer: "price" }).slice(0, 3).map((row) => row.worker),
     ["router:haiku-low", "codex:gpt-6-luna/max", "router:haiku-medium"]);
   const rows = workerTable({ mode: "codex", codexAllowed });
   const exclude = ["codex:gpt-6.1-sol/low", "codex:gpt-6.1-sol/medium"];
@@ -83,6 +83,43 @@ test("candidates honor listed rows, floors, exclusions, domination and cheapest 
   assert.deepEqual(candidates(custom, { floor: 0 }).map((r) => r.worker), ["router:opus-high"]);
   const ties = [{ worker: "a", basis: "measured", score: 50, cost: 1, minutes: 10 }, { worker: "b", basis: "measured", score: 60, cost: 1, minutes: 12 }, { worker: "c", basis: "measured", score: 60, cost: 1, minutes: 8 }];
   assert.deepEqual(candidates(ties, { floor: 0 }).map((r) => r.worker), ["c", "b", "a"]);
+});
+
+test("Use first orders owner allowlists and recovery candidates", (t) => {
+  const claudeAllowed = { haiku: ["low", "medium", "high", "xhigh"], sonnet: ["low", "medium", "high", "xhigh"], opus: ["low", "medium", "high"] };
+  const allowed = { ...codexAllowed, "gpt-6.1-sol": ["low", "medium", "high", "xhigh"] };
+  const list = "gpt-6.1-sol:low,medium,high,xhigh;gpt-6-luna:low,medium,high,xhigh,max";
+  for (const namespace of ["router", "router-dev"]) {
+    const rows = workerTable({ mode: "mixed", claudeAllowed, codexAllowed: allowed, namespace });
+    const prefix = namespace === "router-dev" ? "codex-dev" : "codex";
+    for (const [difficulty, codexFirst, claudeFirst] of [["trivial", `${prefix}:gpt-6-luna/max`, `${namespace}:haiku-low`], ["small", `${prefix}:gpt-6-luna/max`, `${namespace}:haiku-low`], ["moderate", `${prefix}:gpt-6.1-sol/low`, `${namespace}:sonnet-low`]]) {
+      for (const prefer of [undefined, "codex", "claude", "price"]) {
+        const choices = candidates(rows, { ...taskFloor("implement", difficulty), prefer });
+        assert.equal(choices[0].worker, prefer === "claude" || prefer === "price" ? claudeFirst : codexFirst);
+        if (prefer !== "price") {
+          const firstFamily = prefer === "claude" ? namespace : prefix;
+          const split = choices.findIndex((row) => !row.worker.startsWith(`${firstFamily}:`));
+          assert.ok(split > 0);
+          assert.ok(choices.slice(split).every((row) => !row.worker.startsWith(`${firstFamily}:`)));
+          for (const family of [namespace, prefix]) {
+            const familyRows = choices.filter((row) => row.worker.startsWith(`${family}:`));
+            assert.deepEqual(familyRows, candidates(rows.filter((row) => row.worker.startsWith(`${family}:`)), { ...taskFloor("implement", difficulty), prefer: "price" }));
+          }
+        }
+      }
+    }
+    assert.equal(candidates(rows, taskFloor("debug", "small"))[0].worker, `${prefix}:gpt-6.1-sol/low`);
+  }
+  for (const [prefer, header, first] of [[undefined, "Codex first, then cheapest", "codex:gpt-6-luna/max"], ["invalid", "Codex first, then cheapest", "codex:gpt-6-luna/max"], ["codex", "Codex first, then cheapest", "codex:gpt-6-luna/max"], ["claude", "Claude first, then cheapest", "router:haiku-low"], ["price", "cheapest first", "router:haiku-low"]]) {
+    const f = fixture(t);
+    f.setup("mixed", claudeAllowed, prefer);
+    const out = f.plan("trivial", ["--codex", list]);
+    assert.ok(out.includes(`Candidates (${header}):\n  ${first} `));
+    const recovery = f.result(first, "tool");
+    assert.ok(recovery.includes(`Candidates (${header}):\n  ${first} `));
+    const moderate = f.plan("moderate", ["--codex", list], "t2");
+    assert.ok(moderate.includes(`Candidates (${header}):\n  ${prefer === "claude" || prefer === "price" ? "router:sonnet-low" : "codex:gpt-6.1-sol/low"} `));
+  }
 });
 
 test("plan prints mode decisions, appends records, refuses off and drops LOW rows", (t) => {
@@ -98,7 +135,7 @@ test("plan prints mode decisions, appends records, refuses off and drops LOW row
   assert.equal(readResults(f.file).length, 2);
   f.setup("mixed"); assert.match(f.plan(), /Codex workers not listed/);
   assert.match(f.plan("hard", ["--codex", codex]), /  codex:gpt-6.1-sol\/low  57  USD 0.50/);
-  assert.match(f.plan("small", ["--codex", "gpt-6-luna:max"]), /  codex:gpt-6-luna\/max[^\n]*\n  router:haiku-medium/);
+  assert.match(f.plan("small", ["--codex", "gpt-6-luna:max"]), /  codex:gpt-6-luna\/max[^\n]*\n  router:haiku-low/);
   f.write("usage.json", { fiveHour: { usedPercentage: 80, resetsAt: Date.now() / 1000 + 3600 } });
   assert.doesNotMatch(f.plan("small", ["--codex", codex]), /  router:/);
   f.setup("codex"); assert.doesNotMatch(f.plan("moderate", ["--codex", codex]), /  router:/);

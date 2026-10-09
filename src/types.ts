@@ -33,6 +33,7 @@ export interface ClaudeSetup {
   setup: ClaudeSetupKind;
   router: {
     mode: "mixed" | "claude" | "codex";
+    prefer: "codex" | "claude" | "price";
     claudeAllowed: Record<ClaudeModel, ClaudeEffort[]>;
     claudeOnlyReview: "on" | "off";
   };

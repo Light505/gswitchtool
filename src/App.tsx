@@ -1632,6 +1632,17 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
                 </select>
               </label>
             ) : null}
+            {draft.router.mode === "mixed" ? (
+              <label className="claude-router-mode">
+                <span>Use first</span>
+                <select disabled={saving} value={draft.router.prefer}
+                  onChange={(event) => setDraft((current) => ({ ...current, router: { ...current.router, prefer: event.target.value as ClaudeSetup["router"]["prefer"] } }))}>
+                  <option value="codex">Codex</option>
+                  <option value="claude">Claude</option>
+                  <option value="price">Lowest API price</option>
+                </select>
+              </label>
+            ) : null}
           </div>
         ) : null}
         {error ? <p className="remove-error" role="alert">{error}</p> : null}

@@ -119,6 +119,7 @@ export function readClaudeSetup(env = process.env) {
     if (value?.version !== 1 || !["claude-only", "claude-codex", "router"].includes(value.setup) ||
         !["mixed", "claude", "codex"].includes(value.router?.mode) ||
         !["on", "off"].includes(value.router?.claudeOnlyReview)) return null;
+    value.router.prefer = ["codex", "claude", "price"].includes(value.router.prefer) ? value.router.prefer : "codex";
     return value;
   } catch {
     return null;

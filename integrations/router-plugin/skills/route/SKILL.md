@@ -13,8 +13,9 @@ write task code yourself while the mode is on, except the small fixes listed und
 ## 1. Read the Router line
 
 Each message carries `Router: mode=<m> (<source>) · Codex review in claude mode:
-<on|off> · Claude 5h: <n% left|unknown>[ · LOW: no Claude workers] · Claude
-workers: <allowed list>`. Use the newest one.
+<on|off>[ · Use first: <codex|claude|price>] · Claude 5h: <n% left|unknown>[ ·
+LOW: no Claude workers] · Claude workers: <allowed list>`. Use the newest one.
+In mixed mode, Use first decides the candidate order in `router plan`.
 
 Mode, review and allowed workers come from GSwitch's Claude Code panel; their
 source is `GSwitch setup`. To change them, tell the owner to use that panel.
@@ -61,7 +62,9 @@ The plan prints the task's capability floor, its failures so far, the recovery
 for the last failure, and the candidates: workers your settings allow (Claude
 workers from the GSwitch Claude Code panel, Codex from Invoke Mode, families by
 mode, no Claude workers when LOW) whose agent-benchmark score meets the floor,
-cheapest first. Floors: trivial and small 0, moderate 42, hard 55, high-risk 60;
+ordered by Use first in mixed mode (Codex first by default, Claude first, or
+Lowest API price), then cheapest within each family. Single-family modes and
+Lowest API price use cheapest first. Floors: trivial and small 0, moderate 42, hard 55, high-risk 60;
 `debug` counts as at least moderate and `architecture` as at least hard.
 
 Pick the first candidate unless the task gives a reason for another listed one

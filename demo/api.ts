@@ -60,6 +60,7 @@ let invokeSettings: InvokeSettings = {
         opus: ["low", "medium", "high", "xhigh", "max"],
       },
       claudeOnlyReview: "on",
+      prefer: "codex",
     },
   },
   allowed_invocation_profiles: [{ model: "gpt-6-sol", reasoning_efforts: ["low", "medium", "high"] }],

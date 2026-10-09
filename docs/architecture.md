@@ -66,6 +66,7 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
   "setup": "claude-only",
   "router": {
     "mode": "mixed",
+    "prefer": "codex",
     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
     "claudeOnlyReview": "on"
   }
@@ -76,7 +77,9 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
 and `router`; modes are `mixed`, `claude`, and `codex`; review is `on` or
 `off`. Workers are ordered Haiku, Sonnet, Opus; efforts are low, medium, high,
 xhigh, max. Defaults allow Haiku low/medium and every listed effort for Sonnet
-and Opus, with mixed mode and review on. Unknown options are rejected.
+and Opus, with mixed mode, Codex first and review on. `prefer` accepts `codex`,
+`claude`, or `price`; older files without it default to `codex`. Rust rejects
+unknown options; plugin readers treat invalid `prefer` values as missing.
 Publication failure returns a save error and attempts to restore the saved
 policy; startup logs publication failure and continues. A successful human
 setup save ends an Invoke pause. Plugins consume the setup starting with the

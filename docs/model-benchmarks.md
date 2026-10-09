@@ -2,15 +2,16 @@
 
 Capability and cost of every model and reasoning effort the router and Invoke
 Mode can use. The router's capability floors and candidates
-([`router-guide.md`](./router-guide.md#routing)) use these tables. Data as of 2026-10-08; recheck when models or prices change and update
+([`router-guide.md`](./router-guide.md#routing)) use these tables. Data as of 2026-10-09; recheck when models or prices change and update
 this file, the router guide and the route skill together. The full AA release
 comparison was checked the same day; it matches the Intelligence Index numbers
 used here.
 
 ## Sources and how to read them
 
-All capability numbers come from one group, Artificial Analysis (AA), so every
-model is measured the same way. AA publishes two kinds of runs:
+Routing capability numbers come from Artificial Analysis (AA), so every
+model is measured the same way. Other sources cross-check them without changing
+the router's scores. AA publishes two kinds of runs:
 
 - **Coding Agent Index** (CAI): the model inside its real coding agent (Claude
   Code or Codex) on DeepSWE v1.1, Terminal-Bench 4.0 and SWE-Atlas-QnA, three
@@ -26,11 +27,26 @@ model is measured the same way. AA publishes two kinds of runs:
   for all 25 combinations:
   [model comparison](https://artificialanalysis.ai/models/comparisons).
 
-Other sources checked and not used: Vals.ai archived its SWE-bench board on
-2026-09-01 and runs the Vals Index only at max effort; Scale's SWE-bench Pro
-board and Epoch AI have no runs of these models yet; vendor charts (Anthropic,
-OpenAI) give few exact numbers per effort and cannot be compared across
-vendors.
+[Vals.ai](https://www.vals.ai/benchmarks) is used as a cross-check. Its
+Terminal-Bench 4.0 results use mini-swe-agent, average three runs, and are dated
+2026-10-07; reasoning effort is not listed. Its Vals Index is a separate measure:
+
+| Model | Vals Terminal-Bench 4.0 | Cost/task | Vals Index | Cost/task |
+| --- | --- | --- | --- | --- |
+| Opus 5.5 | 65.15% | $13.20 | 66.97% | $32.14 |
+| Sonnet 5.5 | 64.14% | $16.51 | 67.04% | $21.34 |
+| GPT-6.1 Sol | 55.05% | $1.72 | 61.15% | $3.24 |
+| Haiku 5.5 | 35.35% | $3.05 | 54.31% | $2.99 |
+| GPT-6 Luna | 13.64% | $0.35 | 51.22% | $0.43 |
+
+Scale's SWE-bench Pro board and Epoch AI still have no runs of these models.
+Vendor charts (Anthropic, OpenAI) give few exact numbers per effort and cannot
+be compared across vendors.
+
+**Cross-check:** all sources agree Haiku beats Luna at terminal work (AA
+24–33%, Vals 35%, Anthropic 39%, versus Luna 13–16%), but costs 3–9× more per
+agent task and takes longer per task despite faster tokens/s. Luna's DeepSWE
+lead (64% versus 49%) is AA-only.
 
 ## Prices (USD per million tokens)
 
@@ -41,10 +57,16 @@ vendors.
 | Claude Sonnet 5.5 | 2.00 | 2.50 | 4.00 | 0.10 | 10.00 | Anthropic |
 | Claude Opus 5.5 | 4.00 | 5.00 | 8.00 | 0.20 | 20.00 | Anthropic |
 | GPT-6.1 Sol, prompt ≤ 272K tokens | 2.00 | 2.50 | - | 0.10 | 10.00 | [OpenAI](https://developers.openai.com/api/docs/pricing) |
+| GPT-6.1 Sol, prompt > 272K tokens | 4.00 | - | - | 0.20 | 15.00 | OpenAI |
 | GPT-6 Luna, prompt ≤ 272K tokens | 0.10 | 0.125 | - | 0.01 | 0.50 | OpenAI |
+| GPT-6 Luna, prompt > 272K tokens | 0.20 | - | - | 0.02 | 0.75 | OpenAI |
 
 Agent sessions often pass 100K tokens of context, where Haiku costs 5× more.
 That is why Haiku is cheap in the II runs but not in Claude Code (CAI).
+
+Codex Fast mode for GPT-6 models draws subscription limits at 2.5×. OpenAI
+publishes no speed-up for GPT-6 models and no benchmark measures it; the router
+does not use it.
 
 ## Coding Agent Index (real agent harness)
 
@@ -229,7 +251,8 @@ below max, or from the router's own results.
 Debug counts as at least moderate; architecture as at least hard. The floors
 sit at the scores of the cheapest worker reasonable at that level: Sonnet low
 42, Sonnet high 55, Opus medium about 60. Candidates are allowed workers that
-meet the floor, cheapest first; workers without agent benchmarks are left out.
+meet the floor, ordered by Use first in mixed mode (Codex first by default),
+then cheapest within each family; workers without agent benchmarks are left out.
 
 After a worker failure (verify, review, incomplete, capability or other), each
 distinct failed worker raises the floor one difficulty level and above the
@@ -237,6 +260,8 @@ highest failed worker's score. Failed workers are excluded. After 3 failed
 attempts, every further attempt needs the owner. With no candidate, ask earlier.
 
 These paths simulate capability failures and always pick the first candidate.
+The mixed-mode examples below use `prefer: price`, rather than the Codex-first
+default, to show the API-price ladder.
 They use the default Claude allowlist, Sol low, medium and high, and Luna low,
 medium, high, xhigh and max. Mixed LOW has no Claude workers. (approval) marks
 workers above Opus medium's cost; the estimates assume approval is given.
@@ -261,7 +286,7 @@ failed attempts or earlier if no allowed candidate remains.
 | high-risk (moderate) | router:opus-medium → router:opus-high (approval) → router:opus-xhigh (approval) | $3.04 | 23 | 12.3% |
 | high-risk (hard) | router:opus-medium → router:opus-high (approval) → router:opus-xhigh (approval) | $4.40 | 32 | 26.9% |
 
-`mixed`:
+`mixed` (`prefer: price`):
 
 | Difficulty | Path | Expected cost | Expected minutes | Unsolved when owner asked |
 | --- | --- | --- | --- | --- |
