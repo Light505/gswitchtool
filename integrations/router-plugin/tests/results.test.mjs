@@ -221,6 +221,8 @@ test("stats merges completion metrics without double counting and isolates reuse
   fs.writeFileSync(f.file, records.map((r) => JSON.stringify(r)).join("\n") + "\n{corrupt}\n");
   assert.equal(f.run(["stats"]), `${statsTable(rows)}\n`);
   assert.match(f.run(["stats"]), /^Model\s+Difficulty\s+Codex speed\s+Tasks\s+Passed\s+Success\s+Typical time\s+Typical tokens\s+Typical cost\s+Codex jobs/);
+  const tokenCell = (medianTokens) => statsTable([{ ...rows[1], medianTokens }]).split("\n")[1];
+  assert.match(tokenCell(376822.5), /\s377k\s/); assert.match(tokenCell(1_234_567), /\s1\.2M\s/); assert.match(tokenCell(999), /\s999\s/);
   assert.match(f.run(["stats"]), /Claude Haiku, low\s+small\s+-\s+3\s+2\s+66.7%\s+0 s\s+60\s+-\s+-/);
   assert.match(f.run(["stats"]), /Codex Sol 6.1, low\s+hard\s+-\s+4\s+3\s+75.0%\s+-\s+-\s+-\s+2/);
   assert.equal(aggregateStats([result(), attempt({ durationMs: 0, tokens: 0 })])[0].medianTokens, 0);

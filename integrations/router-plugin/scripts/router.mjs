@@ -73,9 +73,9 @@ function claudeAllowed(value) {
   }
   return allowed;
 }
-function allowedList(allowed = config().claudeAllowed) {
+function allowedList(allowed = config().claudeAllowed, capitalize = false) {
   return models.filter(({ short }) => allowed[short]?.length)
-    .map(({ short }) => `${short} ${allowed[short].join(", ")}`).join(" · ") || "none";
+    .map(({ short }) => `${capitalize ? short[0].toUpperCase() + short.slice(1) : short} ${allowed[short].join(", ")}`).join(" · ") || "none";
 }
 export function normalizeCodexSpeed(value) {
   return { mode: ["normal", "fast", "orchestrator"].includes(value?.mode) ? value.mode : "normal",
@@ -806,7 +806,7 @@ function command(args, raw) {
     if (words.length) return "Change the setup in GSwitch: Claude Code button.";
     const folder = projectKey(directory);
     const state = resolved();
-    const lines = [routerLine(state), `Claude models it may use: ${allowedList()}`];
+    const lines = [routerLine(state), `Claude models it may use: ${allowedList(config().claudeAllowed, true)}`];
     if (!isRepository(folder)) lines.push(`Router warning: ${folder} is not a git repository; start the session in the repository folder.`);
     if (state.mode.value !== "off" && worktreeBaseRef(folder) !== "head") lines.push(baseRefWarning);
     lines.push("Change it in GSwitch → Claude Code.");

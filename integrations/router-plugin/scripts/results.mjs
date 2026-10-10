@@ -314,10 +314,12 @@ const plainTime = (ms) => {
   return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
 };
 
+const plainTokens = (n) => !number(n) ? "-" : n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(Math.round(n));
+
 export function statsTable(groups) {
   const rows = [["Model", "Difficulty", "Codex speed", "Tasks", "Passed", "Success", "Typical time", "Typical tokens", "Typical cost", "Codex jobs"],
     ...groups.map((g) => [modelName(g.worker), g.difficulty, g.speed === "-" ? "-" : g.speed[0].toUpperCase() + g.speed.slice(1), String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
-      plainTime(g.medianDurationMs), String(g.medianTokens ?? "-"), number(g.medianUsd) ? `$${g.medianUsd.toFixed(2)}` : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
+      plainTime(g.medianDurationMs), plainTokens(g.medianTokens), number(g.medianUsd) ? `$${g.medianUsd.toFixed(2)}` : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => row[i].length)));
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
 }

@@ -21,7 +21,8 @@
 > `codex@gswitchtool` (lets Claude Code send Codex tasks to the app), and the
 > optional **router plugin** `router@gswitchtool` (picks a Claude worker or
 > Codex for each coding task; ships with the app's Claude Code setup panel). See
-> [the three parts](./docs/invoke-mode-guide.md#the-three-parts).
+> [the three parts](./docs/invoke-mode-guide.md#the-three-parts). After
+> installing, run `/codex:check` in Claude Code to see what is missing.
 
 Manage several Codex accounts on one computer: see how much quota each one has
 left, switch with one click, and keep using Codex.

@@ -356,6 +356,9 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
 
 ## 8. Troubleshooting
 
+Run `/codex:check` first: it lists what is missing (app not running, plugins,
+Codex sign-in, accounts Claude may use) and how to fix each item.
+
 | Message or symptom | What to do |
 | --- | --- |
 | `GSWITCH_UNAVAILABLE` | Open GSwitch Claude Tool. |

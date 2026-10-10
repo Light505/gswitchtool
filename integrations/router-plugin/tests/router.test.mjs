@@ -120,7 +120,7 @@ test("mode arguments change no setup, config or worker state", (t) => {
   }
   const status = f.run(["mode", "s1", f.project]);
   assert.match(status, /^Automatic team · Claude and Codex · Try first: .* · Codex speed: Normal · Codex reviews: on/);
-  assert.match(status, /Claude models it may use: haiku low, medium/);
+  assert.match(status, /Claude models it may use: Haiku low, medium/);
   assert.match(status, /Change it in GSwitch → Claude Code\./);
   const skill = fs.readFileSync(path.join(plugin, "skills/mode/SKILL.md"), "utf8");
   const injection = skill.match(/!`([^`]+)`/)[1];
@@ -149,7 +149,7 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   const f = fixture(t); f.mode("claude");
   for (const claudeAllowed of [undefined, null, [], "all", 5, { haiku: "low" }, { opus: null }, { sonnet: ["high", 42] }]) {
     f.settings({ claudeAllowed });
-    assert.equal(f.allowed(), "Claude models it may use: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+    assert.equal(f.allowed(), "Claude models it may use: Haiku low, medium · Sonnet low, medium, high, xhigh, max · Opus low, medium, high, xhigh, max\n");
     assert.deepEqual(f.agent(), {});
     assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
     assert.deepEqual(f.agent({ subagent_type: "router:opus-low" }), {});
@@ -158,9 +158,9 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   assert.deepEqual(f.hook("UserPromptSubmit"), {});
   f.setup({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on" } });
   assert.deepEqual(f.agent(), {});
-  assert.equal(f.allowed(), "Claude models it may use: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+  assert.equal(f.allowed(), "Claude models it may use: Haiku low, medium · Sonnet low, medium, high, xhigh, max · Opus low, medium, high, xhigh, max\n");
   f.settings({ claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
-  assert.equal(f.allowed(), "Claude models it may use: sonnet low, max\n");
+  assert.equal(f.allowed(), "Claude models it may use: Sonnet low, max\n");
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
   assert.match(f.agent({ subagent_type: "router:fable-low" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
   for (const allowed of [{}, { unknown: ["high"] }, { fable: ["max"] }, { fable: null }, { haiku: ["bogus"] }]) {

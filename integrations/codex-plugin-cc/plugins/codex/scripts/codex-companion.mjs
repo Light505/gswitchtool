@@ -89,6 +89,7 @@ function printUsage() {
       "  node scripts/codex-companion.mjs adversarial-review [--wait|--background] [--base <ref>] [--scope <auto|working-tree|branch>] [focus text]",
       "  node scripts/codex-companion.mjs task [--background] [--write] [--resume-last|--resume|--fresh|--resume-thread <thread-id>] [--model <model|spark>] [--effort <effort>] [prompt]",
       "  node scripts/codex-companion.mjs transfer [--source <claude-jsonl>] [--json]",
+      "  node scripts/codex-companion.mjs check [--json]",
       "  node scripts/codex-companion.mjs invoke-status [--json]",
       "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--worktree] [--worktree-dir <dir>] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--speed <fast|normal>] [--speed-reason \"<text>\"] [--cwd <dir>] [--json] [prompt]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
@@ -1063,10 +1064,14 @@ async function handleCancel(argv) {
   outputCommandResult(payload, renderCancelReport(nextJob), options.json);
 }
 
+function setupLabel(setup) {
+  return setup?.setup === "router" ? `Automatic team (${{ mixed: "Claude and Codex", claude: "Claude models only", codex: "Codex only" }[setup.router.mode] ?? setup.router.mode})`
+    : { "claude-only": "Claude alone", "claude-codex": "Claude with Codex helper" }[setup?.setup];
+}
+
 function renderInvokeStatus(report) {
   const setup = readClaudeSetup();
-  const label = setup?.setup === "router" ? `Automatic team (${{ mixed: "Claude and Codex", claude: "Claude models only", codex: "Codex only" }[setup.router.mode] ?? setup.router.mode})`
-    : { "claude-only": "Claude alone", "claude-codex": "Claude with Codex helper" }[setup?.setup];
+  const label = setupLabel(setup);
   const first = label ? `Claude Code setup: ${label} (change it in GSwitch: Claude Code page)\n`
     : "Claude Code setup: unknown (open GSwitch once)\n";
   const speed = report.codex_speed ?? setup?.codexSpeed;
@@ -1144,6 +1149,82 @@ async function handleInvokeStatus(argv) {
     };
   }
   outputCommandResult(report, renderInvokeStatus(report), options.json);
+}
+
+function readJsonFile(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function buildCheckLines(report, setup) {
+  const lines = [];
+  const add = (mark, text, fix) => lines.push({ mark, text: fix ? `${text}. ${fix}` : text });
+  const needsApp = "needs GSwitch running";
+  const label = setupLabel(setup);
+  add(report.available ? "✓" : "✗", report.available ? "GSwitch app running" : "GSwitch app not running", report.available ? "" : "Open GSwitch.");
+  if (label) add("✓", `Claude Code setup: ${label}`);
+  else add("✗", "Claude Code setup: not found", "Open GSwitch once so it writes its setup.");
+
+  const pluginName = readJsonFile(path.join(ROOT_DIR, ".claude-plugin", "plugin.json"));
+  add("✓", `Codex plugin ${pluginName?.version ?? "(version unknown)"}`);
+
+  const dev = pluginName?.name === "codex-dev";
+  const routerKey = dev ? "router-dev@gswitchtool-dev" : "router@gswitchtool";
+  if (setup?.setup === "router") {
+    const installed = readJsonFile(path.join(os.homedir(), ".claude", "plugins", "installed_plugins.json"));
+    const entry = Array.isArray(installed?.plugins?.[routerKey]) ? installed.plugins[routerKey][0] : null;
+    if (entry) add("✓", `Router plugin ${entry.version ?? "(version unknown)"}`);
+    else add("✗", "Router plugin not installed", `In Claude Code: /plugin install ${routerKey}, then restart Claude Code`);
+  } else {
+    add("–", "Router plugin: not needed for this setup");
+  }
+
+  const usesCodex = setup?.setup === "claude-codex" || (setup?.setup === "router" && setup.router.mode !== "claude");
+  if (!report.available) {
+    add("–", "Codex sign-in", needsApp);
+    add("–", "Accounts Claude may use", needsApp);
+    add("–", "Codex helper", needsApp);
+    return lines;
+  }
+  if (!usesCodex) {
+    add("–", "Codex sign-in: Codex is not used by this setup");
+    add("–", "Accounts Claude may use: Codex is not used by this setup");
+    add("–", "Codex helper: Codex is not used by this setup");
+    return lines;
+  }
+  if (report.codex_signed_out) add("✗", "Codex is signed out", "Sign in to Codex in GSwitch.");
+  else add("✓", "Codex signed in");
+  const count = report.allowed_accounts;
+  if (!Number.isInteger(count)) add("–", "Accounts Claude may use: this GSwitch version does not report the count");
+  else if (count > 0) add("✓", `${count} account${count === 1 ? "" : "s"} Claude may use`);
+  else add("✗", "No account is allowed", "In GSwitch, open Accounts and turn on Claude may use this account.");
+  if (!report.invoke_mode) add("✗", "Codex helper: off", "Turn on Invoke Mode in GSwitch.");
+  else if (report.paused) {
+    const seconds = Number(report.paused.resumes_at);
+    const when = Number.isFinite(seconds) && seconds > 0 ? `it resumes at ${new Date(seconds * 1000).toLocaleString()} or choose Resume in GSwitch` : "choose Resume in GSwitch";
+    add("✗", "Codex helper: paused", `Codex usage ran out on every allowed account; ${when}.`);
+  } else add("✓", "Codex helper: on");
+  return lines;
+}
+
+async function handleCheck(argv) {
+  const { options } = parseCommandInput(argv, { booleanOptions: ["json"] });
+  let report;
+  try {
+    report = { available: true, ...(await readInvokeStatus()) };
+  } catch (error) {
+    if (!(error instanceof GSwitchError)) {
+      throw error;
+    }
+    report = { available: false };
+  }
+  const lines = buildCheckLines(report, readClaudeSetup());
+  const failed = lines.some((line) => line.mark === "✗");
+  const text = `${lines.map((line) => `${line.mark} ${line.text}`).join("\n")}\n${failed ? "Fix the ✗ items above, then run /codex:check again." : "All set."}\n`;
+  outputCommandResult({ ok: !failed, checks: lines }, text, options.json);
 }
 
 const INVOKE_REPLY_FORMAT = [
@@ -2151,6 +2232,9 @@ async function main() {
       break;
     case "cancel":
       await handleCancel(argv);
+      break;
+    case "check":
+      await handleCheck(argv);
       break;
     case "invoke-status":
       await handleInvokeStatus(argv);
