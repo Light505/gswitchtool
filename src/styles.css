@@ -2712,6 +2712,87 @@ textarea {
   font-size: 13px;
 }
 
+.results-card {
+  margin-bottom: 18px;
+}
+
+.results-activity-title {
+  margin: 0 0 8px;
+}
+
+.results-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.results-period {
+  margin-right: auto;
+  color: var(--muted);
+}
+
+.results-controls label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.results-table-wrap {
+  overflow-x: auto;
+}
+
+.results-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.results-table th,
+.results-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.results-table thead th {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.results-table tbody th .badge {
+  margin-left: 6px;
+}
+
+.results-bar-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.results-bar {
+  width: 60px;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-hover);
+}
+
+.results-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.results-note {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
 .invoke-task-defaults select {
   width: 100%;
   min-height: 34px;

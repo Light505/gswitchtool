@@ -67,6 +67,7 @@ const mocks = vi.hoisted(() => ({
   stopInvokeTask: vi.fn(),
   pausedThreads: vi.fn(),
   activity: vi.fn(),
+  resultsSummary: vi.fn(),
   onInvokeActivity: vi.fn(),
   onInvokeResumed: vi.fn(),
   setInvokeWeeklyReserve: vi.fn(),
@@ -279,6 +280,7 @@ function prepareDefaults() {
   mocks.pausedThreads.mockResolvedValue([]);
   mocks.readTaskLog.mockImplementation(async (_threadId: string, offset: number) => ({ found: true, items: [], offset }));
   mocks.activity.mockResolvedValue([]);
+  mocks.resultsSummary.mockResolvedValue({ since: "", tasks: 0, rows: [] });
   mocks.onInvokeActivity.mockResolvedValue(() => undefined);
   mocks.onInvokeResumed.mockResolvedValue(() => undefined);
   mocks.setInvokeWeeklyReserve.mockImplementation(async (reserve: Record<string, number>) => ({
@@ -376,6 +378,48 @@ describe("GSwitch account workspace", () => {
     await goTo("Settings");
     expect(await within(await screen.findByRole("region", { name: "Codex CLI" })).findByRole("alert"))
       .toHaveTextContent("Quit Codex, then try the update again.");
+  });
+
+  describe("Results", () => {
+    const resultsRow = (overrides: Record<string, unknown>) => ({
+      worker: "w", family: "codex", model: "gpt-6.1-sol", effort: "medium", difficulty: "small",
+      attempts: 12, passes: 11, firstTries: 12, firstTryPasses: 9, samples: 0,
+      medianMs: 180000, medianTokens: 1000, medianUsd: 0.4, ...overrides,
+    });
+
+    it("shows model rows, filters by difficulty and reloads for a new period", async () => {
+      mocks.resultsSummary.mockResolvedValue({
+        since: "", tasks: 15,
+        rows: [
+          resultsRow({}),
+          resultsRow({ model: "gpt-6-luna", effort: "low", difficulty: "hard", attempts: 3, firstTries: 3, firstTryPasses: 1, samples: 1, medianMs: 30000, medianUsd: null }),
+        ],
+      });
+      window.localStorage.setItem("gswitch.section", "results");
+      render(<App />);
+      expect(await screen.findByText("Codex Sol 6.1, medium")).toBeInTheDocument();
+      expect(screen.getByText("75%")).toBeInTheDocument();
+      expect(screen.getByText("Too few to judge (3)")).toBeInTheDocument();
+      expect(screen.getByText("Last 30 days · 15 tasks")).toBeInTheDocument();
+      expect(screen.getByText("trial")).toHaveAttribute("title", "Tried on easy tasks to measure it");
+      expect(mocks.resultsSummary).toHaveBeenLastCalledWith(30);
+
+      await userEvent.selectOptions(screen.getByLabelText("Difficulty"), "hard");
+      expect(screen.queryByText("Codex Sol 6.1, medium")).not.toBeInTheDocument();
+      expect(screen.getByText("Codex Luna 6, low")).toBeInTheDocument();
+
+      await userEvent.selectOptions(screen.getByLabelText("Period"), "7");
+      await waitFor(() => expect(mocks.resultsSummary).toHaveBeenLastCalledWith(7));
+    });
+
+    it("shows the empty state and an error with Retry", async () => {
+      window.localStorage.setItem("gswitch.section", "results");
+      mocks.resultsSummary.mockRejectedValueOnce(new Error("boom"));
+      render(<App />);
+      expect(await screen.findByText("Could not read the results.")).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: "Retry" }));
+      expect(await screen.findByText(/No routed tasks yet/)).toBeInTheDocument();
+    });
   });
 
   it("moves focus to the page heading after a sidebar click, not on first load", async () => {

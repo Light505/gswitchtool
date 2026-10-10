@@ -78,6 +78,7 @@ import type {
   InvocationDefault,
   InvokeTaskKind,
   ActivityEntry,
+  ResultsSummary,
   AppVersion,
   InvokePause,
   InvokeTask,
@@ -105,6 +106,7 @@ import type {
   TokenUsage,
   WakeOperationView,
 } from "./types";
+import { aggregateResults, firstTryPercent, formatCost, formatDuration } from "./resultsView";
 import { updater, type AvailableUpdate } from "./updater";
 
 type Dialog =
@@ -1516,6 +1518,103 @@ function RecentActivity({ onSeeAll, ...props }: ActivityViewProps & { onSeeAll: 
       ) : null}
       <button className="link-button home-see-all" onClick={onSeeAll} type="button">{props.t("home.seeAll")}</button>
     </>
+  );
+}
+
+const RESULTS_DIFFICULTIES = [
+  ["trivial", "results.trivial"], ["small", "results.small"], ["moderate", "results.moderate"],
+  ["hard", "results.hard"], ["high-risk", "results.highRisk"],
+] as const;
+
+/** How each model did on routed coding tasks, from the read-only results summary. */
+function ModelResults({ t }: { t: Translator }) {
+  const [days, setDays] = useState(30);
+  const [difficulty, setDifficulty] = useState("all");
+  const [summary, setSummary] = useState<ResultsSummary | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => {
+    let current = true;
+    setSummary(null);
+    setFailed(false);
+    api.resultsSummary(days).then(
+      (result) => { if (current) setSummary(result); },
+      () => { if (current) setFailed(true); },
+    );
+    return () => { current = false; };
+  }, [days, attempt]);
+
+  const rows = useMemo(() => aggregateResults(summary?.rows ?? [], difficulty), [summary, difficulty]);
+
+  return (
+    <section aria-labelledby="results-models-heading" className="page-card results-card">
+      <h3 className="page-card-title" id="results-models-heading">{t("results.modelsTitle")}</h3>
+      <div className="results-controls">
+        <span className="results-period">{t("results.summary", { days, tasks: summary?.tasks ?? 0 })}</span>
+        <label>{t("results.period")}
+          <select onChange={(event) => setDays(Number(event.target.value))} value={days}>
+            {[7, 30, 90].map((value) => <option key={value} value={value}>{t("results.days", { days: value })}</option>)}
+          </select>
+        </label>
+        <label>{t("results.difficulty")}
+          <select onChange={(event) => setDifficulty(event.target.value)} value={difficulty}>
+            <option value="all">{t("results.allDifficulties")}</option>
+            {RESULTS_DIFFICULTIES.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+          </select>
+        </label>
+      </div>
+      {failed ? (
+        <p className="remove-error" role="alert">
+          {t("results.loadFailed")} <button className="button" onClick={() => setAttempt((value) => value + 1)} type="button">{t("results.retry")}</button>
+        </p>
+      ) : !summary ? (
+        <div className="loading-state"><LoaderCircle className="spin" size={24} />{t("results.loading")}</div>
+      ) : summary.tasks === 0 && summary.rows.length === 0 ? (
+        <p>{t("results.empty")}</p>
+      ) : (
+        <>
+          <div className="results-table-wrap">
+            <table className="results-table">
+              <thead>
+                <tr>
+                  <th scope="col">{t("results.model")}</th>
+                  <th scope="col">{t("results.tasks")}</th>
+                  <th scope="col">{t("results.firstTime")}</th>
+                  <th scope="col">{t("results.time")}</th>
+                  <th scope="col">{t("results.cost")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row) => {
+                  const percent = firstTryPercent(row);
+                  return (
+                    <tr key={row.key}>
+                      <th scope="row">
+                        {row.name}
+                        {row.samples > 0 ? <span className="badge" title={t("results.trialHint")}>{t("results.trial")}</span> : null}
+                      </th>
+                      <td>{row.attempts}</td>
+                      <td>
+                        {percent == null ? t("results.tooFew", { count: row.firstTries }) : (
+                          <span className="results-bar-cell">
+                            <span aria-hidden="true" className="results-bar"><span style={{ width: `${percent}%` }} /></span>
+                            {percent}%
+                          </span>
+                        )}
+                      </td>
+                      <td>{formatDuration(row.medianMs)}</td>
+                      <td>{formatCost(row.medianUsd)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="results-note">{t("results.note")}</p>
+        </>
+      )}
+    </section>
   );
 }
 
@@ -3808,8 +3907,12 @@ export default function App() {
 
         {section === "results" ? (
           <section aria-labelledby="results-heading" className="page">
-            <h2 className="page-title" id="results-heading" tabIndex={-1}>{t("activity.title")}</h2>
-            <ActivityPanel formatLocale={locale.formatLocale} name={accountName} onViewLog={showHistoryLog} t={t} />
+            <h2 className="page-title" id="results-heading" tabIndex={-1}>{t("results.title")}</h2>
+            <ModelResults t={t} />
+            <section aria-labelledby="activity-heading">
+              <h3 className="page-card-title results-activity-title" id="activity-heading">{t("activity.title")}</h3>
+              <ActivityPanel formatLocale={locale.formatLocale} name={accountName} onViewLog={showHistoryLog} t={t} />
+            </section>
           </section>
         ) : null}
 

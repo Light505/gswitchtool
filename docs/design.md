@@ -55,8 +55,11 @@ and has no direct frontend toggle. When it is on, each ChatGPT card retains its
 during a pause. When a Codex helper switch is waiting for the user to quit
 Codex, the window shows it in the safety-notice position with both accounts and
 a **Cancel switch** action, and asks the operating system for attention. The current account is
-identified on its card rather than repeated beside the brand. Results (titled
-**Activity**) shows the history with its seven-day summary. Settings holds Appearance (palette
+identified on its card rather than repeated beside the brand. Results first shows
+**How each model did** (period 7/30/90 days, difficulty filter; one row per model
+and effort with tasks, passed first time, typical time and cost, a *trial* tag for
+models tried on easy tasks, and "Too few to judge" under 10 first tries), then
+**Activity** with the history and its seven-day summary. Settings holds Appearance (palette
 and mode), Updates (version, Check for updates, Roll back to previous version),
 and the Codex CLI status and update.
 Unknown, setup, and recovery states use the existing actionable notice. With
