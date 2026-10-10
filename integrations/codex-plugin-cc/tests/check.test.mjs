@@ -105,6 +105,8 @@ test("check: no allowed accounts, signed out and paused are flagged", async (t) 
   const out = await (await fixture(t, { routerInstalled: true, status: { codex_signed_out: true, paused: { resumes_at: null } } })).check();
   assert.match(out, /✗ Codex is signed out\. Sign in to Codex in GSwitch\./);
   assert.match(out, /✗ Codex helper: paused\. Codex usage ran out on every allowed account; choose Resume in GSwitch\./);
+  const off = await (await fixture(t, { routerInstalled: true, status: { invoke_mode: false } })).check();
+  assert.match(off, /✗ Codex helper: off\. In GSwitch → Claude Code, choose Claude with Codex helper or Automatic team, then save\./);
 });
 
 test("check: output contains no email addresses", async (t) => {

@@ -35,6 +35,8 @@ pub struct Endpoint {
     invoke: InvokeState,
     coordinator: Arc<Coordinator>,
     worker_file: PathBuf,
+    /// The saved account store, read only to count accounts Claude may use.
+    accounts_file: PathBuf,
     published_pids: Mutex<Vec<u32>>,
     /// The Codex home workers use; `None` resolves it as Codex does.
     codex_home: Option<PathBuf>,
@@ -78,6 +80,7 @@ pub fn start(
         invoke,
         coordinator,
         worker_file: config_dir.join(WORKERS_FILE),
+        accounts_file: config_dir.join("accounts.json"),
         published_pids: Mutex::new(Vec::new()),
         codex_home: None,
     });
@@ -220,8 +223,17 @@ async fn dispatch(
             };
             let (running, failover) = coordinator.status();
             let codex_home = endpoint.codex_home()?;
+            // Null when the store cannot be read, so the caller does not treat it as zero.
+            let allowed_accounts = storage::load(&endpoint.accounts_file).ok().map(|store| {
+                store
+                    .accounts
+                    .iter()
+                    .filter(|account| account.invoke_allowed)
+                    .count()
+            });
             Ok(json!({
                 "invoke_mode": settings.invoke_mode,
+                "allowed_accounts": allowed_accounts,
                 "codex_speed": settings.claude_setup.codex_speed,
                 "allowed_invocation_profiles": profiles,
                 "task_defaults": settings.task_defaults,
@@ -659,6 +671,7 @@ mod tests {
             coordinator: Coordinator::new(Arc::new(FixedOps(invoke.clone())), timings),
             invoke,
             worker_file: dir.join(WORKERS_FILE),
+            accounts_file: dir.join("accounts.json"),
             published_pids: Mutex::new(Vec::new()),
             codex_home: Some(codex_home),
         }
@@ -739,6 +752,7 @@ mod tests {
             response["result"],
             json!({
                 "invoke_mode": true,
+                "allowed_accounts": 0,
                 "codex_speed": { "mode": "normal", "fastMinRemaining": 20 },
                 "allowed_invocation_profiles": [{"model": "model-a", "reasoning_efforts": ["high"]}],
                 "task_defaults": {"review": {"model": "model-a", "effort": "high"}},
@@ -765,6 +779,32 @@ mod tests {
         std::fs::remove_file(dir.join("codex-home").join("auth.json")).expect("sign out");
         let signed_out = call(&request("status", Value::Null), &endpoint);
         assert_eq!(signed_out["result"]["codex_signed_out"], true);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn status_counts_only_the_accounts_claude_may_use() {
+        let dir = temp_dir("allowed-accounts");
+        let endpoint = endpoint(&dir, true);
+        let kind = serde_json::to_value(crate::types::AccountKind::ChatGpt).expect("kind");
+        let account = |id: &str, allowed: bool| {
+            json!({
+                "id": id, "label": id, "kind": kind,
+                "credential_ref": format!("ref-{id}"), "invoke_allowed": allowed,
+            })
+        };
+        let store = json!({
+            "accounts": [account("a", true), account("b", false), account("c", true)],
+        });
+        std::fs::write(dir.join("accounts.json"), store.to_string()).expect("store");
+
+        let response = call(&request("status", Value::Null), &endpoint);
+        assert_eq!(response["result"]["allowed_accounts"], 2);
+        let text = response.to_string();
+        assert!(
+            !text.contains("ref-"),
+            "account identity must not leave Rust"
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -1309,6 +1349,7 @@ mod tests {
             invoke: base.invoke.clone(),
             coordinator: Coordinator::new(ops.clone(), Timings::default()),
             worker_file: dir.join(WORKERS_FILE),
+            accounts_file: dir.join("accounts.json"),
             published_pids: Mutex::new(Vec::new()),
             codex_home: base.codex_home.clone(),
         });

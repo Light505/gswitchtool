@@ -1201,7 +1201,7 @@ function buildCheckLines(report, setup) {
   if (!Number.isInteger(count)) add("–", "Accounts Claude may use: this GSwitch version does not report the count");
   else if (count > 0) add("✓", `${count} account${count === 1 ? "" : "s"} Claude may use`);
   else add("✗", "No account is allowed", "In GSwitch, open Accounts and turn on Claude may use this account.");
-  if (!report.invoke_mode) add("✗", "Codex helper: off", "Turn on Invoke Mode in GSwitch.");
+  if (!report.invoke_mode) add("✗", "Codex helper: off", "In GSwitch → Claude Code, choose Claude with Codex helper or Automatic team, then save.");
   else if (report.paused) {
     const seconds = Number(report.paused.resumes_at);
     const when = Number.isFinite(seconds) && seconds > 0 ? `it resumes at ${new Date(seconds * 1000).toLocaleString()} or choose Resume in GSwitch` : "choose Resume in GSwitch";
