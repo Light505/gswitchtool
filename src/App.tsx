@@ -3,6 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import {
   AppWindow,
   ArrowRightLeft,
+  Bot,
   Check,
   ChevronRight,
   CircleAlert,
@@ -13,8 +14,8 @@ import {
   CircleArrowDown,
   CircleArrowUp,
   History,
+  House,
   Square,
-  Palette as PaletteIcon,
   Download,
   FileJson,
   FolderOpen,
@@ -25,10 +26,12 @@ import {
   MoreHorizontal,
   Plus,
   RefreshCw,
+  Settings,
   ShieldAlert,
   Terminal,
   Trash2,
   Upload,
+  Users,
   X,
   Zap,
 } from "lucide-react";
@@ -55,15 +58,13 @@ import {
   formatPercent,
   formatQuotaResetTime,
   formatRelativeTime,
-  readLanguagePreference,
   resolveLocale,
-  saveLanguagePreference,
-  type LanguagePreference,
   type Translator,
 } from "./i18n";
 import { PALETTES, PALETTE_SWATCHES, SCHEMES, readAppearance, saveAppearance, type Appearance } from "./appearance";
 import { RefreshLanes } from "./refreshLanes";
 import { quotaRefreshDue } from "./refreshPolicy";
+import { describeSetup } from "./setupSummary";
 import type {
   AccountView,
   CatalogModel,
@@ -116,13 +117,33 @@ type Dialog =
   | "remove"
   | "export"
   | "wake"
-  | "codex-cli"
-  | "claude-setup"
-  | "activity"
   | null;
 
 type AddMethod = "start" | "oauth" | "json" | "api-key" | "migration";
 type AccountBusyAction = "refresh" | "wake" | "switch";
+
+// Added by Light505: the sidebar's sections; the choice is a per-computer
+// preference kept in browser storage, like the appearance.
+const SECTIONS = ["home", "accounts", "claude-code", "results", "settings"] as const;
+type Section = (typeof SECTIONS)[number];
+const SECTION_KEY = "gswitch.section";
+
+function readSection(): Section | null {
+  try {
+    const value = window.localStorage.getItem(SECTION_KEY);
+    return SECTIONS.includes(value as Section) ? (value as Section) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSection(section: Section) {
+  try {
+    window.localStorage.setItem(SECTION_KEY, section);
+  } catch {
+    // Without storage the choice lasts until the window closes.
+  }
+}
 
 interface WatchedLog {
   id: string;
@@ -1414,15 +1435,92 @@ function TaskLog({ threadId, title, live, onClose, focus, showHeader, t, formatL
   );
 }
 
-function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
+/** The Activity history, newest first, growing with live entries while shown. */
+function useActivity() {
+  const [entries, setEntries] = useState<ActivityEntry[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void (async () => {
+      try {
+        const unlisten = await api.onInvokeActivity((entry) => setEntries((current) => [entry, ...(current ?? [])]));
+        if (disposed) unlisten();
+        else stop = unlisten;
+      } catch {
+        // The list still loads; it just does not grow while open.
+      }
+      try {
+        const loaded = await api.activity(1000);
+        if (!disposed) setEntries((current) => [...(current ?? []), ...loaded]);
+      } catch {
+        if (!disposed) setFailed(true);
+      }
+    })();
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+
+  return { entries, failed };
+}
+
+interface ActivityViewProps {
   name: (id: string) => string;
-  onClose: () => void;
   onViewLog: (threadId: string, threads: string[]) => void;
   t: Translator;
   formatLocale: string;
+}
+
+/** One Activity event; `entries` supplies the other logs a View log can offer. */
+function ActivityItem({ entry, entries, name, onViewLog, t, formatLocale }: ActivityViewProps & {
+  entry: ActivityEntry;
+  entries: ActivityEntry[];
 }) {
-  const [entries, setEntries] = useState<ActivityEntry[] | null>(null);
-  const [failed, setFailed] = useState(false);
+  return (
+    <li>
+      <time dateTime={new Date(entry.at).toISOString()} title={formatDateTime(entry.at / 1000, formatLocale)}>
+        {formatDateTimeWithRelative(entry.at / 1000, formatLocale)}
+      </time>
+      <span>
+        {activityText(entry, name, t, formatLocale)}
+        {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.usage ? (
+          <small className="activity-usage">{usageText(entry.usage, t, formatLocale)}</small>
+        ) : null}
+        {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.thread_id ? (
+          <button className="link-button" onClick={() => onViewLog(entry.thread_id!, entries.flatMap((item) =>
+            (item.kind === "task_ended" || item.kind === "task_stopped") && item.thread_id ? [item.thread_id] : [],
+          ))} type="button">
+            {t("activity.viewLog")}
+          </button>
+        ) : null}
+      </span>
+    </li>
+  );
+}
+
+/** Home's five newest Activity events. */
+function RecentActivity({ onSeeAll, ...props }: ActivityViewProps & { onSeeAll: () => void }) {
+  const { entries, failed } = useActivity();
+  const recent = useMemo(() => [...(entries ?? [])].sort((left, right) => right.at - left.at).slice(0, 5), [entries]);
+  return (
+    <>
+      {failed ? <p className="remove-error" role="alert">{props.t("activity.loadFailed")}</p> : null}
+      {entries && entries.length === 0 ? <p className="home-empty">{props.t("activity.empty")}</p> : null}
+      {recent.length ? (
+        <ol className="activity-list">
+          {recent.map((entry, index) => <ActivityItem entries={entries ?? []} entry={entry} key={`${entry.at}-${index}`} {...props} />)}
+        </ol>
+      ) : null}
+      <button className="link-button home-see-all" onClick={onSeeAll} type="button">{props.t("home.seeAll")}</button>
+    </>
+  );
+}
+
+function ActivityPanel({ name, onViewLog, t, formatLocale }: ActivityViewProps) {
+  const { entries, failed } = useActivity();
 
   const summary = useMemo(() => {
     if (!entries) return [];
@@ -1450,33 +1548,8 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
     return [...groups.values()].sort((left, right) => right.tokens - left.tokens);
   }, [entries]);
 
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    let disposed = false;
-    void (async () => {
-      try {
-        const unlisten = await api.onInvokeActivity((entry) => setEntries((current) => [entry, ...(current ?? [])]));
-        if (disposed) unlisten();
-        else stop = unlisten;
-      } catch {
-        // The list still loads; it just does not grow while open.
-      }
-      try {
-        const loaded = await api.activity(1000);
-        if (!disposed) setEntries((current) => [...(current ?? []), ...loaded]);
-      } catch {
-        if (!disposed) setFailed(true);
-      }
-    })();
-    return () => {
-      disposed = true;
-      stop?.();
-    };
-  }, []);
-
   return (
-    <Modal onClose={onClose} t={t} title={t("activity.title")} wide>
-      <div className="activity-panel">
+    <div className="activity-panel page-card">
         {failed ? <p className="remove-error" role="alert">{t("activity.loadFailed")}</p> : null}
         {entries && entries.length === 0 ? <p>{t("activity.empty")}</p> : null}
         {entries?.length ? (
@@ -1493,30 +1566,13 @@ function ActivityDialog({ name, onClose, onViewLog, t, formatLocale }: {
           </section>
           <ol className="activity-list">
             {entries.map((entry, index) => (
-              <li key={`${entry.at}-${index}`}>
-                <time dateTime={new Date(entry.at).toISOString()} title={formatDateTime(entry.at / 1000, formatLocale)}>
-                  {formatDateTimeWithRelative(entry.at / 1000, formatLocale)}
-                </time>
-                <span>
-                  {activityText(entry, name, t, formatLocale)}
-                  {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.usage ? (
-                    <small className="activity-usage">{usageText(entry.usage, t, formatLocale)}</small>
-                  ) : null}
-                  {(entry.kind === "task_ended" || entry.kind === "task_stopped") && entry.thread_id ? (
-                    <button className="link-button" onClick={() => onViewLog(entry.thread_id!, entries.flatMap((item) =>
-                      (item.kind === "task_ended" || item.kind === "task_stopped") && item.thread_id ? [item.thread_id] : [],
-                    ))} type="button">
-                      {t("activity.viewLog")}
-                    </button>
-                  ) : null}
-                </span>
-              </li>
+              <ActivityItem entries={entries} entry={entry} formatLocale={formatLocale} key={`${entry.at}-${index}`}
+                name={name} onViewLog={onViewLog} t={t} />
             ))}
           </ol>
           </>
         ) : null}
-      </div>
-    </Modal>
+    </div>
   );
 }
 
@@ -1531,18 +1587,14 @@ function orderedAccounts(accounts: AccountView[], priority: string[]) {
   ).map(({ account }) => account);
 }
 
-function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved, t }: {
+function ClaudeSetupPanel({ settings, onSaved, t }: {
   settings: InvokeSettings;
-  accounts: AccountView[];
-  onClose: () => void;
   onSaved: (settings: InvokeSettings) => void;
-  onInvokeSaved: (settings: InvokeSettings) => void;
   t: Translator;
 }) {
   const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
   const [fastMinRemaining, setFastMinRemaining] = useState(String(settings.claude_setup.codexSpeed.fastMinRemaining));
   const usesCodex = draft.setup === "claude-codex" || (draft.setup === "router" && draft.router.mode !== "claude");
-  const [showInvokeSettings, setShowInvokeSettings] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const setups: ClaudeSetupKind[] = ["claude-only", "claude-codex", "router"];
@@ -1561,7 +1613,7 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
     const cutoffVisible = usesCodex && draft.codexSpeed.mode !== "normal";
     const cutoff = cutoffVisible ? Number(fastMinRemaining) : settings.claude_setup.codexSpeed.fastMinRemaining ?? 20;
     if (cutoffVisible && (!fastMinRemaining.trim() || !Number.isInteger(cutoff) || cutoff < 0 || cutoff > 90)) {
-      setError("Fast cutoff must be an integer between 0 and 90 percent.");
+      setError(t("claudeSetup.fastCutoffError"));
       return;
     }
     setSaving(true);
@@ -1575,13 +1627,15 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
     }
   };
 
-  if (showInvokeSettings) {
-    return <InvokeSettingsDialog accounts={accounts} onClose={() => setShowInvokeSettings(false)}
-      onSaved={(saved) => { onInvokeSaved(saved); setShowInvokeSettings(false); }} settings={settings} t={t} />;
-  }
+  // Cancel returns the page to the saved setup.
+  const cancel = () => {
+    setDraft(settings.claude_setup);
+    setFastMinRemaining(String(settings.claude_setup.codexSpeed.fastMinRemaining));
+    setError(null);
+  };
+
   return (
-    <Modal dismissible={!saving} onClose={onClose} t={t} title={t("claudeSetup.title")} wide>
-      <div className="claude-setup-panel">
+      <div className="claude-setup-panel page-card">
         <div aria-label={t("claudeSetup.choose")} className="claude-setup-cards" role="group">
           {setups.map((setup) => (
             <div className="claude-setup-card" data-selected={draft.setup === setup} key={setup}>
@@ -1590,11 +1644,6 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
                 <strong>{t(`claudeSetup.name.${setup}`)}</strong>
                 <span>{t(`claudeSetup.description.${setup}`)}</span>
               </button>
-              {setup !== "claude-only" ? (
-                <button className="link-button" disabled={saving} onClick={() => setShowInvokeSettings(true)} type="button">
-                  {t("claudeSetup.invokeSettings")}
-                </button>
-              ) : null}
             </div>
           ))}
         </div>
@@ -1642,12 +1691,12 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
             ) : null}
             {draft.router.mode === "mixed" ? (
               <label className="claude-router-mode">
-                <span>Use first</span>
+                <span>{t("claudeSetup.useFirst")}</span>
                 <select disabled={saving} value={draft.router.prefer}
                   onChange={(event) => setDraft((current) => ({ ...current, router: { ...current.router, prefer: event.target.value as ClaudeSetup["router"]["prefer"] } }))}>
-                  <option value="codex">Codex</option>
-                  <option value="claude">Claude</option>
-                  <option value="price">Lowest API price</option>
+                  <option value="codex">{t("claudeSetup.prefer.codex")}</option>
+                  <option value="claude">{t("claudeSetup.prefer.claude")}</option>
+                  <option value="price">{t("claudeSetup.prefer.price")}</option>
                 </select>
               </label>
             ) : null}
@@ -1657,25 +1706,25 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
                   const sampling = event.target.checked ? "on" : "off";
                   setDraft((current) => ({ ...current, router: { ...current.router, sampling } }));
                 }} />
-              <span>Try cheaper models on easy tasks</span>
+              <span>{t("claudeSetup.sampling")}</span>
             </label>
-            <p className="claude-setup-note">On trivial and small tasks, about 1 in 10 first attempts goes to a cheaper or untested allowed model so the router learns what it can do. If it fails, the usual choice follows.</p>
+            <p className="claude-setup-note">{t("claudeSetup.samplingNote")}</p>
           </div>
         ) : null}
         {usesCodex ? (
           <div className="claude-router-options">
             <label className="claude-router-mode">
-              <span>Speed</span>
+              <span>{t("claudeSetup.speed")}</span>
               <select disabled={saving} value={draft.codexSpeed.mode}
                 onChange={(event) => setDraft((current) => ({ ...current, codexSpeed: { ...current.codexSpeed, mode: event.target.value as ClaudeSetup["codexSpeed"]["mode"] } }))}>
-                <option value="normal">Normal</option>
-                <option value="fast">Fast</option>
-                <option value="orchestrator">Orchestrator decides</option>
+                <option value="normal">{t("claudeSetup.speed.normal")}</option>
+                <option value="fast">{t("claudeSetup.speed.fast")}</option>
+                <option value="orchestrator">{t("claudeSetup.speed.orchestrator")}</option>
               </select>
             </label>
             {draft.codexSpeed.mode !== "normal" ? (
               <label className="claude-router-mode">
-                <span>Fast only above (% usage left)</span>
+                <span>{t("claudeSetup.fastCutoff")}</span>
                 <input disabled={saving} max={90} min={0} step={1} type="number" value={fastMinRemaining}
                   onChange={(event) => setFastMinRemaining(event.target.value)} />
               </label>
@@ -1685,20 +1734,18 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
         {error ? <p className="remove-error" role="alert">{error}</p> : null}
         <p className="claude-setup-note">{t("claudeSetup.footer")}</p>
         <div className="modal-actions">
-          <button className="button button-quiet" disabled={saving} onClick={onClose} type="button">{t("common.cancel")}</button>
+          <button className="button button-quiet" disabled={saving} onClick={cancel} type="button">{t("common.cancel")}</button>
           <button className="button button-primary" disabled={saving} onClick={() => void save()} type="button">
             {saving ? <LoaderCircle className="spin" size={15} /> : null}{t("common.save")}
           </button>
         </div>
       </div>
-    </Modal>
   );
 }
 
-function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
+function InvokeSettingsPanel({ settings, accounts, onSaved, t }: {
   settings: InvokeSettings;
   accounts: AccountView[];
-  onClose: () => void;
   onSaved: (settings: InvokeSettings) => void;
   t: Translator;
 }) {
@@ -1791,9 +1838,8 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
   };
 
   return (
-    <Modal dismissible={!saving} onClose={onClose} t={t} title={t("invoke.settings")} wide>
       <div className="invoke-panel">
-        <h3>{t("invoke.modelsTitle")}</h3>
+        <h4>{t("invoke.modelsTitle")}</h4>
         <p>{t("invoke.modelsIntro")}</p>
         {loadingModels && !catalog ? (
           <p className="invoke-loading" role="status"><LoaderCircle className="spin" size={15} />{t("invoke.loadingModels")}</p>
@@ -1835,7 +1881,7 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
             ))}
           </ul>
         ) : null}
-        <h3>{t("invoke.taskDefaultsTitle")}</h3>
+        <h4>{t("invoke.taskDefaultsTitle")}</h4>
         <p>{t("invoke.taskDefaultsIntro")}</p>
         <ul className="invoke-task-defaults">
           {taskKinds.map((kind) => {
@@ -1881,7 +1927,7 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
             );
           })}
         </ul>
-        <h3>{t("invoke.accountsTitle")}</h3>
+        <h4>{t("invoke.accountsTitle")}</h4>
         <p>{t("invoke.orderIntro")}</p>
         {order.length ? (
           <ol className="invoke-order">
@@ -1952,12 +1998,10 @@ function InvokeSettingsDialog({ settings, accounts, onClose, onSaved, t }: {
           </button>
         </div>
       </div>
-    </Modal>
   );
 }
 
 export default function App() {
-  const [languagePreference, setLanguagePreference] = useState<LanguagePreference>(() => readLanguagePreference());
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [quotas, setQuotas] = useState<Record<string, QuotaView>>({});
   const [quotaFailures, setQuotaFailures] = useState<Record<string, QuotaRefreshFailureCode>>({});
@@ -1981,6 +2025,7 @@ export default function App() {
   const [migrationScanned, setMigrationScanned] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [invokeSettings, setInvokeSettings] = useState<InvokeSettings | null>(null);
+  const [invokeSettingsFailed, setInvokeSettingsFailed] = useState(false);
   const [failoverWaiting, setFailoverWaiting] = useState<SwitchAccounts | null>(null);
   const [failoverCancelling, setFailoverCancelling] = useState(false);
   const [invokePause, setInvokePause] = useState<InvokePause | null>(null);
@@ -2051,8 +2096,15 @@ export default function App() {
   const snapshotSequence = useRef(0);
   const initialSnapshotLoaded = useRef(false);
   const [label, setLabel] = useState("");
-  const locale = useMemo(() => resolveLocale(languagePreference), [languagePreference]);
-  const t = useMemo(() => createTranslator(locale.language), [locale.language]);
+  const locale = useMemo(() => resolveLocale(), []);
+  const t = useMemo(() => createTranslator(), []);
+  // No section until the first snapshot when none was chosen before: Home,
+  // or Accounts when nothing is saved yet.
+  const [section, setSection] = useState<Section | null>(readSection);
+  const selectSection = (next: Section) => {
+    setSection(next);
+    saveSection(next);
+  };
   const watchChoices = [
     ...tasks.map((task) => ({
       id: task.id,
@@ -2075,11 +2127,6 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
-  const changeLanguage = (preference: LanguagePreference) => {
-    setLanguagePreference(preference);
-    saveLanguagePreference(preference);
-  };
-
   const checkCodexCli = async () => {
     setCliChecking(true);
     setCliError(null);
@@ -2093,12 +2140,18 @@ export default function App() {
     }
   };
 
-  const openCodexCli = () => {
-    setCliResult(null);
-    setCliError(null);
-    setDialog("codex-cli");
-    void checkCodexCli();
+  const openSettings = () => {
+    if (section !== "settings") {
+      setCliResult(null);
+      setCliError(null);
+      void checkCodexCli();
+    }
+    selectSection("settings");
   };
+
+  useEffect(() => {
+    if (!loading && section === null) setSection(accounts.length ? "home" : "accounts");
+  }, [accounts.length, loading, section]);
 
   useEffect(() => {
     if (loading) return;
@@ -2278,6 +2331,7 @@ export default function App() {
         setInvokeSettings(await api.invokeSettings());
       } catch {
         setInvokeSettings(null);
+        setInvokeSettingsFailed(true);
       }
     })();
   }, []);
@@ -3377,146 +3431,60 @@ export default function App() {
     return null;
   }, [live, pendingResetCredit, runTask, storage, t]);
 
+  const setupSentence = describeSetup(invokeSettings, accounts);
+  const showHistoryLog = (threadId: string, threads: string[]) => {
+    setHistoryThreads([...new Set(threads)]);
+    watchLog({ id: threadId, threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) });
+  };
+  const navItems = {
+    home: { icon: <House aria-hidden="true" size={17} />, label: t("nav.home") },
+    accounts: { icon: <Users aria-hidden="true" size={17} />, label: t("nav.accounts") },
+    "claude-code": { icon: <Bot aria-hidden="true" size={17} />, label: t("nav.claudeCode") },
+    results: { icon: <History aria-hidden="true" size={17} />, label: t("nav.results") },
+    settings: { icon: <Settings aria-hidden="true" size={17} />, label: t("nav.settings") },
+  } satisfies Record<Section, { icon: ReactNode; label: string }>;
+
   return (
     <main className="app-shell">
-      <header className="toolbar">
-        <div className="brand-lockup">
+      <aside className="sidebar">
+        <header className="brand-lockup">
           <img alt="" aria-hidden="true" className="brand-mark" src="/gswitch-icon.svg" />
-          <h1>GSwitch Claude Tool</h1>
-          {appVersion ? (
-            <span className="brand-version" title={t(appVersion.dev ? "app.devVersion" : "app.version", { version: appVersion.version })}>
-              v{appVersion.version}{appVersion.dev ? " · dev" : ""}
-            </span>
-          ) : null}
-        </div>
-        <div className="toolbar-actions">
-          {invokeSettings ? (
-            <button className="button button-secondary claude-setup-button" disabled={storageRecovery}
-              onClick={() => setDialog("claude-setup")} type="button">
-              {t("claudeSetup.header", { setup: t(`claudeSetup.name.${invokeSettings.claude_setup.setup}`) })}
-            </button>
-          ) : null}
-          <button className="button button-quiet" disabled={loading || busy !== null || refreshProgress !== null || storageRecovery} onClick={() => void refreshAll()} type="button">
-            <RefreshCw className={refreshProgress ? "spin" : ""} size={16} />
-            {refreshProgress
-              ? t("toolbar.refreshing", {
-                done: formatNumber(refreshProgress.done, locale.formatLocale),
-                total: formatNumber(refreshProgress.total, locale.formatLocale),
-              })
-              : t("common.refresh")}
-          </button>
-          <button
-            className="button button-secondary"
-            disabled={busy !== null || loading || storageRecovery || chatGptAccounts.length === 0 || wake?.status === "running"}
-            onClick={() => void startWake()}
-            type="button"
-          >
-            <Zap size={16} />
-            {t("toolbar.wakeAll")}
-          </button>
-          <button
-            className="button button-primary"
-            disabled={loading || busy !== null || storageRecovery}
-            onClick={() => openAddDialog()}
-            type="button"
-          >
-            <Plus size={16} />
-            {t("common.addAccount")}
-          </button>
-          {cliInfo?.update_status === "available" ? (
-            <button className="button button-secondary cli-toolbar-button" disabled={busy !== null} onClick={openCodexCli} type="button">
-              <Terminal size={16} />
-              {t("cli.available", { version: cliInfo.latest_version || "" })}
-            </button>
-          ) : null}
-          <button
-            aria-label={t("toolbar.activity")}
-            className="icon-button"
-            onClick={() => setDialog("activity")}
-            title={t("toolbar.activity")}
-            type="button"
-          >
-            <History size={17} />
-          </button>
-          <button
-            aria-label={t("update.check")}
-            className="icon-button"
-            disabled={updateChecking || pendingUpdate !== null}
-            onClick={() => void checkForUpdateNow()}
-            title={t("update.check")}
-            type="button"
-          >
-            {updateChecking ? <LoaderCircle className="spin" size={17} /> : <CircleArrowUp size={17} />}
-          </button>
-          <button
-            aria-label={t("rollback.check")}
-            className="icon-button"
-            disabled={updateChecking || pendingUpdate !== null}
-            onClick={() => void checkForUpdateNow(true)}
-            title={t("rollback.check")}
-            type="button"
-          >
-            <CircleArrowDown size={17} />
-          </button>
-          <PopoverMenu
-            className="language-menu appearance-menu"
-            icon={<PaletteIcon aria-hidden="true" className="appearance-menu-icon" />}
-            label={t("toolbar.appearance")}
-            popoverLabel={t("toolbar.appearance")}
-            title={t("toolbar.appearance")}
-          >
-            <h3>{t("appearance.palette")}</h3>
-            {PALETTES.map((palette) => (
-              <button
-                aria-pressed={appearance.palette === palette}
-                className="appearance-option"
-                key={palette}
-                onClick={() => changeAppearance({ palette })}
-                type="button"
-              >
-                <span>
-                  <span aria-hidden="true" className="appearance-swatch">
-                    {PALETTE_SWATCHES[palette].map((color) => <i key={color} style={{ background: color }} />)}
-                  </span>
-                  {t(`palette.${palette}`)}
-                </span>
-                {appearance.palette === palette ? <Check size={15} /> : null}
-              </button>
+          <div className="brand-copy">
+            <h1>GSwitch Claude Tool</h1>
+            {appVersion ? (
+              <span className="brand-version" title={t(appVersion.dev ? "app.devVersion" : "app.version", { version: appVersion.version })}>
+                v{appVersion.version}{appVersion.dev ? " · dev" : ""}
+              </span>
+            ) : null}
+          </div>
+        </header>
+        <nav aria-label={t("nav.label")} className="sidebar-nav">
+          <ul>
+            {SECTIONS.map((item) => (
+              <li key={item}>
+                <button
+                  aria-current={section === item ? "page" : undefined}
+                  className="nav-item"
+                  onClick={() => (item === "settings" ? openSettings() : selectSection(item))}
+                  type="button"
+                >
+                  {navItems[item].icon}
+                  <span className="nav-label">{navItems[item].label}</span>
+                  {item === "accounts" && !loading ? <>{" "}<span className="nav-badge">{formatNumber(accounts.length, locale.formatLocale)}</span></> : null}
+                  {item === "settings" && cliInfo?.update_status === "available" ? (
+                    <>{" "}<span
+                      aria-label={t("cli.available", { version: cliInfo.latest_version || "" })}
+                      className="nav-dot"
+                      role="img"
+                      title={t("cli.available", { version: cliInfo.latest_version || "" })}
+                    /></>
+                  ) : null}
+                </button>
+              </li>
             ))}
-            <h3>{t("appearance.mode")}</h3>
-            {SCHEMES.map((scheme) => (
-              <button
-                aria-pressed={appearance.scheme === scheme}
-                key={scheme}
-                onClick={() => changeAppearance({ scheme })}
-                type="button"
-              >
-                <span>{t(`scheme.${scheme}`)}</span>
-                {appearance.scheme === scheme ? <Check size={15} /> : null}
-              </button>
-            ))}
-          </PopoverMenu>
-          <PopoverMenu
-            className="language-menu"
-            icon={<span aria-hidden="true" className="language-menu-icon" />}
-            label={t("toolbar.language")}
-            popoverLabel={t("settings.language")}
-            title={t("toolbar.language")}
-          >
-            {(["system", "zh-CN", "en"] as const).map((preference) => (
-              <button
-                aria-pressed={languagePreference === preference}
-                key={preference}
-                onClick={() => changeLanguage(preference)}
-                type="button"
-              >
-                <span>{t(preference === "system" ? "settings.system" : preference === "en" ? "settings.english" : "settings.chinese")}</span>
-                {languagePreference === preference ? <Check size={15} /> : null}
-              </button>
-            ))}
-          </PopoverMenu>
-        </div>
-      </header>
+          </ul>
+        </nav>
+      </aside>
 
       <div className="content">
         {pendingUpdate ? (
@@ -3574,55 +3542,6 @@ export default function App() {
           </section>
         ) : null}
 
-        {tasks.length ? (
-          <section aria-label={t("tasks.title")} className="task-strip">
-            <h2>{t("tasks.title")}</h2>
-            <ul>
-              {tasks.map((task) => {
-                const folder = folderName(task.cwd);
-                const armed = confirm.armed === `task-${task.id}`;
-                const stopping = Boolean(task.stopping) || stoppingTasks.has(task.id);
-                return (
-                  <li key={task.id}>
-                    <span className={"task-state" + (stopping ? " task-stopping" : task.running ? " task-running" : "")}>{t(stopping ? "tasks.stopping" : task.running ? "tasks.running" : "tasks.waiting")}</span>
-                    <strong>{task.model}</strong>
-                    <span className="badge">{task.reasoning_effort}</span>
-                    {task.write ? <span className="badge">{t("tasks.write")}</span> : null}
-                    <span className="task-folder" title={task.cwd}>{folder}</span>
-                    {task.thread_id ? <span className="task-thread" title={task.thread_id}>{t("tasks.thread", { thread: shortThread(task.thread_id) })}</span> : null}
-                    <span className="task-elapsed">{elapsedText(taskClock - task.started_at)}</span>
-                    <button
-                      aria-label={t("tasks.watchFor", { model: task.model, folder })}
-                      className="button button-secondary"
-                      onClick={() => watchLog({
-                        id: task.id,
-                        taskId: task.id,
-                        threadId: task.thread_id ?? null,
-                        title: t("log.title", { model: task.model, folder }),
-                      })}
-                      type="button"
-                    >
-                      <Terminal size={13} />
-                      {t("tasks.watch")}
-                    </button>
-                    <button
-                      aria-label={stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
-                      className={"button " + (armed && !stopping ? "button-danger" : "button-secondary")}
-                      data-confirm={`task-${task.id}`}
-                      disabled={stopping}
-                      onClick={() => confirm.click(`task-${task.id}`, () => void stopTask(task.id))}
-                      type="button"
-                    >
-                      {stopping ? <LoaderCircle className="spin" size={13} /> : <Square size={13} />}
-                      {stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stop")}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </section>
-        ) : null}
-
         {safetyNotice ? (
           <section className="safety-notice">
             <div className="safety-icon">{safetyNotice.icon}</div>
@@ -3640,6 +3559,234 @@ export default function App() {
           <p className="signed-out-notice" role="status">{t("safety.signedOut")}</p>
         ) : null}
 
+        {section === null ? (
+          <div className="loading-state"><LoaderCircle className="spin" size={24} />{t("accounts.reading")}</div>
+        ) : null}
+
+        {section === "home" ? (
+          <div className="page">
+            <h2 className="page-title">{t("nav.home")}</h2>
+            {setupSentence ? (
+              <section aria-labelledby="home-setup-heading" className="page-card home-setup">
+                <div>
+                  <h3 id="home-setup-heading">{t("home.setupTitle")}</h3>
+                  <p>{setupSentence}</p>
+                </div>
+                <button className="button button-secondary" onClick={() => selectSection("claude-code")} type="button">
+                  {t("home.change")}
+                </button>
+              </section>
+            ) : null}
+            <section aria-labelledby="home-running-heading" className="task-strip">
+              <h3 id="home-running-heading">{t("home.runningTitle")}</h3>
+              {tasks.length ? (
+                <ul aria-label={t("tasks.title")}>
+                  {tasks.map((task) => {
+                    const folder = folderName(task.cwd);
+                    const armed = confirm.armed === `task-${task.id}`;
+                    const stopping = Boolean(task.stopping) || stoppingTasks.has(task.id);
+                    return (
+                      <li key={task.id}>
+                        <span className={"task-state" + (stopping ? " task-stopping" : task.running ? " task-running" : "")}>{t(stopping ? "tasks.stopping" : task.running ? "tasks.running" : "tasks.waiting")}</span>
+                        <strong>{task.model}</strong>
+                        <span className="badge">{task.reasoning_effort}</span>
+                        {task.write ? <span className="badge">{t("tasks.write")}</span> : null}
+                        <span className="task-folder" title={task.cwd}>{folder}</span>
+                        {task.thread_id ? <span className="task-thread" title={task.thread_id}>{t("tasks.thread", { thread: shortThread(task.thread_id) })}</span> : null}
+                        <span className="task-elapsed">{elapsedText(taskClock - task.started_at)}</span>
+                        <button
+                          aria-label={t("tasks.watchFor", { model: task.model, folder })}
+                          className="button button-secondary"
+                          onClick={() => watchLog({
+                            id: task.id,
+                            taskId: task.id,
+                            threadId: task.thread_id ?? null,
+                            title: t("log.title", { model: task.model, folder }),
+                          })}
+                          type="button"
+                        >
+                          <Terminal size={13} />
+                          {t("tasks.watch")}
+                        </button>
+                        <button
+                          aria-label={stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stopFor", { model: task.model, folder })}
+                          className={"button " + (armed && !stopping ? "button-danger" : "button-secondary")}
+                          data-confirm={`task-${task.id}`}
+                          disabled={stopping}
+                          onClick={() => confirm.click(`task-${task.id}`, () => void stopTask(task.id))}
+                          type="button"
+                        >
+                          {stopping ? <LoaderCircle className="spin" size={13} /> : <Square size={13} />}
+                          {stopping ? t("tasks.stopping") : armed ? t("tasks.confirmStop") : t("tasks.stop")}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : <p className="home-empty">{t("home.nothingRunning")}</p>}
+            </section>
+            <section aria-labelledby="home-recent-heading" className="page-card home-recent">
+              <h3 id="home-recent-heading">{t("home.recentTitle")}</h3>
+              <RecentActivity formatLocale={locale.formatLocale} name={accountName} onSeeAll={() => selectSection("results")}
+                onViewLog={showHistoryLog} t={t} />
+            </section>
+          </div>
+        ) : null}
+
+        {section === "claude-code" ? (
+          <div className="page">
+            {invokeSettings && !loading && !storageRecovery ? (
+              <>
+                <section aria-labelledby="claude-setup-heading" className="page-section">
+                  <h2 className="page-title" id="claude-setup-heading">{t("claudeSetup.title")}</h2>
+                  <ClaudeSetupPanel
+                    onSaved={(saved) => {
+                      setInvokeSettings(saved);
+                      setInvokePause(null);
+                      setNotice({ kind: "success", text: t("claudeSetup.saved") });
+                    }}
+                    settings={invokeSettings}
+                    t={t}
+                  />
+                </section>
+                <section aria-labelledby="codex-helper-heading" className="page-card">
+                  <h3 className="page-card-title" id="codex-helper-heading">{t("claudeCode.codexHelper")}</h3>
+                  <InvokeSettingsPanel
+                    accounts={chatGptAccounts}
+                    onSaved={(saved) => {
+                      setInvokeSettings(saved);
+                      setNotice({ kind: "success", text: t("invoke.saved") });
+                    }}
+                    settings={invokeSettings}
+                    t={t}
+                  />
+                </section>
+              </>
+            ) : (
+              <>
+                <h2 className="page-title">{t("claudeSetup.title")}</h2>
+                {storageRecovery ? <p className="home-empty">{t("accounts.recoveryDescription")}</p>
+                  : invokeSettingsFailed ? <p className="remove-error" role="alert">{t("claudeCode.unavailable")}</p>
+                  : <div className="loading-state"><LoaderCircle className="spin" size={24} />{t("claudeCode.loading")}</div>}
+              </>
+            )}
+          </div>
+        ) : null}
+
+        {section === "results" ? (
+          <section aria-labelledby="results-heading" className="page">
+            <h2 className="page-title" id="results-heading">{t("activity.title")}</h2>
+            <ActivityPanel formatLocale={locale.formatLocale} name={accountName} onViewLog={showHistoryLog} t={t} />
+          </section>
+        ) : null}
+
+        {section === "settings" ? (
+          <div className="page">
+            <h2 className="page-title">{t("nav.settings")}</h2>
+            <section aria-labelledby="settings-appearance-heading" className="page-card settings-card">
+              <h3 className="page-card-title" id="settings-appearance-heading">{t("toolbar.appearance")}</h3>
+              <div aria-label={t("appearance.palette")} className="settings-choices" role="group">
+                <span className="settings-label">{t("appearance.palette")}</span>
+                {PALETTES.map((palette) => (
+                  <button
+                    aria-pressed={appearance.palette === palette}
+                    className="settings-choice"
+                    key={palette}
+                    onClick={() => changeAppearance({ palette })}
+                    type="button"
+                  >
+                    <span aria-hidden="true" className="appearance-swatch">
+                      {PALETTE_SWATCHES[palette].map((color) => <i key={color} style={{ background: color }} />)}
+                    </span>
+                    {t(`palette.${palette}`)}
+                    {appearance.palette === palette ? <Check size={15} /> : null}
+                  </button>
+                ))}
+              </div>
+              <div aria-label={t("appearance.mode")} className="settings-choices" role="group">
+                <span className="settings-label">{t("appearance.mode")}</span>
+                {SCHEMES.map((scheme) => (
+                  <button
+                    aria-pressed={appearance.scheme === scheme}
+                    className="settings-choice"
+                    key={scheme}
+                    onClick={() => changeAppearance({ scheme })}
+                    type="button"
+                  >
+                    {t(`scheme.${scheme}`)}
+                    {appearance.scheme === scheme ? <Check size={15} /> : null}
+                  </button>
+                ))}
+              </div>
+            </section>
+            <section aria-labelledby="settings-updates-heading" className="page-card settings-card">
+              <h3 className="page-card-title" id="settings-updates-heading">{t("settingsPage.updates")}</h3>
+              {appVersion ? <p className="home-empty">{t(appVersion.dev ? "app.devVersion" : "app.version", { version: appVersion.version })}</p> : null}
+              <div className="settings-actions">
+                <button
+                  className="button button-secondary"
+                  disabled={updateChecking || pendingUpdate !== null}
+                  onClick={() => void checkForUpdateNow()}
+                  type="button"
+                >
+                  {updateChecking ? <LoaderCircle className="spin" size={15} /> : <CircleArrowUp size={15} />}
+                  {t("update.check")}
+                </button>
+                <button
+                  className="button button-quiet"
+                  disabled={updateChecking || pendingUpdate !== null}
+                  onClick={() => void checkForUpdateNow(true)}
+                  type="button"
+                >
+                  <CircleArrowDown size={15} />
+                  {t("rollback.check")}
+                </button>
+              </div>
+            </section>
+            <section aria-labelledby="settings-cli-heading" className="page-card settings-card">
+              <h3 className="page-card-title" id="settings-cli-heading">{t("toolbar.codexCli")}</h3>
+              <div className="cli-panel">
+                {cliChecking ? <p className="cli-status" role="status"><LoaderCircle className="spin" size={18} />{t("cli.checking")}</p> : (
+                  <p className="cli-status">
+                    <Terminal size={18} />
+                    {!cliInfo?.version
+                      ? t("cli.missing")
+                      : cliUpdateAvailable
+                        ? t("cli.updateAvailable", { version: cliInfo.version, latest: cliInfo.latest_version || "" })
+                        : cliInfo.latest_version === cliInfo.version
+                          ? t("cli.upToDate", { version: cliInfo.version })
+                          : t("cli.version", { version: cliInfo.version })}
+                  </p>
+                )}
+                {cliInfo?.version && !cliInfo.supports_update ? <p>{t("cli.unsupported")}</p> : null}
+                {cliUpdateAvailable ? <p>{busy === "codex-cli-update" ? t("cli.updatingNote") : t("cli.updateNote")}</p> : null}
+                {cliResult ? <p className="cli-result" role="status">{t(cliResult.kind === "updated" ? "cli.updated" : "cli.sameVersion")}</p> : null}
+                {cliError ? <p className="cli-error" role="alert">{t(({
+                  not_installed: "cli.error.notInstalled",
+                  unsupported: "cli.error.unsupported",
+                  busy: "cli.error.busy",
+                  codex_open: "cli.error.codexOpen",
+                  update_failed: "cli.error.updateFailed",
+                  verification_failed: "cli.error.verificationFailed",
+                  inspect_failed: "cli.error.inspectFailed",
+                  open_guide: "cli.error.openGuide",
+                } as const)[cliError])}</p> : null}
+                <div className="modal-actions">
+                  <button className="button button-quiet" disabled={busy !== null} onClick={() => void api.openCodexCliGuide().catch(() => setCliError("open_guide"))} type="button">{t("cli.guide")}</button>
+                  <button className="button button-secondary" disabled={busy !== null || cliChecking} onClick={() => void checkCodexCli()} type="button">{t("cli.checkAgain")}</button>
+                  {cliUpdateAvailable ? (
+                    <button className="button button-primary" disabled={busy !== null || cliChecking} onClick={() => void updateCodexCli()} type="button">
+                      {busy === "codex-cli-update" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
+                      {busy === "codex-cli-update" ? t("cli.updating") : t("cli.update")}
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          </div>
+        ) : null}
+
+        {section === "accounts" ? (
         <section className="accounts-section" aria-labelledby="accounts-heading">
           <div className="section-heading">
             <div className="section-heading-main">
@@ -3666,11 +3813,36 @@ export default function App() {
                 </button>
               ) : null}
             </div>
-            {storageRecovery ? (
-              <div className="section-heading-actions">
-                <p>{t("accounts.recoveryDescription")}</p>
-              </div>
-            ) : null}
+            <div className="section-heading-actions">
+              {storageRecovery ? <p>{t("accounts.recoveryDescription")}</p> : null}
+              <button className="button button-quiet" disabled={loading || busy !== null || refreshProgress !== null || storageRecovery} onClick={() => void refreshAll()} type="button">
+                <RefreshCw className={refreshProgress ? "spin" : ""} size={16} />
+                {refreshProgress
+                  ? t("toolbar.refreshing", {
+                    done: formatNumber(refreshProgress.done, locale.formatLocale),
+                    total: formatNumber(refreshProgress.total, locale.formatLocale),
+                  })
+                  : t("common.refresh")}
+              </button>
+              <button
+                className="button button-secondary"
+                disabled={busy !== null || loading || storageRecovery || chatGptAccounts.length === 0 || wake?.status === "running"}
+                onClick={() => void startWake()}
+                type="button"
+              >
+                <Zap size={16} />
+                {t("toolbar.wakeAll")}
+              </button>
+              <button
+                className="button button-primary"
+                disabled={loading || busy !== null || storageRecovery}
+                onClick={() => openAddDialog()}
+                type="button"
+              >
+                <Plus size={16} />
+                {t("common.addAccount")}
+              </button>
+            </div>
           </div>
 
           {selectionMode && accounts.length ? (
@@ -3798,6 +3970,7 @@ export default function App() {
             />
           )}
         </section>
+        ) : null}
       </div>
 
       {watching.length ? (
@@ -3821,64 +3994,6 @@ export default function App() {
                 onClose={() => closeLog(log.id)} focus={log.focus} showHeader={watching.length > 1} t={t}
                 threadId={task?.thread_id ?? log.threadId} title={log.title} />;
             })}
-          </div>
-        </Modal>
-      ) : null}
-
-      {dialog === "activity" && !watching.length ? (
-        <ActivityDialog
-          formatLocale={locale.formatLocale}
-          onViewLog={(threadId, threads) => {
-            setHistoryThreads([...new Set(threads)]);
-            watchLog({ id: threadId, threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) });
-          }}
-          name={(id) => {
-            const account = accounts.find((saved) => saved.id === id);
-            return account ? accountPrimaryName(account) : t("common.unknown");
-          }}
-          onClose={() => setDialog(null)}
-          t={t}
-        />
-      ) : null}
-
-      {dialog === "codex-cli" ? (
-        <Modal dismissible={busy !== "codex-cli-update"} onClose={() => setDialog(null)} t={t} title={t("toolbar.codexCli")}>
-          <div className="cli-panel">
-            {cliChecking ? <p className="cli-status" role="status"><LoaderCircle className="spin" size={18} />{t("cli.checking")}</p> : (
-              <p className="cli-status">
-                <Terminal size={18} />
-                {!cliInfo?.version
-                  ? t("cli.missing")
-                  : cliUpdateAvailable
-                    ? t("cli.updateAvailable", { version: cliInfo.version, latest: cliInfo.latest_version || "" })
-                    : cliInfo.latest_version === cliInfo.version
-                      ? t("cli.upToDate", { version: cliInfo.version })
-                      : t("cli.version", { version: cliInfo.version })}
-              </p>
-            )}
-            {cliInfo?.version && !cliInfo.supports_update ? <p>{t("cli.unsupported")}</p> : null}
-            {cliUpdateAvailable ? <p>{busy === "codex-cli-update" ? t("cli.updatingNote") : t("cli.updateNote")}</p> : null}
-            {cliResult ? <p className="cli-result" role="status">{t(cliResult.kind === "updated" ? "cli.updated" : "cli.sameVersion")}</p> : null}
-            {cliError ? <p className="cli-error" role="alert">{t(({
-              not_installed: "cli.error.notInstalled",
-              unsupported: "cli.error.unsupported",
-              busy: "cli.error.busy",
-              codex_open: "cli.error.codexOpen",
-              update_failed: "cli.error.updateFailed",
-              verification_failed: "cli.error.verificationFailed",
-              inspect_failed: "cli.error.inspectFailed",
-              open_guide: "cli.error.openGuide",
-            } as const)[cliError])}</p> : null}
-            <div className="modal-actions">
-              <button className="button button-quiet" disabled={busy !== null} onClick={() => void api.openCodexCliGuide().catch(() => setCliError("open_guide"))} type="button">{t("cli.guide")}</button>
-              <button className="button button-secondary" disabled={busy !== null || cliChecking} onClick={() => void checkCodexCli()} type="button">{t("cli.checkAgain")}</button>
-              {cliUpdateAvailable ? (
-                <button className="button button-primary" disabled={busy !== null || cliChecking} onClick={() => void updateCodexCli()} type="button">
-                  {busy === "codex-cli-update" ? <LoaderCircle className="spin" size={15} /> : <Download size={15} />}
-                  {busy === "codex-cli-update" ? t("cli.updating") : t("cli.update")}
-                </button>
-              ) : null}
-            </div>
           </div>
         </Modal>
       ) : null}
@@ -4292,25 +4407,6 @@ export default function App() {
             ) : null}
           </div>
         </Modal>
-      ) : null}
-
-      {dialog === "claude-setup" && invokeSettings ? (
-        <ClaudeSetupDialog
-          accounts={accounts.filter((account) => account.kind === "chat_gpt")}
-          onClose={() => setDialog(null)}
-          onInvokeSaved={(saved) => {
-            setInvokeSettings(saved);
-            setNotice({ kind: "success", text: t("invoke.saved") });
-          }}
-          onSaved={(saved) => {
-            setInvokeSettings(saved);
-            setInvokePause(null);
-            setDialog(null);
-            setNotice({ kind: "success", text: t("claudeSetup.saved") });
-          }}
-          settings={invokeSettings}
-          t={t}
-        />
       ) : null}
 
       {dialog === "remove" && removeAccount ? (

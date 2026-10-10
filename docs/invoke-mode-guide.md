@@ -89,7 +89,7 @@ GSwitch installed on the same computer.
 
 From version 1.1.0, the app checks the repository's GitHub releases when it
 opens and every six hours. From 1.1.1 you can also check at any time with the
-**Check for updates** button (the arrow in a circle, next to the language menu).
+**Check for updates** button (in **Settings**, under Updates).
 When there is a newer version it shows **GSwitch <version> is available**:
 
 - **Update GSwitch** downloads it, checks its signature, and installs it over the
@@ -122,14 +122,15 @@ Credentials stay encrypted on your computer. Claude never sees them.
 
 ## 3. Turn on Invoke Mode
 
-1. In the toolbar, switch **Manual** to **Invoke**.
-2. Open **Invoke settings** (the sliders icon next to it) and tick the models and
+1. Open **Claude Code** in the sidebar, choose **Claude + Codex** or **Router**,
+   and save.
+2. Under **Codex helper** on the same page, tick the models and
    reasoning efforts Claude may use. Each model lists only the efforts it
    supports. Claude can never use anything you leave unticked.
 3. On each account card, turn on **Allow in Invoke Mode** for the accounts GSwitch
    may switch to automatically. An account you leave off is never used
    automatically, whatever its quota.
-4. Under **Accounts** in Invoke settings, put the accounts in the order you want
+4. Under **Accounts** in Codex helper, put the accounts in the order you want
    them used, for example your larger plan first. GSwitch uses the first account
    that still has **Enough usage left** (20% of each usage window by default):
    before a task starts while nothing else runs, it switches to that account, and
@@ -161,8 +162,8 @@ you allow it and Claude uses it, GSwitch waits for other Codex tasks to finish,
 then switches to the first account in your order that has the model. Today no
 Codex model is limited to a plan, so nothing shows this label yet.
 
-The app's version is shown next to its name in the toolbar. The palette button
-near the right switches between the **Claude Code** (default), **Codex**, and
+The app's version is shown under its name in the sidebar. **Settings** >
+Appearance switches between the **Claude Code** (default), **Codex**, and
 **Classic** palettes, and between System, Light, and Dark.
 
 Keep GSwitch Claude Tool open while you use Invoke Mode. Switching back to
@@ -322,7 +323,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
   terminal-style view of what Codex is doing, live: the task, Codex's messages,
   each command and its output, the files it edits, and when it finishes, with
   the tokens used so far.
-- **History:** the **Activity** button (the clock icon in the toolbar) lists what
+- **History:** the **Results** section (Home shows the five newest) lists what
   Invoke Mode did: tasks started and how they ended, account switches and why,
   pauses and resumes, and automatic Wakes. **View log** on a finished task
   replays what Codex did. It keeps the latest 1,000 entries in
@@ -335,7 +336,7 @@ stopped. To keep working without Codex instead, tell Claude to carry on itself.
   notification and a notice listing the paused threads; tell Claude to continue
   them. While paused, the pause notice lists them too.
 - **Allowed models and status:** in Claude Code, ask Claude to run
-  `invoke-status`, or look at GSwitch's toolbar and Invoke settings.
+  `invoke-status`, or look at GSwitch's Home and Claude Code sections.
 - **A specific run:** Codex records every conversation in `~/.codex/sessions`.
   This shows the model, effort, and whether it could edit files (replace the ID):
 

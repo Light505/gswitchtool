@@ -168,10 +168,19 @@ function claudeSetup(enabled = false): ClaudeSetup {
   };
 }
 
+async function goTo(section: "Home" | "Accounts" | "Claude Code" | "Results" | "Settings") {
+  const nav = await screen.findByRole("navigation", { name: "Sections" });
+  await userEvent.click(within(nav).getByRole("button", { name: new RegExp(`^${section}`) }));
+}
+
+async function openClaudeSetup() {
+  await goTo("Claude Code");
+  return screen.findByRole("region", { name: "Claude Code" });
+}
+
 async function openInvokeSettings() {
-  await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-  const panel = await screen.findByRole("dialog", { name: "Claude Code" });
-  await userEvent.click(within(panel).getAllByRole("button", { name: "Invoke settings..." })[0]!);
+  await goTo("Claude Code");
+  return screen.findByRole("region", { name: "Codex helper" });
 }
 
 function prepareDefaults() {
@@ -308,6 +317,8 @@ describe("GSwitch account workspace", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.localStorage.clear();
+    // Most tests here work in the Accounts section, as if the user chose it.
+    window.localStorage.setItem("gswitch.section", "accounts");
     Object.defineProperty(window.navigator, "language", { configurable: true, value: "en-US" });
     prepareDefaults();
   });
@@ -326,45 +337,45 @@ describe("GSwitch account workspace", () => {
       return { version: "0.157.0", update_status: "unknown", supports_update: true };
     });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Codex CLI 0.157.0 available" }, { timeout: 5_000 }));
-    const dialog = await screen.findByRole("dialog", { name: "Codex CLI" });
-    expect(await within(dialog).findByText("Codex CLI 0.156.1 · 0.157.0 available")).toBeInTheDocument();
-    expect(within(dialog).getByText(/updates only the CLI/)).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Update" }));
-    expect(await within(dialog).findByText("Update complete.")).toBeInTheDocument();
+    // An available CLI update marks the Settings section.
+    await userEvent.click(await screen.findByRole("button", { name: /Codex CLI 0\.157\.0 available/ }, { timeout: 5_000 }));
+    const panel = await screen.findByRole("region", { name: "Codex CLI" });
+    expect(await within(panel).findByText("Codex CLI 0.156.1 · 0.157.0 available")).toBeInTheDocument();
+    expect(within(panel).getByText(/updates only the CLI/)).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Update" }));
+    expect(await within(panel).findByText("Update complete.")).toBeInTheDocument();
     // The version appears once, in the status line.
-    expect(within(dialog).getByText("Codex CLI 0.157.0 · up to date")).toBeInTheDocument();
-    expect(within(dialog).getAllByText(/0\.157\.0/)).toHaveLength(1);
-    expect(within(dialog).queryByText(/updates only the CLI/)).not.toBeInTheDocument();
+    expect(within(panel).getByText("Codex CLI 0.157.0 · up to date")).toBeInTheDocument();
+    expect(within(panel).getAllByText(/0\.157\.0/)).toHaveLength(1);
+    expect(within(panel).queryByText(/updates only the CLI/)).not.toBeInTheDocument();
     expect(mocks.updateCodexCli).toHaveBeenCalledOnce();
     expect(mocks.switchAccount).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /Codex CLI .* available/ })).not.toBeInTheDocument();
   });
 
-  it("keeps CLI update failures in the Chinese dialog with a next step", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
+  it("keeps CLI update failures in the Codex CLI panel with a next step", async () => {
     mocks.updateCodexCli.mockRejectedValue("codex_open");
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Codex CLI 0.157.0 可更新" }, { timeout: 5_000 }));
-    const dialog = await screen.findByRole("dialog", { name: "Codex CLI" });
-    expect(await within(dialog).findByText("Codex CLI 0.156.1 · 可更新到 0.157.0")).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("button", { name: "更新" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent("请退出 Codex 后再更新");
-    expect(within(dialog).getByText("Codex CLI 0.156.1 · 可更新到 0.157.0")).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /Codex CLI 0\.157\.0 available/ }, { timeout: 5_000 }));
+    const panel = await screen.findByRole("region", { name: "Codex CLI" });
+    expect(await within(panel).findByText("Codex CLI 0.156.1 · 0.157.0 available")).toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: "Update" }));
+    expect(await within(panel).findByRole("alert")).toHaveTextContent("Quit Codex, then try the update again.");
+    expect(within(panel).getByText("Codex CLI 0.156.1 · 0.157.0 available")).toBeInTheDocument();
   });
 
   it("does not offer an update to a CLI without the official command", async () => {
     mocks.codexCliInfo.mockResolvedValue({ version: "0.100.0", latest_version: "0.157.0", update_status: "available", supports_update: false });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Codex CLI 0.157.0 available" }, { timeout: 5_000 }));
-    const dialog = await screen.findByRole("dialog", { name: "Codex CLI" });
-    expect(await within(dialog).findByText("Codex CLI 0.100.0")).toBeInTheDocument();
-    expect(within(dialog).getByText(/can't update itself/)).toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Official install guide" })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("button", { name: /Codex CLI 0\.157\.0 available/ }, { timeout: 5_000 }));
+    const panel = await screen.findByRole("region", { name: "Codex CLI" });
+    expect(await within(panel).findByText("Codex CLI 0.100.0")).toBeInTheDocument();
+    expect(within(panel).getByText(/can't update itself/)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: "Official install guide" })).toBeInTheDocument();
   });
 
-  it("keeps current and offline CLI checks out of the toolbar", async () => {
+  it("keeps current and offline CLI checks out of the sidebar", async () => {
     mocks.codexCliInfo.mockResolvedValue({ version: "0.157.0", latest_version: "0.157.0", update_status: "current", supports_update: true });
     render(<App />);
     await screen.findByRole("heading", { name: "0 saved accounts" });
@@ -380,35 +391,59 @@ describe("GSwitch account workspace", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  it("uses the Simplified Chinese system locale and keeps the main account flow localized", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
-    render(<App />);
-
-    expect(await screen.findByRole("heading", { name: "已保存 0 个账户" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "添加账户" }));
-    const dialog = await screen.findByRole("dialog", { name: "添加 Codex 账户" });
-    await userEvent.click(within(dialog).getByText("其他方式"));
-    expect(within(dialog).getByRole("button", { name: /粘贴 auth JSON/ })).toBeVisible();
-  });
-
-  it("applies and remembers a manual language choice immediately", async () => {
+  it("switches sections from the sidebar and remembers the choice", async () => {
+    window.localStorage.removeItem("gswitch.section");
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     const first = render(<App />);
-    await screen.findByRole("heading", { name: "1 saved account" });
+    const nav = await screen.findByRole("navigation", { name: "Sections" });
+    const home = within(nav).getByRole("button", { name: "Home" });
+    await waitFor(() => expect(home).toHaveAttribute("aria-current", "page"));
 
-    await userEvent.click(screen.getAllByLabelText("Language")[0]);
-    await userEvent.click(screen.getByRole("button", { name: "简体中文" }));
-    expect(screen.getByRole("button", { name: "添加账户" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "已保存 1 个账户" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "批量选择" })).toHaveAttribute("aria-pressed", "false");
-    expect(window.localStorage.getItem("gswitch.language")).toBe("zh-CN");
+    await goTo("Results");
+    expect(within(nav).getByRole("button", { name: "Results" })).toHaveAttribute("aria-current", "page");
+    expect(home).not.toHaveAttribute("aria-current");
+    expect(await screen.findByRole("heading", { name: "Invoke Mode activity" })).toBeInTheDocument();
+    expect(window.localStorage.getItem("gswitch.section")).toBe("results");
+
+    await goTo("Accounts");
+    expect(await screen.findByRole("heading", { name: "1 saved account" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Invoke Mode activity" })).not.toBeInTheDocument();
+    await goTo("Results");
 
     first.unmount();
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "已保存 1 个账户" })).toBeInTheDocument();
-    const selectButton = screen.getByRole("button", { name: "批量选择" });
-    await userEvent.click(selectButton);
-    expect(screen.getByRole("button", { name: "完成" })).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("heading", { name: "Invoke Mode activity" })).toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("button", { name: "Results" }))
+      .toHaveAttribute("aria-current", "page");
+  });
+
+  it("opens Accounts by default before any account is saved and Home afterwards", async () => {
+    window.localStorage.removeItem("gswitch.section");
+    const first = render(<App />);
+    expect(await screen.findByRole("heading", { name: "Add your Codex accounts" })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Sections" });
+    expect(within(nav).getByRole("button", { name: /^Accounts/ })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("button", { name: /^Accounts/ })).toHaveTextContent("0");
+    // A default is not a choice, so nothing is remembered.
+    expect(window.localStorage.getItem("gswitch.section")).toBeNull();
+    first.unmount();
+
+    mocks.listAccounts.mockResolvedValue([chatAccount]);
+    render(<App />);
+    expect(await screen.findByRole("heading", { name: "Home" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "1 saved account" })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("button", { name: /^Accounts/ }))
+      .toHaveTextContent("1");
+  });
+
+  it("has no language control", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { name: "0 saved accounts" });
+    expect(screen.queryByRole("button", { name: /Language/ })).not.toBeInTheDocument();
+    await goTo("Settings");
+    expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
+    expect(screen.queryByText(/Language|简体中文/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Language|English/ })).not.toBeInTheDocument();
   });
 
   it("offers the same sign-in and import choices on first use and in Add account", async () => {
@@ -462,15 +497,14 @@ describe("GSwitch account workspace", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("opens other methods directly from the Chinese first-use screen", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
+  it("opens other methods directly from the first-use screen", async () => {
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "添加你的 Codex 账户" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^登录 / })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^从本机查找/ })).toBeInTheDocument();
-    await userEvent.click(screen.getByText("其他方式"));
-    await userEvent.click(screen.getByRole("button", { name: /^粘贴 auth JSON/ }));
-    const dialog = await screen.findByRole("dialog", { name: "添加 Codex 账户" });
+    expect(await screen.findByRole("heading", { name: "Add your Codex accounts" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Sign in / })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Find on this computer/ })).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Other methods"));
+    await userEvent.click(screen.getByRole("button", { name: /^Paste auth JSON/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Add a Codex account" });
     expect(within(dialog).getByRole("textbox", { name: "auth.json" })).toBeInTheDocument();
     expect(mocks.startOAuth).not.toHaveBeenCalled();
     expect(mocks.discoverLocalAccounts).not.toHaveBeenCalled();
@@ -536,7 +570,7 @@ describe("GSwitch account workspace", () => {
     await waitFor(() => expect(dialog).not.toBeInTheDocument());
   });
 
-  it("shows the current account on its card without repeating it in the toolbar", async () => {
+  it("shows the current account on its card without repeating it in the sidebar", async () => {
     const account = { ...chatAccount, email: "a-very-long-account-name-that-must-truncate@example.com", active: true };
     mocks.listAccounts.mockResolvedValue([account]);
     mocks.liveAccount.mockResolvedValue({
@@ -966,8 +1000,7 @@ describe("GSwitch account workspace", () => {
     expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
   });
 
-  it("shows a short Chinese reset time with keyboard access to the exact date", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
+  it("shows a short reset time with keyboard access to the exact date", async () => {
     const resetAt = Math.floor(Date.now() / 1000) + 5 * 60 * 60;
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     mocks.accountQuota.mockResolvedValue({
@@ -986,18 +1019,17 @@ describe("GSwitch account workspace", () => {
 
     const card = (await screen.findByRole("heading", { name: "person@example.com" })).closest(".account-card");
     const resetTime = card?.querySelector("time.quota-reset-time");
-    expect(resetTime).toHaveTextContent(/5小时 · \d{2}\/\d{2} \d{2}:\d{2}/);
-    expect(resetTime).toHaveAttribute("aria-label", expect.stringContaining("重置于"));
+    expect(resetTime).toHaveTextContent(/5h · \d{2}\/\d{2} \d{2}:\d{2}/);
+    expect(resetTime).toHaveAttribute("aria-label", expect.stringContaining("Resets"));
     expect(resetTime).toHaveAttribute("tabindex", "0");
-    expect(card).not.toHaveTextContent("重置于");
-    expect(screen.getByRole("button", { name: "唤醒 person@example.com" })).toBeEnabled();
+    expect(card).not.toHaveTextContent("Resets");
+    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
   });
 
   describe("quota countdown updates", () => {
     beforeEach(() => {
       vi.useFakeTimers();
       vi.setSystemTime(new Date(2026, 9, 5, 12, 10));
-      Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
       mocks.listAccounts.mockResolvedValue([chatAccount]);
     });
 
@@ -1041,17 +1073,17 @@ describe("GSwitch account workspace", () => {
       await act(async () => { view = render(<StrictMode><App /></StrictMode>); });
       const card = screen.getByRole("heading", { name: "person@example.com" }).closest(".account-card")!;
       const resetTime = card.querySelector<HTMLTimeElement>("time.quota-reset-time")!;
-      expect(resetTime).toHaveTextContent(/^30分 · /);
+      expect(resetTime).toHaveTextContent(/^30m · /);
       expect(activeCountdownTimers()).toHaveLength(1);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: `${action === "wake" ? "唤醒" : "刷新"} person@example.com` }));
+        fireEvent.click(screen.getByRole("button", { name: `${action === "wake" ? "Wake" : "Refresh"} person@example.com` }));
       });
       if (action === "wake") {
         await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-        const dialog = screen.getByRole("dialog", { name: "唤醒" });
-        await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "完成" })); });
+        const dialog = screen.getByRole("dialog", { name: "Wake" });
+        await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Done" })); });
       }
       expect(mocks.refreshAccountQuota).toHaveBeenCalledTimes(1);
       resetTime.focus();
@@ -1060,12 +1092,12 @@ describe("GSwitch account workspace", () => {
 
       expect(card.querySelector("time.quota-reset-time")).toBe(resetTime);
       expect(resetTime).toHaveFocus();
-      expect(resetTime).toHaveTextContent(/^5小时 · /);
+      expect(resetTime).toHaveTextContent(/^5h · /);
       expect(resetTime).toHaveAttribute("datetime", new Date(resetAt * 1000).toISOString());
       expect(activeCountdownTimers()).toHaveLength(1);
 
       await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
-      expect(resetTime).toHaveTextContent(/^4小时59分 · /);
+      expect(resetTime).toHaveTextContent(/^4h 59m · /);
       expect(resetTime).toHaveFocus();
       view.unmount();
       expect(activeCountdownTimers()).toHaveLength(0);
@@ -1080,12 +1112,12 @@ describe("GSwitch account workspace", () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
       const resetAt = Date.now() / 1000 - 1;
       mocks.refreshAccountQuota.mockResolvedValue(quotaAt(resetAt));
-      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "刷新 person@example.com" })); });
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Refresh person@example.com" })); });
 
       expect(card.querySelector("time.quota-reset-time")).toBe(resetTime);
-      expect(resetTime).toHaveTextContent("待刷新");
+      expect(resetTime).toHaveTextContent("Refresh to update");
       expect(resetTime).toHaveAttribute("datetime", new Date(resetAt * 1000).toISOString());
-      expect(resetTime).toHaveAttribute("aria-label", expect.stringContaining("待刷新"));
+      expect(resetTime).toHaveAttribute("aria-label", expect.stringContaining("Refresh to update"));
     });
   });
 
@@ -1139,14 +1171,13 @@ describe("GSwitch account workspace", () => {
     expect(screen.getByRole("button", { name: "Switch to person@example.com" })).toBeEnabled();
   });
 
-  it("localizes ChatGPT card actions in Simplified Chinese", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
+  it("names the plan on ChatGPT cards next to their actions", async () => {
     mocks.listAccounts.mockResolvedValue([{ ...chatAccount, plan_type: "team" }]);
     render(<App />);
 
-    expect(await screen.findByRole("button", { name: "切换到 person@example.com" })).toBeEnabled();
-    expect(screen.getByText("团队")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "唤醒 person@example.com" })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: "Switch to person@example.com" })).toBeEnabled();
+    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
   });
 
   it("identifies the current account in its disabled action", async () => {
@@ -1376,7 +1407,7 @@ describe("GSwitch account workspace", () => {
     expect(screen.queryByRole("button", { name: "Quota update failed for person@example.com" })).not.toBeInTheDocument();
   });
 
-  it("shows full-refresh progress on the toolbar without locking the workspace", async () => {
+  it("shows full-refresh progress in the Accounts header without locking the workspace", async () => {
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     mocks.accountQuota.mockResolvedValue({ ...staleQuota, status: "fresh" });
     mocks.refreshAccountQuota.mockImplementation(() => new Promise<QuotaView>(() => undefined));
@@ -1729,18 +1760,6 @@ describe("GSwitch account workspace", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("could not verify Fallback account");
   });
 
-  it("localizes a structured switch failure in Simplified Chinese", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
-    mocks.listAccounts.mockResolvedValue([chatAccount]);
-    mocks.switchAccount.mockRejectedValue({ code: "account_needs_sign_in" });
-    render(<App />);
-
-    await userEvent.click(await screen.findByRole("button", { name: "切换到 person@example.com" }));
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "person@example.com 需要重新登录。请登录或重新导入该账户后重试。",
-    );
-  });
-
   // Whether each failure makes Sign in again the card's primary action. The
   // account menu must offer it after every failure, so recovery never depends
   // on GSwitch having diagnosed the failure correctly.
@@ -2042,38 +2061,6 @@ describe("GSwitch account workspace", () => {
     expect(trigger).toHaveFocus();
   });
 
-  it("closes the language menu on an outside press", async () => {
-    const user = userEvent.setup();
-    render(<App />);
-    const heading = await screen.findByRole("heading", { name: "0 saved accounts" });
-    const trigger = screen.getByRole("button", { name: "Language" });
-
-    await user.click(trigger);
-    expect(screen.getByRole("button", { name: "English" })).toBeInTheDocument();
-    await user.click(heading);
-    expect(screen.queryByRole("button", { name: "English" })).not.toBeInTheDocument();
-    expect(trigger).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("localizes the remove-operation retry prompt in Simplified Chinese", async () => {
-    window.localStorage.setItem("gswitch.language", "zh-CN");
-    mocks.listAccounts.mockResolvedValue([chatAccount]);
-    mocks.accountQuota.mockResolvedValue({ ...staleQuota, status: "fresh" });
-    mocks.removeSavedAccount.mockRejectedValueOnce(
-      new Error("Another GSwitch operation is already in progress"),
-    );
-    render(<App />);
-    await screen.findByRole("heading", { name: "person@example.com" });
-
-    await userEvent.click(screen.getByLabelText("person@example.com 的更多操作"));
-    await userEvent.click(screen.getByRole("button", { name: "移除 person@example.com" }));
-    const dialog = await screen.findByRole("dialog", { name: "移除 person@example.com？" });
-    await userEvent.click(within(dialog).getByRole("button", { name: "移除" }));
-    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "GSwitch 正在执行其他操作。请等待完成后重试。",
-    );
-  });
-
   it("keeps Wake visible until completion and shows only this operation's result", async () => {
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     mocks.accountQuota.mockResolvedValue({ ...staleQuota, status: "fresh" });
@@ -2172,23 +2159,7 @@ describe("GSwitch account workspace", () => {
     expect(within(dialog).queryByText(/private provider details/)).not.toBeInTheDocument();
   });
 
-  it("explains the same Wake request failure in Chinese", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
-    mocks.listAccounts.mockResolvedValue([chatAccount]);
-    mocks.accountQuota.mockResolvedValue({ ...staleQuota, status: "fresh" });
-    mocks.wakeOperation.mockResolvedValue({
-      id: "wake-all",
-      status: "completed",
-      results: [{ account_id: "account-1", label: "Personal", result: "invalid_request", request_state: "sent", http_status: 400 }],
-    });
-    render(<App />);
-    await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "全部唤醒" }));
-    expect(await screen.findByText("请求参数未被接受。 (HTTP 400)")).toBeInTheDocument();
-  });
-
-  it("shows concise Chinese Wake results for a confirmed reply and a failure", async () => {
-    Object.defineProperty(window.navigator, "language", { configurable: true, value: "zh-CN" });
+  it("shows concise Wake results for a confirmed reply and a sign-in failure", async () => {
     mocks.listAccounts.mockResolvedValue([
       chatAccount,
       { ...chatAccount, id: "account-2", email: "other@example.com" },
@@ -2204,11 +2175,11 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "全部唤醒" }));
-    const dialog = await screen.findByRole("dialog", { name: "唤醒" });
-    expect(await within(dialog).findByText("已唤醒 1 · 失败 1")).toBeInTheDocument();
-    expect(within(dialog).getByText("已唤醒")).toBeInTheDocument();
-    expect(within(dialog).getByText("未发送 · 请重新登录。")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
+    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    expect(await within(dialog).findByText("1 succeeded · 1 failed")).toBeInTheDocument();
+    expect(within(dialog).getByText("Succeeded")).toBeInTheDocument();
+    expect(within(dialog).getByText("Not sent · Sign in again.")).toBeInTheDocument();
   });
 
   it("offers a manual older-model retry only after a definite model rejection", async () => {
@@ -2382,28 +2353,28 @@ describe("GSwitch account workspace", () => {
     expect(mocks.switchAccount).not.toHaveBeenCalled();
   });
 
-  it("switches palette and mode from the appearance menu and remembers them", async () => {
+  it("switches palette and mode in Settings and remembers them", async () => {
     window.localStorage.clear();
     delete document.documentElement.dataset.palette;
     delete document.documentElement.dataset.scheme;
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Appearance" }));
-    const menu = screen.getByLabelText("Appearance", { selector: "div" });
-    expect(within(menu).getByRole("button", { name: /Claude Code/ })).toHaveAttribute("aria-pressed", "true");
-    await userEvent.click(within(menu).getByRole("button", { name: /Codex/ }));
+    await goTo("Settings");
+    const appearance = await screen.findByRole("region", { name: "Appearance" });
+    const palettes = within(appearance).getByRole("group", { name: "Palette" });
+    const modes = within(appearance).getByRole("group", { name: "Mode" });
+    expect(within(palettes).getByRole("button", { name: /Claude Code/ })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(within(palettes).getByRole("button", { name: /Codex/ }));
     expect(document.documentElement.dataset.palette).toBe("codex");
     expect(window.localStorage.getItem("gswitch.palette")).toBe("codex");
+    expect(within(palettes).getByRole("button", { name: /Codex/ })).toHaveAttribute("aria-pressed", "true");
 
-    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
-    await userEvent.click(screen.getByRole("button", { name: "Dark" }));
+    await userEvent.click(within(modes).getByRole("button", { name: "Dark" }));
     expect(document.documentElement.dataset.scheme).toBe("dark");
 
     // The default palette and following the system leave no attribute.
-    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
-    await userEvent.click(within(screen.getByLabelText("Appearance", { selector: "div" })).getByRole("button", { name: /Claude Code/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Appearance" }));
-    await userEvent.click(screen.getByRole("button", { name: "System" }));
+    await userEvent.click(within(palettes).getByRole("button", { name: /Claude Code/ }));
+    await userEvent.click(within(modes).getByRole("button", { name: "System" }));
     expect(document.documentElement.dataset.palette).toBeUndefined();
     expect(document.documentElement.dataset.scheme).toBeUndefined();
     expect(window.localStorage.getItem("gswitch.scheme")).toBe("system");
@@ -2416,6 +2387,8 @@ describe("GSwitch account workspace", () => {
     render(<App />);
 
     expect(await screen.findByText("v1.2.0")).toHaveAttribute("title", "Version 1.2.0");
+    await goTo("Settings");
+    expect(within(await screen.findByRole("region", { name: "Updates" })).getByText("Version 1.2.0")).toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Check for updates" }));
     expect(await screen.findByText("GSwitch Claude Tool 1.2.0 is up to date.")).toBeInTheDocument();
 
@@ -2446,6 +2419,7 @@ describe("GSwitch account workspace", () => {
     updaterMocks.checkRollback.mockResolvedValue({ version: "1.7.0", downloadAndInstall });
     mocks.updateDelivery.mockResolvedValue("installer_exits");
     render(<App />);
+    await goTo("Settings");
     await userEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
     expect(await screen.findByText("Reinstall GSwitch Claude Tool v1.7.0?")).toBeInTheDocument();
     expect(screen.getByText("Your accounts and settings stay; settings added after v1.7.0 may be ignored by the older version.")).toBeInTheDocument();
@@ -2461,6 +2435,7 @@ describe("GSwitch account workspace", () => {
   it("reports when no previous release exists", async () => {
     updaterMocks.checkRollback.mockRejectedValue("NO_PREVIOUS_RELEASE");
     render(<App />);
+    await goTo("Settings");
     await userEvent.click(await screen.findByRole("button", { name: "Roll back to previous version" }));
     expect(await screen.findByText("No previous published version is available.")).toBeInTheDocument();
   });
@@ -2491,24 +2466,55 @@ describe("Invoke Mode", () => {
     mocks.listAccounts.mockResolvedValue([chatAccount, apiKeyAccount]);
   });
 
-  it("keeps Claude only as the plain switcher with one setup entry", async () => {
+  it("keeps Claude only as the plain switcher and says so on Home", async () => {
     render(<App />);
-    expect(await screen.findByRole("button", { name: "Claude Code: Claude only" })).toBeInTheDocument();
+    expect(await screen.findByRole("region", { name: "How your setup works" }))
+      .toHaveTextContent("Claude Code does all the work. Codex is not used.");
+    await goTo("Accounts");
     expect(await screen.findByText("person@example.com")).toBeInTheDocument();
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Account mode" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Invoke settings" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Invoke settings/ })).not.toBeInTheDocument();
+  });
+
+  it("explains the saved setup on Home and opens Claude Code from Change", async () => {
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: true }, apiKeyAccount]);
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: { ...claudeSetup(true), setup: "router" }, allowed_invocation_profiles: [] });
+    render(<App />);
+    const card = await screen.findByRole("region", { name: "How your setup works" });
+    expect(card).toHaveTextContent(
+      "Claude Code plans each task and checks the result. Codex writes the code first; if it fails, a stronger model takes over. Codex may use 1 of your 1 accounts and switches when one runs out.",
+    );
+    await userEvent.click(within(card).getByRole("button", { name: "Change" }));
+    const panel = await screen.findByRole("region", { name: "Claude Code" });
+    expect(within(panel).getByRole("button", { name: /^Router/ })).toHaveAttribute("aria-pressed", "true");
+    expect(window.localStorage.getItem("gswitch.section")).toBe("claude-code");
+  });
+
+  it("shows the five newest Activity events on Home and links to Results", async () => {
+    mocks.activity.mockResolvedValue([3, 0, 6, 1, 5, 2, 4].map((minutes) => ({
+      at: Date.now() - minutes * 60_000, kind: "task_started", task: `t${minutes}`, model: `m${minutes}`, effort: "low", write: false, cwd: "/work",
+    })));
+    render(<App />);
+    const recent = await screen.findByRole("region", { name: "Recent" });
+    await waitFor(() => expect(within(recent).getAllByRole("listitem")).toHaveLength(5));
+    expect(within(recent).getAllByRole("listitem").map((item) => item.textContent?.match(/on (m\d)/)?.[1]))
+      .toEqual(["m0", "m1", "m2", "m3", "m4"]);
+    await userEvent.click(within(recent).getByRole("button", { name: "See all in Results" }));
+    const results = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    await waitFor(() => expect(results.querySelectorAll(".activity-list > li")).toHaveLength(7));
   });
 
   it("enables Invoke through a saved setup and offers per-account eligibility", async () => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Claude Code: Claude only" }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true)));
-    expect(await screen.findByRole("button", { name: "Claude Code: Claude + Codex" })).toBeInTheDocument();
+    expect(await screen.findByText("Claude Code setup saved.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: /^Claude \+ Codex/ })).toHaveAttribute("aria-pressed", "true");
+    await goTo("Accounts");
     // Only ChatGPT accounts can be failover targets; API-key cards get no switch.
     const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
     expect(screen.getAllByRole("switch")).toHaveLength(1);
@@ -2534,8 +2540,8 @@ describe("Invoke Mode", () => {
     initial.router.claudeOnlyReview = review;
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Claude Code: Claude + Codex" }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
+    expect(within(panel).getByRole("button", { name: /^Claude \+ Codex/ })).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(within(panel).getByRole("button", { name: new RegExp("^" + name.replace("+", "\\+")) }));
     if (kind === "router") {
       await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
@@ -2563,15 +2569,16 @@ describe("Invoke Mode", () => {
     };
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith(expected));
-    expect(await screen.findByRole("button", { name: "Claude Code: " + name })).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Claude Code" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Claude Code setup saved.")).toBeInTheDocument();
+    expect(within(panel).getByRole("button", { name: new RegExp("^" + name.replace("+", "\\+")) })).toHaveAttribute("aria-pressed", "true");
+    await goTo("Accounts");
+    await screen.findByText("person@example.com");
     expect(screen.queryAllByRole("switch")).toHaveLength(enabled ? 1 : 0);
   });
 
   it.each(["codex", "claude", "price"] as const)("saves Use first %s only in mixed mode", async (prefer) => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     expect(within(panel).queryByRole("combobox", { name: "Use first" })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
     const control = within(panel).getByRole("combobox", { name: "Use first" });
@@ -2593,8 +2600,7 @@ describe("Invoke Mode", () => {
 
   it.each(["normal", "fast", "orchestrator"] as const)("saves Codex speed %s and retains the cutoff across setup modes", async (speed) => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
     const control = within(panel).getByRole("combobox", { name: "Speed" });
@@ -2627,8 +2633,7 @@ describe("Invoke Mode", () => {
 
   it("saves Normal after clearing the Fast cutoff", async () => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
     const speed = within(panel).getByRole("combobox", { name: "Speed" });
     await userEvent.selectOptions(speed, "fast");
@@ -2643,8 +2648,7 @@ describe("Invoke Mode", () => {
     const initial = { ...claudeSetup(true), codexSpeed: { mode: "fast" as const, fastMinRemaining: 35 } };
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }));
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude only/ }));
     expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
@@ -2654,8 +2658,7 @@ describe("Invoke Mode", () => {
 
   it.each(["", "-1", "91", "20.5"])("refuses an invalid Fast cutoff %s", async (value) => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
     await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
     const cutoff = within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" });
@@ -2667,8 +2670,7 @@ describe("Invoke Mode", () => {
 
   it.each(["0", "90"])("saves the Fast cutoff boundary %s", async (value) => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
     await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
     fireEvent.change(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }), { target: { value } });
@@ -2680,8 +2682,7 @@ describe("Invoke Mode", () => {
 
   it.each(["mixed", "claude", "codex"] as const)("saves sampling in %s mode", async (mode) => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     expect(within(panel).queryByRole("checkbox", { name: "Try cheaper models on easy tasks" })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
     await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
@@ -2696,27 +2697,28 @@ describe("Invoke Mode", () => {
 
   it("cancels draft changes without saving", async () => {
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
     await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
     await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
-    await userEvent.click(screen.getByRole("button", { name: "Claude Code: Claude only" }));
-    expect(within(await screen.findByRole("dialog", { name: "Claude Code" }))
-      .getByRole("button", { name: /^Claude only/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("button", { name: /^Claude only/ })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    expect(within(panel).getByRole("checkbox", { name: "haiku high" })).not.toBeChecked();
   });
 
-  it("preserves a router draft while visiting Invoke settings", async () => {
+  it("keeps a router draft while the Codex helper settings are saved", async () => {
+    mocks.modelCatalog.mockResolvedValue([
+      { model: "model-a", display_name: "Model A", supported_reasoning_efforts: ["low"], is_default: true },
+    ]);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    let panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
     await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
-    await userEvent.click(within(panel).getAllByRole("button", { name: "Invoke settings..." })[1]!);
-    const invokeDialog = await screen.findByRole("dialog", { name: "Invoke settings" });
-    await userEvent.click(within(invokeDialog).getByRole("button", { name: "Close Invoke settings" }));
-    panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const helper = screen.getByRole("region", { name: "Codex helper" });
+    await waitFor(() => expect(within(helper).getByRole("button", { name: "Save" })).toBeEnabled());
+    await userEvent.click(within(helper).getByRole("button", { name: "Save" }));
+    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
     expect(within(panel).getByRole("checkbox", { name: "haiku high" })).toBeChecked();
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
   });
@@ -2724,13 +2726,14 @@ describe("Invoke Mode", () => {
   it("keeps the panel open and setup unchanged when publication fails", async () => {
     mocks.setClaudeSetup.mockRejectedValue("Unable to atomically replace Claude Code setup");
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     expect(await within(panel).findByRole("alert")).toHaveTextContent("Claude Code setup was not saved.");
-    expect(screen.getByRole("button", { name: "Claude Code: Claude only" })).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: "Save" })).toBeEnabled();
+    await goTo("Home");
+    expect(await screen.findByRole("region", { name: "How your setup works" }))
+      .toHaveTextContent("Claude Code does all the work. Codex is not used.");
   });
 
   it("opens the panel while paused and clears the pause after a saved human decision", async () => {
@@ -2738,8 +2741,7 @@ describe("Invoke Mode", () => {
     mocks.invokePause.mockResolvedValue({ resumes_at: null });
     render(<App />);
     expect(await screen.findByRole("heading", { name: "Invoke Mode paused" })).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Claude Code: Claude + Codex" }));
-    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
     expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true));
@@ -2749,6 +2751,7 @@ describe("Invoke Mode", () => {
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.setAccountInvokeAllowed.mockRejectedValue("Account store lock is unavailable");
     render(<App />);
+    await goTo("Accounts");
 
     const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
     await userEvent.click(allow);
@@ -2767,8 +2770,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await openInvokeSettings();
-    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const dialog = await openInvokeSettings();
     expect(await within(dialog).findByRole("checkbox", { name: "medium reasoning for Model B" })).toBeChecked();
     expect(within(dialog).queryByRole("checkbox", { name: "medium reasoning for Model A" })).not.toBeInTheDocument();
 
@@ -2782,9 +2784,7 @@ describe("Invoke Mode", () => {
       { model: "model-a", reasoning_efforts: ["low", "max"] },
     ]));
     expect(mocks.setInvokeTaskDefaults).toHaveBeenCalledWith({ review: { model: "model-a", effort: "low" } });
-    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Invoke settings" })).not.toBeInTheDocument();
   });
 
   it("saves the account order and limits with the allowed models", async () => {
@@ -2802,8 +2802,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await openInvokeSettings();
-    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const dialog = await openInvokeSettings();
     expect(within(dialog).getByText("Not allowed")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Move person@example.com up" })).toBeDisabled();
     await userEvent.click(within(dialog).getByRole("button", { name: "Move second@example.com up" }));
@@ -2820,7 +2819,6 @@ describe("Invoke Mode", () => {
 
     // Out-of-range values are kept within limits.
     await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6, true));
-    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
@@ -2835,8 +2833,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await openInvokeSettings();
-    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const dialog = await openInvokeSettings();
     const badge = await within(dialog).findByText("Only on Pro");
     expect(badge).toHaveAttribute("title", expect.stringContaining("pro@example.com"));
     expect(within(dialog).getByText("Not on your accounts")).toBeInTheDocument();
@@ -2851,8 +2848,9 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    const strip = await screen.findByRole("region", { name: "Codex tasks" });
-    expect(within(strip).getByText("Running")).toBeInTheDocument();
+    const strip = await screen.findByRole("region", { name: "Running now" });
+    expect(await within(strip).findByText("Running")).toBeInTheDocument();
+    expect(within(strip).getByRole("list", { name: "Codex tasks" })).toBeInTheDocument();
     expect(within(strip).getByText("Waiting")).toBeInTheDocument();
     expect(within(strip).getByText("studio-app")).toHaveAttribute("title", "C:\\work\\studio-app");
     expect(within(strip).getByText("Thread 01a1f2c3")).toHaveAttribute("title", "01a1f2c3-4455-6677");
@@ -2892,8 +2890,8 @@ describe("Invoke Mode", () => {
       });
     render(<App />);
 
-    const strip = await screen.findByRole("region", { name: "Codex tasks" });
-    await userEvent.click(within(strip).getByRole("button", { name: "Watch the gpt-6.1-sol task in studio-app" }));
+    const strip = await screen.findByRole("region", { name: "Running now" });
+    await userEvent.click(await within(strip).findByRole("button", { name: "Watch the gpt-6.1-sol task in studio-app" }));
     const dialog = await screen.findByRole("dialog", { name: "gpt-6.1-sol in studio-app" });
     const log = within(dialog).getByRole("log");
     expect(await within(log).findByText("$ git status --short")).toBeInTheDocument();
@@ -2913,8 +2911,8 @@ describe("Invoke Mode", () => {
     mocks.readTaskLog.mockResolvedValue({ found: true, offset: 10, items: [{ kind: "message", text: "All tests pass." }] });
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
-    const history = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await goTo("Results");
+    const history = await screen.findByRole("region", { name: "Invoke Mode activity" });
     await userEvent.click(await within(history).findByRole("button", { name: "View log" }));
     const dialog = await screen.findByRole("dialog", { name: "Codex thread 01a1e9b8" });
     expect((await within(dialog).findAllByText("All tests pass."))[0]).toBeInTheDocument();
@@ -3002,8 +3000,8 @@ describe("Invoke Mode", () => {
     })));
     mocks.readTaskLog.mockResolvedValue({ found: true, offset: 1, items: [] });
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
-    const history = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await goTo("Results");
+    const history = await screen.findByRole("region", { name: "Invoke Mode activity" });
     await userEvent.click((await within(history).findAllByRole("button", { name: "View log" }))[0]);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Watch another task" }), "thread-2");
     const dialog = screen.getByRole("dialog", { name: "Codex task logs" });
@@ -3017,9 +3015,10 @@ describe("Invoke Mode", () => {
       { id: "task-1", started_at: Date.now(), model: "m", reasoning_effort: "low", write: false, cwd: "/x", running: true },
     ]);
     render(<App />);
-    await screen.findByRole("button", { name: "Activity" });
+    const running = await screen.findByRole("region", { name: "Running now" });
+    expect(within(running).getByText("Nothing is running.")).toBeInTheDocument();
     expect(mocks.invokeTasks).not.toHaveBeenCalled();
-    expect(screen.queryByRole("region", { name: "Codex tasks" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Codex tasks" })).not.toBeInTheDocument();
   });
 
   it("shows the activity history with account names and live entries", async () => {
@@ -3037,8 +3036,8 @@ describe("Invoke Mode", () => {
     });
     render(<App />);
 
-    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
-    const dialog = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await goTo("Results");
+    const dialog = await screen.findByRole("region", { name: "Invoke Mode activity" });
     expect(await within(dialog).findByText(
       "Switched Codex from person@example.com to second@example.com: person@example.com ran out of usage.",
     )).toBeInTheDocument();
@@ -3063,8 +3062,8 @@ describe("Invoke Mode", () => {
       { at: Date.now(), kind: "task_ended", task: "partial", model: "partial", status: "completed", usage: { input_tokens: 10000, output_tokens: 200, total_tokens: 10200 } },
     ]);
     render(<App />);
-    await userEvent.click(await screen.findByRole("button", { name: "Activity" }));
-    const dialog = await screen.findByRole("dialog", { name: "Invoke Mode activity" });
+    await goTo("Results");
+    const dialog = await screen.findByRole("region", { name: "Invoke Mode activity" });
     expect(await within(dialog).findByText("Input 2k · Cached 9k (82% hit) · Output 300")).toBeInTheDocument();
     expect(within(dialog).getByText("1.2k tokens")).toBeInTheDocument();
     expect(within(dialog).getByText("10.2k tokens · Output 200")).toBeInTheDocument();
@@ -3080,13 +3079,11 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    await openInvokeSettings();
-    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const dialog = await openInvokeSettings();
     const reserve = within(dialog).getByRole("spinbutton", { name: "Weekly reserve for person@example.com" });
     await userEvent.type(reserve, "30");
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({ "account-1": 30 }));
-    await userEvent.click(await screen.findByRole("button", { name: "Close Claude Code" }));
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
   });
 
@@ -3113,6 +3110,7 @@ describe("Invoke Mode", () => {
       return () => undefined;
     });
     render(<App />);
+    await goTo("Accounts");
     await screen.findAllByText("person@example.com");
     await waitFor(() => expect(announce).toBeDefined());
 
@@ -3129,6 +3127,7 @@ describe("Invoke Mode", () => {
       return () => undefined;
     });
     render(<App />);
+    await goTo("Accounts");
     await screen.findAllByText("person@example.com");
     await waitFor(() => expect(announce).toBeDefined());
 
@@ -3151,6 +3150,7 @@ describe("Invoke Mode", () => {
       return () => undefined;
     });
     render(<App />);
+    await goTo("Accounts");
     expect(await screen.findByText("second@example.com")).toBeInTheDocument();
     await waitFor(() => expect(notify).toBeDefined());
     const snapshots = mocks.appSnapshot.mock.calls.length;
@@ -3191,6 +3191,7 @@ describe("Invoke Mode", () => {
       return () => undefined;
     });
     render(<App />);
+    await goTo("Accounts");
     await screen.findByText("person@example.com");
     expect(screen.queryByRole("heading", { name: "Close Codex to continue" })).not.toBeInTheDocument();
 
@@ -3229,8 +3230,7 @@ describe("Invoke Mode", () => {
     mocks.modelCatalog.mockRejectedValue("Unable to start Codex App Server. Check that Codex is installed.");
     render(<App />);
 
-    await openInvokeSettings();
-    const dialog = await screen.findByRole("dialog", { name: "Invoke settings" });
+    const dialog = await openInvokeSettings();
     expect(await within(dialog).findByText("Could not read the Codex model list.")).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Save" })).toBeDisabled();
     expect(mocks.setInvokeProfiles).not.toHaveBeenCalled();

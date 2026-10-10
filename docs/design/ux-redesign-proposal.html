@@ -1,0 +1,379 @@
+<title>GSwitch UX Redesign</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one reading column for findings and decisions; mockups break wider as framed "app windows" in GSwitch's own Claude Code palette. */
+:root {
+  --bg: #f4f2ec;
+  --surface: #fdfcf9;
+  --surface-soft: #f8f6f1;
+  --text: #29261f;
+  --muted: #6f6a5f;
+  --soft: #9a9486;
+  --border: #e5e1d6;
+  --border-strong: #d5cfc1;
+  --accent: #c96442;
+  --accent-soft: #f7e8e0;
+  --on-accent: #ffffff;
+  --success: #2f7d4f;
+  --success-soft: #e5f2e8;
+  --warning: #9c5d07;
+  --warning-soft: #faefd8;
+  --danger: #b83c35;
+  --danger-soft: #fae8e4;
+  --codex: #1c1c1c;
+  --on-codex: #fafafa;
+  --font-body: "Public Sans", "Segoe UI", system-ui, sans-serif;
+  --font-app: "Segoe UI Variable", "Segoe UI", "Public Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #1f1e1b; --surface: #2a2925; --surface-soft: #25241f; --text: #f2efe6; --muted: #b3ad9f; --soft: #8c8678;
+    --border: #3d3a33; --border-strong: #4c483f; --accent: #d97757; --accent-soft: #4a2f24; --on-accent: #1f1e1b;
+    --success: #6cc08b; --success-soft: #23382a; --warning: #e7b45f; --warning-soft: #3d3020; --danger: #ef8a7f; --danger-soft: #45251f;
+    --codex: #f2efe6; --on-codex: #1f1e1b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #1f1e1b; --surface: #2a2925; --surface-soft: #25241f; --text: #f2efe6; --muted: #b3ad9f; --soft: #8c8678;
+  --border: #3d3a33; --border-strong: #4c483f; --accent: #d97757; --accent-soft: #4a2f24; --on-accent: #1f1e1b;
+  --success: #6cc08b; --success-soft: #23382a; --warning: #e7b45f; --warning-soft: #3d3020; --danger: #ef8a7f; --danger-soft: #45251f;
+  --codex: #f2efe6; --on-codex: #1f1e1b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--text); font-family: var(--font-body); font-size: 16px; line-height: 1.6; padding-inline: 16px; padding-block: 40px 80px; }
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 64px; }
+.col { max-width: 68ch; }
+h1, h2, h3 { line-height: 1.2; text-wrap: balance; margin: 0; }
+h1 { font-size: clamp(2rem, 4vw, 2.75rem); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 1.6rem; font-weight: 700; }
+h3 { font-size: 1.1rem; font-weight: 600; }
+p { margin: 0; }
+.stack { display: grid; gap: 16px; }
+.stack-lg { display: grid; gap: 28px; }
+.eyebrow { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.lede { font-size: 1.15rem; color: var(--muted); }
+code, .mono { font-family: var(--font-mono); font-size: 0.86em; }
+code { background: var(--surface-soft); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; }
+a { color: var(--accent); }
+
+/* Findings */
+.findings { display: grid; gap: 0; border-top: 1px solid var(--border); }
+.finding { display: grid; grid-template-columns: 8.5rem 1fr; gap: 20px; padding-block: 18px; border-bottom: 1px solid var(--border); }
+.finding .where { font-size: 0.8rem; color: var(--muted); font-weight: 600; padding-top: 3px; }
+.finding p + p { margin-top: 6px; color: var(--muted); }
+@media (max-width: 640px) { .finding { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Jargon table */
+.table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 620px; font-size: 0.93rem; }
+th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); font-weight: 600; background: var(--surface-soft); }
+tr:last-child td { border-bottom: 0; }
+td.old { font-family: var(--font-mono); font-size: 0.84rem; white-space: nowrap; }
+td.new { font-weight: 600; }
+
+/* App-window mockups */
+.mock-label { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; }
+.mock-label .tag { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 2px 8px; border-radius: 999px; }
+.tag.before { background: var(--danger-soft); color: var(--danger); }
+.tag.after { background: var(--success-soft); color: var(--success); }
+.tag.example { background: var(--surface-soft); color: var(--muted); border: 1px solid var(--border); }
+.window { font-family: var(--font-app); font-size: 14px; line-height: 1.45; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 12px; overflow: hidden; box-shadow: 0 10px 28px rgba(41, 38, 31, 0.08); }
+.titlebar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; background: var(--surface); border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+.titlebar .dots { display: flex; gap: 6px; }
+.titlebar .dots i { width: 10px; height: 10px; border-radius: 50%; background: var(--border-strong); display: block; }
+.app { display: grid; grid-template-columns: 180px 1fr; min-height: 360px; }
+.nav { background: var(--surface-soft); border-right: 1px solid var(--border); padding: 14px 10px; display: grid; align-content: start; gap: 2px; }
+.nav .item { padding: 7px 10px; border-radius: 7px; color: var(--muted); display: flex; justify-content: space-between; gap: 6px; }
+.nav .item.on { background: var(--accent-soft); color: var(--text); font-weight: 600; }
+.nav .count { font-size: 11px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 0 6px; color: var(--muted); }
+.pane { padding: 18px 20px; display: grid; gap: 14px; align-content: start; min-width: 0; }
+@media (max-width: 720px) { .app { grid-template-columns: 1fr; } .nav { grid-auto-flow: column; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; display: grid; gap: 8px; min-width: 0; }
+.card h4 { margin: 0; font-size: 14px; font-weight: 600; }
+.small { font-size: 12.5px; color: var(--muted); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--border-strong); background: var(--surface); font-size: 13px; color: var(--text); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--surface-soft); color: var(--muted); }
+.pill.ok { background: var(--success-soft); color: var(--success); border-color: transparent; }
+.pill.warn { background: var(--warning-soft); color: var(--warning); border-color: transparent; }
+.pill.codex { background: var(--codex); color: var(--on-codex); border-color: transparent; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.meter { height: 6px; background: var(--surface-soft); border: 1px solid var(--border); border-radius: 999px; overflow: hidden; }
+.meter > span { display: block; height: 100%; background: var(--success); }
+.meter.low > span { background: var(--warning); }
+.big { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.sentence { font-size: 15px; line-height: 1.5; }
+.sentence b { font-weight: 600; }
+.flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.step { border: 1px dashed var(--border-strong); border-radius: 9px; padding: 10px 12px; background: var(--surface); }
+.step .n { font-size: 11px; color: var(--muted); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.choice { border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; background: var(--surface); display: grid; gap: 4px; }
+.choice.on { border: 2px solid var(--accent); }
+.choice .title { font-weight: 600; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.fine { border-top: 1px solid var(--border); padding-top: 10px; display: grid; gap: 10px; }
+.setting { display: grid; grid-template-columns: 1fr auto; gap: 4px 14px; align-items: start; }
+.setting .why { grid-column: 1 / -1; }
+.select { border: 1px solid var(--border-strong); border-radius: 7px; padding: 3px 10px; background: var(--surface); font-size: 13px; white-space: nowrap; }
+.feed { display: grid; gap: 0; }
+.feed .ev { display: grid; grid-template-columns: 52px 1fr; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.feed .ev:last-child { border-bottom: 0; }
+.feed .t { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.before-dump { font-family: var(--font-mono); font-size: 12px; line-height: 1.55; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; overflow-x: auto; white-space: pre; color: var(--text); }
+.mtable { width: 100%; min-width: 0; font-size: 13px; }
+.mtable th, .mtable td { padding: 6px 8px; }
+.bar { display: inline-block; height: 8px; border-radius: 4px; background: var(--accent); vertical-align: middle; }
+
+/* Phases and decisions */
+.phases { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px; }
+.phase { border-top: 3px solid var(--accent); background: var(--surface); border-radius: 0 0 10px 10px; padding: 16px 18px; display: grid; gap: 8px; align-content: start; }
+.phase ul, .decide ul { margin: 0; padding-left: 1.1em; display: grid; gap: 4px; }
+.decide { display: grid; gap: 14px; counter-reset: q; }
+.q { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; display: grid; gap: 6px; }
+.q .rec { color: var(--success); font-weight: 600; }
+@media (prefers-reduced-motion: no-preference) { .window { transition: box-shadow .2s; } }
+</style>
+
+<div class="wrap">
+
+<header class="stack col">
+  <span class="eyebrow">GSwitch Claude Tool · proposal for v1.16 onward</span>
+  <h1>GSwitch UX Redesign</h1>
+  <p class="lede">GSwitch already does a lot: it keeps several Codex accounts, switches between them, and lets Claude Code hand work to Codex or to cheaper Claude models. Today a new user sees the parts but not the whole. This proposal reorganizes the app and both plugins around what a person is trying to do, in words they already know.</p>
+  <p class="small">Based on a walk-through of every screen in v1.14.0 (demo mode), every on-screen string in the app, the 7 Codex plugin commands and the 4 router commands. Mockup data are examples.</p>
+</header>
+
+<section class="stack-lg">
+  <div class="stack col">
+    <h2>What gets in the way today</h2>
+    <p>Each finding is something a first-time user would hit. Most are about words and placement, not missing features.</p>
+  </div>
+  <div class="findings col">
+    <div class="finding"><div class="where">First screen</div><div><p>The app opens on a grid of account cards. Nothing says what GSwitch is for or how it connects to Claude Code.</p><p>The only setup hint is "Add your Codex accounts". The Claude Code side (plugins, setup choice) is never introduced.</p></div></div>
+    <div class="finding"><div class="where">Setup choice</div><div><p>"Claude only / Claude + Codex / Router" are explained in one line each, and the Router line assumes you know what a worker is and what escalating means.</p><p>Nothing shows what will actually happen to your next task under each choice, or what it costs.</p></div></div>
+    <div class="finding"><div class="where">Settings split</div><div><p>Settings live in two dialogs reached from one button. "Invoke settings..." appears twice in the same panel. Which accounts Codex may use is set on each account card, while their order and reserve are set in the Invoke dialog.</p></div></div>
+    <div class="finding"><div class="where">Model names</div><div><p>Choices are raw IDs and effort levels (<code>gpt-6.1-sol</code>, <code>haiku</code> × low…max, up to 30 checkboxes). There is no hint of which is strong, slow or expensive.</p></div></div>
+    <div class="finding"><div class="where">What is happening</div><div><p>The app shows running Codex tasks, but not what the router decided, which Claude workers ran, or how well each model did. Those live only in chat (<code>/router:stats</code>, the Router line), in different words.</p></div></div>
+    <div class="finding"><div class="where">Plugins</div><div><p>Two plugins, eleven commands, three naming styles. <code>/codex:setup</code>, <code>/codex:invoke-status</code>, <code>/router:mode</code> and the status line all partly answer "is this set up right?".</p><p>Router output speaks in internals: "floor 55 (hard)", "candidates", "Next after verify".</p></div></div>
+    <div class="finding"><div class="where">Translation</div><div><p>The newest panel text (Use first, Speed, Fast cutoff, Try cheaper models) is written straight into the code, so the Chinese interface shows it in English.</p></div></div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <div class="stack col">
+    <h2>The new shape</h2>
+    <p>Five places, named by what you do there. Everything about one subject lives in one place. Advanced options stay, folded under "Fine-tune" with one line on what each one changes.</p>
+  </div>
+  <div class="grid3">
+    <div class="card"><h4>Home</h4><p class="small">One sentence on how your setup works, whether anything needs you, and what is running now.</p></div>
+    <div class="card"><h4>Accounts</h4><p class="small">Your Codex accounts, their usage, and in one list which ones Claude may use and in what order.</p></div>
+    <div class="card"><h4>Claude Code</h4><p class="small">How Claude and Codex share work. A guided choice with a preview, plus "Fine-tune".</p></div>
+    <div class="card"><h4>Results</h4><p class="small">What each model did: tasks, success rate, time, cost. The data captured in 1.15 shows up here.</p></div>
+    <div class="card"><h4>Settings</h4><p class="small">Appearance, language, updates, Codex CLI, plugin install check.</p></div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <div class="mock-label"><h2>Home</h2><span class="tag after">After</span><span class="tag example">Example data</span></div>
+  <div class="window" role="img" aria-label="Mockup of the proposed Home screen">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span>GSwitch Claude Tool</div>
+    <div class="app">
+      <div class="nav">
+        <div class="item on">Home</div>
+        <div class="item">Accounts <span class="count">6</span></div>
+        <div class="item">Claude Code</div>
+        <div class="item">Results</div>
+        <div class="item">Settings</div>
+      </div>
+      <div class="pane">
+        <div class="card">
+          <span class="small">How your setup works</span>
+          <p class="sentence">Claude Code plans each task and checks the result. <b>Codex writes the code first</b>; if it fails twice, a stronger model takes over. Codex uses <b>4 of your 6 accounts</b> and switches when one runs out.</p>
+          <div class="row"><span class="btn">Change in Claude Code</span><span class="pill ok">Both plugins installed</span></div>
+        </div>
+        <div class="grid2">
+          <div class="card">
+            <h4>Codex usage</h4>
+            <div class="row" style="justify-content:space-between"><span class="small">Best account left: sam@ · 5-hour</span><span class="big">100%</span></div>
+            <div class="meter"><span style="width:100%"></span></div>
+            <div class="row" style="justify-content:space-between"><span class="small">All allowed accounts · weekly</span><span class="big">31%</span></div>
+            <div class="meter low"><span style="width:31%"></span></div>
+          </div>
+          <div class="card">
+            <h4>Running now</h4>
+            <div class="row"><span class="pill codex">Codex</span><span>Sol, medium · edits files</span></div>
+            <span class="small">studio-app · 4 min · <u>Watch</u> · <u>Stop</u></span>
+            <div class="row"><span class="pill">Claude</span><span>Sonnet, low · tests only</span></div>
+            <span class="small">studio-app · 1 min</span>
+          </div>
+        </div>
+        <div class="card">
+          <h4>Recent</h4>
+          <div class="feed">
+            <div class="ev"><span class="t">09:56</span><span>Codex (Sol, medium) finished “Add export button”: tests passed, 3 files changed.</span></div>
+            <div class="ev"><span class="t">09:51</span><span>Codex switched from sam@ to alex@: sam@ used up its 5-hour limit.</span></div>
+            <div class="ev"><span class="t">09:30</span><span>Tried a cheaper model on an easy task: Luna, low passed. (1 of 10 easy tasks is a trial.)</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="small col">The opening sentence is generated from the actual settings, so it is always true. The feed merges Codex events (today in Activity) with router decisions (today only in chat).</p>
+</section>
+
+<section class="stack-lg">
+  <div class="mock-label"><h2>Claude Code setup</h2><span class="tag after">After</span></div>
+  <div class="window" role="img" aria-label="Mockup of the proposed Claude Code setup screen">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span>GSwitch Claude Tool · Claude Code</div>
+    <div class="app">
+      <div class="nav">
+        <div class="item">Home</div>
+        <div class="item">Accounts <span class="count">6</span></div>
+        <div class="item on">Claude Code</div>
+        <div class="item">Results</div>
+        <div class="item">Settings</div>
+      </div>
+      <div class="pane">
+        <p class="small">Who writes the code when you ask Claude Code for a change?</p>
+        <div class="choice"><div class="title">Claude alone</div><span class="small">Claude does everything. Simplest. Uses only your Claude plan.</span></div>
+        <div class="choice"><div class="title">Claude, with Codex as helper</div><span class="small">Claude decides when to hand a task to Codex and asks Codex to review bigger changes.</span></div>
+        <div class="choice on"><div class="title">Automatic team <span class="pill ok">Recommended with several Codex accounts</span></div><span class="small">For each task GSwitch picks the cheapest model that is strong enough, checks the result with tests, and moves to a stronger model if it fails.</span></div>
+        <div class="card">
+          <h4>What happens to a typical task</h4>
+          <div class="flow">
+            <div class="step"><div class="n">1 · Rate</div>Claude rates it: small</div>
+            <div class="step"><div class="n">2 · Pick</div>Codex Luna, max · ~$0.18</div>
+            <div class="step"><div class="n">3 · Check</div>Tests run on the change</div>
+            <div class="step"><div class="n">4 · If it fails</div>Codex Sol, low takes over</div>
+          </div>
+        </div>
+        <div class="fine">
+          <span class="small" style="font-weight:600">Fine-tune</span>
+          <div class="setting"><span>Try first</span><span class="select">Codex ▾</span><span class="small why">Codex first saves your Claude plan for planning and checking. “Cheapest” uses API prices instead.</span></div>
+          <div class="setting"><span>Claude models it may use</span><span class="select">Haiku, Sonnet, Opus up to high ▾</span><span class="small why">Stronger models cost more. Anything above Opus medium asks you before it starts.</span></div>
+          <div class="setting"><span>Codex speed</span><span class="select">Claude decides ▾</span><span class="small why">Fast finishes sooner but uses about 2.5× the Codex limit. Claude asks for it only when you are waiting.</span></div>
+          <div class="setting"><span>Try cheaper models on easy tasks</span><span class="select">On ▾</span><span class="small why">1 in 10 easy tasks first tries a cheaper or untested model, so Results can show what it can do.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="stack">
+    <div class="mock-label"><h3>Today, for comparison</h3><span class="tag before">Before</span></div>
+<div class="before-dump">Claude Code
+( ) Claude only        Claude does all the work. Codex is not used.
+( ) Claude + Codex     Claude sends suitable coding tasks to Codex and has Codex review…   [Invoke settings...]
+(•) Router             The router plugin picks a Claude worker or Codex for each task and…  [Invoke settings...]
+Router mode [Mixed ▾]
+Allowed Claude workers   low  medium  high  xhigh  max
+  Haiku                  [x]  [x]     [ ]   [ ]    [ ]
+  Sonnet                 [x]  [x]     [x]   [x]    [ ]
+  Opus                   [x]  [x]     [x]   [ ]    [ ]
+Workers costlier than Opus medium still ask you before they start.
+Use first [Codex ▾]    [x] Try cheaper models on easy tasks
+Speed [Orchestrator decides ▾]
+Applies to every Claude Code session from your next message.</div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <div class="mock-label"><h2>Results</h2><span class="tag after">After</span><span class="tag example">Example data</span></div>
+  <div class="window" role="img" aria-label="Mockup of the proposed Results screen">
+    <div class="titlebar"><span class="dots"><i></i><i></i><i></i></span>GSwitch Claude Tool · Results</div>
+    <div class="app">
+      <div class="nav">
+        <div class="item">Home</div>
+        <div class="item">Accounts <span class="count">6</span></div>
+        <div class="item">Claude Code</div>
+        <div class="item on">Results</div>
+        <div class="item">Settings</div>
+      </div>
+      <div class="pane">
+        <div class="row" style="justify-content:space-between"><h4 style="margin:0">Last 30 days · 53 tasks</h4><span class="select">All difficulties ▾</span></div>
+        <div class="table-wrap" style="border-radius:8px">
+          <table class="mtable">
+            <thead><tr><th>Model</th><th>Tasks</th><th>Passed first time</th><th>Typical time</th><th>Typical cost</th></tr></thead>
+            <tbody>
+              <tr><td>Codex Sol, xhigh</td><td>15</td><td><span class="bar" style="width:68px"></span> 80%</td><td>16 min</td><td>$1.04</td></tr>
+              <tr><td>Codex Sol, medium</td><td>17</td><td><span class="bar" style="width:55px"></span> 65%</td><td>11 min</td><td>$0.70</td></tr>
+              <tr><td>Claude Haiku, low</td><td>8</td><td><span class="bar" style="width:64px"></span> 75%</td><td>9 min</td><td>$0.12</td></tr>
+              <tr><td>Codex Luna, low <span class="pill">trial</span></td><td>2</td><td class="small">Too few to judge</td><td>6 min</td><td>$0.04</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="small">“Passed first time” counts a task as passed when its tests passed without a second model. Ratings need 10 tasks per model and difficulty before they change routing.</p>
+      </div>
+    </div>
+  </div>
+  <div class="stack">
+    <div class="mock-label"><h3>Today: only in chat</h3><span class="tag before">Before</span></div>
+<div class="before-dump">/router:stats
+Worker                     Difficulty  Speed   Attempts  Success  Median min  Median tokens  Median USD
+codex:gpt-6.1-sol/xhigh    high-risk   normal  13        85%      15.1        412k           -
+codex:gpt-6.1-sol/medium   hard        normal  10        60%      11.0        388k           -
+router:haiku-low           moderate    -       7         86%      9.2         210k           0.12</div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <div class="stack col">
+    <h2>Words: what changes</h2>
+    <p>Internal names stay in the code and in logs; people see the plain version. Where a term is the vendor’s own (5-hour limit, reasoning effort), it stays and gets a one-line explanation the first time it appears.</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Today</th><th>Proposed</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="old">Invoke Mode</td><td class="new">Codex helper</td><td>Says what it is. “Allow in Invoke Mode” becomes “Claude may use this account”.</td></tr>
+        <tr><td class="old">Router</td><td class="new">Automatic team</td><td>Describes the result, not the plugin.</td></tr>
+        <tr><td class="old">Mixed / Claude workers only / Codex only</td><td class="new">Claude and Codex / Claude models only / Codex only</td><td>“Workers” is an internal word.</td></tr>
+        <tr><td class="old">Use first</td><td class="new">Try first</td><td>Matches what it controls: the first attempt.</td></tr>
+        <tr><td class="old">Speed: Orchestrator decides</td><td class="new">Codex speed: Claude decides</td><td>Nobody outside knows “orchestrator”.</td></tr>
+        <tr><td class="old">Wake / Wake all</td><td class="new">Start reset timer</td><td>The button’s effect, in the app’s own help text.</td></tr>
+        <tr><td class="old">Weekly reserve %</td><td class="new">Keep for yourself (% of weekly limit)</td><td>Says who the reserve is for.</td></tr>
+        <tr><td class="old">Enough usage left 20 %</td><td class="new">Move on when an account has less than 20% left</td><td>States the rule as an action.</td></tr>
+        <tr><td class="old">floor 55 · candidates · escalation</td><td class="new">minimum strength · options · try a stronger model</td><td>Router chat output and Results use the same words.</td></tr>
+        <tr><td class="old">gpt-6.1-sol / haiku-low</td><td class="new">Codex Sol, low · Claude Haiku, low</td><td>Family first, then effort, everywhere.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <div class="stack col">
+    <h2>Plugins</h2>
+    <p>The plugins keep working the same way; their output and command names change so chat and the app tell one story.</p>
+  </div>
+  <div class="findings col">
+    <div class="finding"><div class="where">One check</div><div><p>A single <code>/gswitch:status</code> answers “is everything set up?”: app running, setup choice, plugins, Codex signed in, accounts Claude may use. It replaces the overlap between <code>/codex:setup</code>, <code>/codex:invoke-status</code> and <code>/router:mode</code> (the old names keep working).</p></div></div>
+    <div class="finding"><div class="where">Per-message line</div><div><p>“Router: mode=mixed · Use first: codex · Claude 5h: unknown · …” becomes one sentence matching Home, for example “Automatic team · Codex first · Claude plan: 64% left”.</p></div></div>
+    <div class="finding"><div class="where">Plan output</div><div><p>“floor 55 (hard)” becomes “Needs a strong model (hard task)”, and each option shows its plain name, cost and time.</p></div></div>
+    <div class="finding"><div class="where">Stats</div><div><p><code>/router:stats</code> prints the same columns as the Results screen and points to it.</p></div></div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <h2>Order of work</h2>
+  <div class="phases">
+    <div class="phase"><span class="eyebrow">Phase 1 · app 1.16</span><h3>Structure and words</h3><ul><li>Five sections with left navigation</li><li>Home with the setup sentence and Running now</li><li>One list for which accounts Claude may use, order and reserve</li><li>All new wording, every string translated</li></ul></div>
+    <div class="phase"><span class="eyebrow">Phase 2 · app 1.17</span><h3>Guidance and results</h3><ul><li>Guided Claude Code choice with the “typical task” preview</li><li>Fine-tune with a line per option</li><li>Results screen from the captured data</li><li>First-run steps: accounts, setup choice, plugin check</li></ul></div>
+    <div class="phase"><span class="eyebrow">Phase 3 · plugins</span><h3>Chat matches the app</h3><ul><li><code>/gswitch:status</code></li><li>Plain per-message line and plan output</li><li>Stats in Results’ columns</li><li>Old commands kept as aliases</li></ul></div>
+  </div>
+</section>
+
+<section class="stack-lg">
+  <h2>Decisions</h2>
+  <p class="small col">Decided by the owner on 2026-10-10.</p>
+  <div class="decide col">
+    <div class="q"><h3>1. Navigation</h3><p class="rec">Left sidebar with five sections.</p></div>
+    <div class="q"><h3>2. Renames</h3><p class="rec">The word table is accepted. Internal names stay in code and logs.</p></div>
+    <div class="q"><h3>3. Chinese translation</h3><p class="rec">Dropped. The language menu and the Chinese text are removed; the app is English only.</p></div>
+    <div class="q"><h3>4. One status command</h3><p class="rec">Add <code>/gswitch:status</code>; the old commands keep working.</p></div>
+  </div>
+</section>
+
+</div>

@@ -14,12 +14,19 @@ The interface does not need to advertise feature depth.
 Keep one native-titlebar main window and one primary information hierarchy.
 The default desktop canvas is 1360 by 900, centered on cold start and kept
 inside the available work area, with a 700 by 520 minimum. Refocusing does
-not move a window the user has positioned. The
-main surface is an account workspace: a quiet toolbar, a narrow safety notice
-when needed, and a responsive grid of small account cards. Three cards fit on a
-wide desktop with enough card width, then collapse to two and one card without introducing navigation.
-Focused dialogs may handle add-account, explicit confirmation, progress/results,
-or recovery; they do not create a second navigation system.
+not move a window the user has positioned. A
+left sidebar of about 190 pixels, kept at the minimum width, holds the GSwitch
+mark, name, and version and five sections: **Home**, **Accounts** (with the
+saved-account count), **Claude Code**, **Results**, and **Settings**. The
+selected section is a per-computer WebView preference; without one the window
+opens Home, or Accounts while no account is saved. The update, safety,
+recovery, Invoke pause, and close-Codex notices and the floating notice appear
+above every section. Accounts is the account workspace: a header with Select
+accounts, Refresh, Wake all, and Add account, then a responsive grid of small
+account cards. Three cards fit on a wide desktop with enough card width, then
+collapse to two and one card. Focused dialogs may handle add-account, explicit
+confirmation, progress/results, or recovery; they do not create a second
+navigation system.
 
 Watch opens up to four Codex task logs in one dialog, with two columns on wide
 windows and one on narrow windows. Each log scrolls and closes independently;
@@ -28,22 +35,25 @@ current task or a log from the Activity history it was opened from. Watch and
 Activity show uncached input, cached input with hit rate, and output when known.
 Codex's input total includes cached input; the hit rate uses that full total.
 
-The toolbar contains the vertically centered GSwitch mark and name, a
-**Claude Code: <setup name>** button, Refresh, Wake all, Add account, and a compact
-language menu. The Claude Code button opens one wide setup panel with selectable
-Claude only, Claude + Codex, and Router cards, Save/Cancel, and a next-message
-scope note. Router exposes its mode, a three-model by five-effort worker grid,
-and Codex review on/off only in Claude mode. Claude + Codex and Router cards
-open the existing Invoke settings dialog; returning preserves the setup draft.
-Invoke Mode is derived from the saved setup and has no direct frontend toggle.
-When it is on, each ChatGPT card retains its **Allow in Invoke Mode** row.
-The setup button remains available during an Invoke pause. When an Invoke
-Mode switch is waiting for the user to quit
+Home says in one sentence how the saved setup shares the work
+(`src/setupSummary.ts`), with a **Change** button that opens Claude Code; lists
+running Codex tasks with Watch and Stop (or "Nothing is running."); and shows
+the five newest Activity events with a link to Results. The Claude Code section
+shows the setup as a page with selectable Claude only, Claude + Codex, and
+Router cards, Save and Cancel (Cancel discards unsaved edits), and a
+next-message scope note. Router exposes its mode, a three-model by five-effort
+worker grid, and Codex review on/off only in Claude mode. Below it, **Codex
+helper** holds the Invoke settings with their own Save; saving either part
+keeps the other's unsaved edits. Invoke Mode is derived from the saved setup
+and has no direct frontend toggle. When it is on, each ChatGPT card retains its
+**Allow in Invoke Mode** row. The Claude Code section remains available during
+an Invoke pause. When an Invoke Mode switch is waiting for the user to quit
 Codex, the window shows it in the safety-notice position with both accounts and
 a **Cancel switch** action, and asks the operating system for attention. The current account is
-identified on its card rather than repeated beside the brand. The language
-button uses Remix Icon's `earth-line` at 18px, inheriting the current theme
-color. It is a command bar, not a dashboard header or custom window chrome.
+identified on its card rather than repeated beside the brand. Results shows the
+Activity history with its seven-day summary. Settings holds Appearance (palette
+and mode), Updates (version, Check for updates, Roll back to previous version),
+and the Codex CLI status and update.
 Unknown, setup, and recovery states use the existing actionable notice. With
 saved accounts, a signed-out Codex uses one quiet text notice without another
 button; without saved accounts, the empty state provides the next step.
@@ -89,7 +99,7 @@ The empty state and the add dialog share the same choices: a prominent
 **Sign in** action starts official Codex browser sign-in directly, followed by
 **Find on this computer** and **Choose files**. Pasted auth JSON and API key
 remain an **Other methods** disclosure. Browser actions use a tabbed-window
-icon; the globe belongs only to the language menu. The notice for an unsaved
+icon. The notice for an unsaved
 current account retains its **Save current account** shortcut. One concise
 privacy note says that GSwitch reads only
 accounts the user chooses to import and does not change their source. The local
@@ -103,9 +113,9 @@ explicit reset preserves GSwitch's damaged file without touching Codex.
 ## Interaction states
 
 After the account grid appears, GSwitch checks the installed Codex CLI against
-OpenAI's latest stable release in the background. The toolbar shows a compact
-entry only when a newer version is confirmed. Its dialog states the version
-once, in one status line ("up to date" or "{latest} available"), and offers an
+OpenAI's latest stable release in the background. A dot on the Settings
+section marks a confirmed newer version. The Codex CLI part of Settings states
+the version once, in one status line ("up to date" or "{latest} available"), and offers an
 explicit update action only when that CLI exposes the official `update`
 command; a single note says the desktop app updates separately and Codex must
 be quit first, and progress shows on the Update button. An unsupported CLI
@@ -122,7 +132,7 @@ is installed without a click.
 - Opening a dialog moves keyboard focus inside it. Tab stays inside, and closing
   restores focus to the launching control. A dialog cannot be dismissed while
   its non-cancellable action is in progress.
-- The account and language menus are small popovers, and only one is open at a
+- The account menus are small popovers, and only one is open at a
   time. Pressing outside, Escape, moving keyboard focus away, opening another
   menu, or choosing an action closes the menu. Escape and a chosen action
   return focus to the menu button.
@@ -152,8 +162,8 @@ is installed without a click.
   the confirmation with a retry instruction.
 - Quota refreshes run in separate lanes: automatic reads one at a time, and a
   user's Refresh or Refresh all up to three read-only reads at once, never
-  waiting behind automatic reads. Refresh all shows "Refreshing n/total" on the
-  toolbar and leaves the workspace usable; a successful card refresh needs no
+  waiting behind automatic reads. Refresh all shows "Refreshing n/total" in the
+  Accounts header and leaves the workspace usable; a successful card refresh needs no
   notice because the card itself updates. Each card shows how long ago its
   quota was read next to its refresh button. Automatic reads leave switching
   available while waiting for the provider and never refresh a saved
@@ -184,8 +194,8 @@ is installed without a click.
 - Keep card content compact. Truncated account and workspace names expose their
   full value on hover; do not reserve empty vertical space for the old heading
   reminder. Quota reset timing shows one compact relative and absolute line,
-  such as `4h 55m · 09/27 16:30` or `4小时55分 · 09/27 16:30`, without a visible
-  introductory label or trailing “in/后”. Show the year only across years and
+  such as `4h 55m · 09/27 16:30`, without a visible introductory label or
+  trailing “in”. Show the year only across years and
   allow wrapping at the separator on narrow cards without truncating the date.
   Stale data omits the live countdown; an elapsed
   fresh reset marker says to refresh. Hover, keyboard focus, and assistive
@@ -218,13 +228,10 @@ each actual phase without promising that signing protects account data.
 
 ## Language
 
-The application ships English and Simplified Chinese in one frontend resource.
-On first launch it maps a compatible system/WebView locale to one of those
-languages and otherwise falls back to English. The toolbar language menu offers
-System / Automatic, English, and Simplified Chinese; a manual choice applies immediately
-and wins over automatic detection. The only persisted WebView preference is that
-language choice. Dates, reset/expiry timing, numbers, and percentages use the
-selected locale's platform formatters.
+The application is English only, from one frontend resource (`src/i18n.ts`);
+there is no language choice. Dates, numbers, and percentages use the platform
+formatters with the system locale when it is English or Simplified Chinese and
+`en-US` otherwise. Compact reset and expiry timing is always English.
 
 ## Visual rules
 
@@ -241,11 +248,11 @@ borders, and an eight-pixel spacing rhythm. Surfaces use modest 10 to 15 pixel
 corner radii and short response transitions. Controls should look native to a
 desktop utility without imitating macOS chrome on every platform. The canonical
 GSwitch mark is the compact white switching loop on a flat indigo rounded
-square in `assets/gswitch-icon.svg`; it is the source for the toolbar and native
+square in `assets/gswitch-icon.svg`; it is the source for the sidebar and native
 or installer icon assets.
 
 GSwitch Claude Tool has three palettes, each with light and dark tokens at the
-top of `src/styles.css`, chosen in the toolbar's appearance menu
+top of `src/styles.css`, chosen under Settings > Appearance
 (`src/appearance.ts`) with a System, Light, or Dark mode. **Claude Code**, the
 default, uses warm cream or charcoal surfaces and Claude's clay accent; its
 Codex touch is the graphite (light) or near-white (dark) **Invoke** side of the

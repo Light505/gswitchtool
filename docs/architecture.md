@@ -173,9 +173,9 @@ migration is a one-shot command with no startup scan, watcher, scheduler, or
 background job. OAuth links are short-lived, user-visible links associated with
 an in-memory login session.
 
-The WebView may persist its selected display language only. Language selection
-is not account state and must not share storage with credentials, provider data,
-or recovery records.
+The WebView persists display preferences only: the palette, the light/dark
+mode, and the selected sidebar section. They are not account state and must not
+share storage with credentials, provider data, or recovery records.
 
 Potentially blocking Rust commands are asynchronous and move their existing
 synchronous domain operation to Tauri's blocking worker pool. This keeps the

@@ -218,8 +218,8 @@ as applicable:
 - quota refresh lanes: automatic reads one at a time, a user's refresh not
   waiting behind them, up to three read-only reads in a full refresh, the
   official sign-in refresh only after a read shows it is needed, same-account
-  refresh coalescing, six-account continuation after partial failure, toolbar
-  progress, and stale or unavailable state on each failed card;
+  refresh coalescing, six-account continuation after partial failure, Accounts
+  header progress, and stale or unavailable state on each failed card;
 - the automatic refresh policy: unread accounts at once, the current account
   every two minutes or one minute after focus, other accounts after thirty
   minutes or once a quota window has reset, retries spaced from the last
@@ -278,9 +278,8 @@ as applicable:
 - the card showing the quota a reset returns without a manual refresh, and a
   failed reset reloading state so the recovery prompt appears;
 - browser-login cancellation, selected-file import boundaries, account-space
-  empty state, quota stale state, and visible Wake progress in English and
-  Simplified Chinese at the minimum and default window sizes in light and dark
-  themes;
+  empty state, quota stale state, and visible Wake progress at the minimum and
+  default window sizes in light and dark themes;
 - local migration allowlisting, no startup scan, plaintext and supported
   encrypted Cockpit records, missing/bad key and envelope fail-closed behavior,
   source immutability, sanitized previews, existing-identity suppression,
@@ -299,12 +298,14 @@ as applicable:
   other methods, explicit scanning and file selection, and the shortcut to save
   the current account; account selection controls, selected Wake, unencrypted-export
   confirmation, and result feedback without credential data.
-- the toolbar's centered brand without a duplicate current-account label,
-  current-card identification, signed-out and recovery notices, theme-aware
-  language icon, plus the canonical SVG and generated native/installer icon dimensions.
-- system-language selection, unsupported-locale fallback, immediate manual
-  language selection, language preference persistence, locale-aware reset-time
-  formatting, and the main account flow in Simplified Chinese.
+- the sidebar brand without a duplicate current-account label,
+  current-card identification, signed-out and recovery notices, plus the
+  canonical SVG and generated native/installer icon dimensions.
+- sidebar navigation with the selected section remembered, the Home default
+  with saved accounts and the Accounts default without them, the Home setup
+  sentence for every setup (`src/setupSummary.test.ts`), the Claude Code page's
+  Save and Cancel, no language control, unsupported-locale fallback, and
+  locale-aware date formatting.
 
 - Invoke Mode: policy validation without substitution, Manual Mode refusing
   every request and failover, per-account eligibility kept across a new
