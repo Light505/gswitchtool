@@ -112,6 +112,19 @@ export function gswitchTargetAppName() {
   }
 }
 
+/** The router data folder named by the Dev target file, or null for the released default. */
+export function gswitchTargetRouterDataDir() {
+  try {
+    const target = JSON.parse(fs.readFileSync(TARGET_FILE, "utf8"));
+    if (typeof target.routerDataDir === "string" && target.routerDataDir.trim()) {
+      return path.isAbsolute(target.routerDataDir) ? target.routerDataDir : path.resolve(os.homedir(), target.routerDataDir);
+    }
+  } catch {
+    // The released plugin has no target file.
+  }
+  return null;
+}
+
 /** Reads the app-owned Claude Code setup without changing it. */
 export function readClaudeSetup(env = process.env) {
   try {

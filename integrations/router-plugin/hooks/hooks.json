@@ -17,6 +17,6 @@
       { "matcher": "^Bash$", "hooks": [{ "type": "command", "if": "Bash(node *)", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook PostToolUseFailure", "timeout": 15 }] }
     ],
     "SubagentStart": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SubagentStart", "timeout": 15 }] }],
-    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SubagentStop", "timeout": 15 }] }]
+    "SubagentStop": [{ "hooks": [{ "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs\" hook SubagentStop", "timeout": 1800 }] }]
   }
 }

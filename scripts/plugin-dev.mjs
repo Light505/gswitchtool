@@ -90,7 +90,7 @@ manifest.version = `${manifest.version}-dev.${shortCommit}.${Date.now().toString
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 writeFileSync(
   path.join(pluginDestination, "gswitch-target.json"),
-  `${JSON.stringify({ dataDir: ".gswitchtool-dev", appName: "GSwitch Claude Tool (Dev)" }, null, 2)}\n`
+  `${JSON.stringify({ dataDir: ".gswitchtool-dev", appName: "GSwitch Claude Tool (Dev)", routerDataDir: ".gswitchtool-router-dev" }, null, 2)}\n`
 );
 cpSync(devGate, path.join(pluginDestination, "dev-gate.mjs"));
 gateHooks(pluginDestination);

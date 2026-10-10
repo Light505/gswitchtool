@@ -79,3 +79,6 @@ The very last line is exactly:
 `RESULT: <done|partial|stopped> · confidence: <high|medium|low> · felt: <trivial|small|moderate|hard|high-risk> · verify-fails: <n>`
 Felt is how hard the task turned out; verify-fails counts failed VERIFY runs
 before the final one (0 if none).
+
+When the router then replies with its check, repeat your report unchanged, end
+it with the ROUTER lines it gives, and do nothing else.

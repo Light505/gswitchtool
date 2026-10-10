@@ -30,6 +30,9 @@ import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readClaudeSetup, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
 import { parseSelfReport } from "./lib/self-report.mjs";
+import { recordInvoke } from "./lib/invoke-record.mjs";
+import { findRun, optionValue, startInvokeRun, stripWaitSeconds, superviseInvoke, unknownRun, waitForRun } from "./lib/invoke-run.mjs";
+import { briefHeaders, invokeSummary } from "./lib/invoke-summary.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget, unmatchedCodexPaths } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -92,6 +95,8 @@ function printUsage() {
       "  node scripts/codex-companion.mjs check [--json]",
       "  node scripts/codex-companion.mjs invoke-status [--json]",
       "  node scripts/codex-companion.mjs invoke --model <model> --effort <effort> [--write] [--worktree] [--worktree-dir <dir>] [--scope <glob[,glob...]>] [--verify <command>] [--resume-thread <thread-id>] [--speed <fast|normal>] [--speed-reason \"<text>\"] [--cwd <dir>] [--json] [prompt]",
+      "  node scripts/codex-companion.mjs invoke-run [--wait-seconds <n>] <invoke options and prompt>   (runs invoke detached; prints its 3 summary lines, or RUNNING with the invoke-wait command, exit 75)",
+      "  node scripts/codex-companion.mjs invoke-wait <run-id> [--wait-seconds <n>] [--cwd <dir>]",
       "  node scripts/codex-companion.mjs status [job-id] [--all] [--json]",
       "  node scripts/codex-companion.mjs result [job-id] [--json]",
       "  node scripts/codex-companion.mjs cancel [job-id] [--json]"
@@ -1758,14 +1763,31 @@ async function handleInvoke(argv) {
   const scopedWrite = write && scopedPatterns.length > 0;
   const useWorktree = Boolean(options.worktree || options["worktree-dir"]);
   const base = { model, reasoningEffort: effort, write };
+  const headers = briefHeaders(brief);
+  let jobsWorkspace = workspaceRoot;
   const finish = (result) => {
     if (result.speed === undefined) Object.assign(result, speedResult());
     if (scopedWrite && result.jobId) result.scopeRequests = scopeRequests(declined, result.output);
+    // The output ends with a 3-line summary; the whole output is kept in a file the summary names.
+    const rendered = renderInvokeResult(result);
+    const summaryFor = (fullFile) => invokeSummary(result, { task: headers.task, reviews: headers.reviews, fullFile });
+    let fullFile = result.jobId ? path.join(resolveJobsDir(jobsWorkspace), `${result.jobId}.result.txt`) : null;
+    let summary = summaryFor(fullFile);
+    if (fullFile) {
+      try {
+        fs.mkdirSync(path.dirname(fullFile), { recursive: true });
+        fs.writeFileSync(fullFile, `${rendered}${summary.join("\n")}\n`, "utf8");
+      } catch {
+        fullFile = null;
+        summary = summaryFor(null);
+      }
+    }
     const payload = options.json && result.answerFile
-      ? { ...result, output: compactInvokeAnswer(result.output).text }
-      : result;
-    outputCommandResult(payload, renderInvokeResult(result), options.json);
+      ? { ...result, output: compactInvokeAnswer(result.output).text, summary }
+      : { ...result, summary };
+    outputCommandResult(payload, `${rendered}${summary.join("\n")}\n`, options.json);
     process.exitCode = result.status === "completed" && result.worktree?.reason ? 4 : result.protected?.changed?.length ? 5 : result.verify && !result.verify.passed ? 3 : result.status === "completed" ? 0 : result.status === "rejected" ? 2 : 1;
+    recordInvoke({ result, headers, resume: Boolean(resumeThreadId), cwd, pluginName: readJsonFile(path.join(ROOT_DIR, ".claude-plugin", "plugin.json"))?.name });
   };
 
   if (useWorktree && !write) {
@@ -1850,6 +1872,7 @@ async function handleInvoke(argv) {
     process.noDeprecation = true;
     ensureCodexAvailable(actualCwd);
     const runWorkspaceRoot = resolveWorkspaceRoot(actualCwd);
+    jobsWorkspace = runWorkspaceRoot;
     const gitBefore = snapshotGit(actualCwd);
     const protectedBefore = write && gitBefore ? protectedTextSnapshot(gitBefore.root) : null;
     const onFileChangeApproval = scopedWrite ? scopeApproval(gitBefore?.root ?? runWorkspaceRoot, scopedPatterns, declined, () => { scopeCancels += 1; }) : null;
@@ -2193,6 +2216,28 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
   }
 }
 
+function runJobsDir(cwdOption) {
+  return resolveJobsDir(resolveWorkspaceRoot(cwdOption ? path.resolve(process.cwd(), cwdOption) : process.cwd()));
+}
+
+const COMPANION_SCRIPT = fileURLToPath(import.meta.url);
+
+// Runs invoke detached and waits for it in steps below a tool timeout.
+async function handleInvokeRun(argv) {
+  const { args, waitSeconds } = stripWaitSeconds(normalizeArgv(argv));
+  const jobsDir = runJobsDir(optionValue(args, ["--cwd", "-C"]));
+  const runId = startInvokeRun({ script: COMPANION_SCRIPT, args, jobsDir });
+  await waitForRun({ meta: findRun(jobsDir, runId), script: COMPANION_SCRIPT, waitSeconds });
+}
+
+async function handleInvokeWait(argv) {
+  const { options, positionals } = parseCommandInput(argv, { valueOptions: ["cwd", "wait-seconds"] });
+  const { waitSeconds } = stripWaitSeconds(options["wait-seconds"] === undefined ? [] : ["--wait-seconds", options["wait-seconds"]]);
+  const meta = findRun(runJobsDir(options.cwd), positionals[0]);
+  if (!meta) return unknownRun(positionals[0]);
+  await waitForRun({ meta, script: COMPANION_SCRIPT, waitSeconds });
+}
+
 async function main() {
   const [subcommand, ...argv] = process.argv.slice(2);
   if (!subcommand || subcommand === "help" || subcommand === "--help") {
@@ -2241,6 +2286,15 @@ async function main() {
       break;
     case "invoke":
       await handleInvoke(argv);
+      break;
+    case "invoke-run":
+      await handleInvokeRun(argv);
+      break;
+    case "invoke-wait":
+      await handleInvokeWait(argv);
+      break;
+    case "invoke-run-child":
+      superviseInvoke({ script: COMPANION_SCRIPT, statusFile: argv[0], args: argv.slice(1) });
       break;
     default:
       throw new Error(`Unknown subcommand: ${subcommand}`);

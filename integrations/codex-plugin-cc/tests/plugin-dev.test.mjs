@@ -26,7 +26,8 @@ test("plugin:dev builds an isolated, rewritten copy and replaces it on rerun", a
   assert.match(manifest.description, /^\[dev\] /);
   assert.deepEqual(JSON.parse(readFileSync(path.join(plugin, "gswitch-target.json"), "utf8")), {
     dataDir: ".gswitchtool-dev",
-    appName: "GSwitch Claude Tool (Dev)"
+    appName: "GSwitch Claude Tool (Dev)",
+    routerDataDir: ".gswitchtool-router-dev"
   });
   const marketplace = JSON.parse(readFileSync(path.join(home, ".gswitchtool-dev-plugin", ".claude-plugin", "marketplace.json"), "utf8"));
   assert.equal(marketplace.name, "gswitchtool-dev");

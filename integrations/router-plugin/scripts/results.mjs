@@ -123,24 +123,14 @@ export function taskState(records, sessionId, task) {
     if (!reasons.includes(r.reason ?? "other")) reasons.push(r.reason ?? "other");
     workers.set(r.worker, reasons);
   }
+  // Done when the latest result passed and no later review found a serious problem (that reopens the task).
+  const last = results.at(-1), after = matching.indexOf(last);
+  const done = !!last && ["pass", "unverified"].includes(last.outcome) &&
+    !matching.some((r, i) => i > after && r.type === "review" && r.review === "serious");
   return { hasResults: matching.some((r) => r.type === "result"), plan: matching.filter((r) => r.type === "plan").at(-1) ?? null, results, failures: failed.length,
-    done: results.some((r) => ["pass", "unverified"].includes(r.outcome)),
+    done,
     failedWorkers: [...workers].map(([worker, reasons]) => ({ worker, reasons,
       sample: failed.filter((r) => r.worker === worker && (r.sample === true || r.reason == null || workerFailures.includes(r.reason))).every((r) => r.sample === true) })), last: results.at(-1) ?? null };
-}
-
-export function closeRecord(args, normalizeProject, records) {
-  const [sessionId, directory, ...rest] = args;
-  if (!text(sessionId) || sessionId.startsWith("--") || !text(directory) || directory.startsWith("--")) throw new Error("close requires <sessionId> <projectDir>");
-  const f = flags(rest, ["--task", "--actual", "--orchestrator-fix", "--note"]);
-  if (!f["--task"]) throw new Error("close requires --task <id>");
-  const actual = choice(f, "--actual", difficulties), orchestratorFix = yesNo(f, "--orchestrator-fix");
-  if (actual === null || orchestratorFix === null) throw new Error("close requires --actual <difficulty> --orchestrator-fix yes|no");
-  if (f["--note"] && [...f["--note"]].length > 120) throw new Error("Note must be at most 120 characters");
-  const state = taskState(records, sessionId, f["--task"]);
-  if (!state.plan) throw new Error("Run router plan for task " + f["--task"] + " first.");
-  return { type: "close", time: new Date().toISOString(), sessionId, project: normalizeProject(directory), task: f["--task"],
-    planned: state.plan.difficulty, actual, orchestratorFix, attempts: state.results.length, passed: state.done, note: f["--note"] ?? null };
 }
 
 export function parseSelfReport(text) {

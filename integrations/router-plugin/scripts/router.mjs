@@ -6,8 +6,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { directoryName, appDataDirectory } from "./setup.mjs";
-import { models, efforts, prefers, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, planRecord, closeRecord, parseSelfReport, transcriptText, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable, speedComparisons } from "./results.mjs";
+import { models, efforts, prefers, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter, kinds, difficulties } from "./workers.mjs";
+import { appendResult, readResults, resultRecord, planRecord, parseSelfReport, transcriptText, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable, speedComparisons } from "./results.mjs";
+import { readInvokeStatus, invokeState, codexAllowedFrom } from "./gswitch-client.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -25,6 +26,10 @@ const dataDir = path.join(home, dataName);
 const setupFile = path.join(appDataDirectory(home, target), "claude-setup.json");
 const pluginName = readJSON(path.join(pluginRoot, ".claude-plugin", "plugin.json")).name || "router";
 const data = (...parts) => path.join(dataDir, ...parts);
+const routerScript = path.join(pluginRoot, "scripts", "router.mjs");
+// One status request per process; any failure reads as unknown.
+let statusRequest;
+const invokeStatus = () => statusRequest ??= readInvokeStatus(appDataDirectory(home, target)).catch(() => null);
 
 function atomicJSON(file, value, indent = 2, newline = "\n") {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -36,17 +41,17 @@ function atomicJSON(file, value, indent = 2, newline = "\n") {
 }
 
 // Serialize read/modify/write across hook processes, not merely each rename.
-async function locked(action) {
+async function locked(action, name = "state.lock", stale = 60000, wait = 10000) {
   fs.mkdirSync(dataDir, { recursive: true });
-  const lock = data("state.lock");
+  const lock = data(name);
   const started = Date.now();
   for (;;) {
     try { fs.mkdirSync(lock); break; }
     catch (error) {
       if (error.code !== "EEXIST") throw error;
       // A terminated hook must not permanently prevent state updates.
-      try { if (Date.now() - fs.statSync(lock).mtimeMs > 60000) fs.rmdirSync(lock); } catch {}
-      if (Date.now() - started > 10000) throw new Error("Router state is busy");
+      try { if (Date.now() - fs.statSync(lock).mtimeMs > stale) fs.rmdirSync(lock); } catch {}
+      if (Date.now() - started > wait) throw new Error("Router state is busy");
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
   }
@@ -131,9 +136,21 @@ function usage() {
       !(resetMilliseconds(window.resetsAt) > Date.now())) return null;
   return { left: Number((100 - window.usedPercentage).toFixed(1)), reset: resetMilliseconds(window.resetsAt) };
 }
-function usageLine() {
-  const window = usage();
-  return window ? `Claude 5h usage: ${window.left}% left, resets ${new Date(window.reset).toLocaleString()}` : "Claude 5h usage: unknown";
+const codexList = (allowed) => Object.entries(allowed).map(([model, list]) => `${model} ${list.join(", ")}`).join(" · ") || "none";
+// The orchestrator's per-message context; it carries Invoke status so the orchestrator never runs invoke-status.
+async function promptLine(state) {
+  const mode = state.mode.value, window = usage();
+  const parts = [`Router: mode=${mode}`];
+  if (mode === "mixed") parts.push(`Use first: ${state.prefer}`);
+  parts.push(`Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""}`, `Claude workers: ${allowedList()}`);
+  if (mode !== "claude" || state.review.value === "on") {
+    const status = await invokeStatus();
+    parts.push(`Invoke: ${invokeState(status)}`);
+    if (invokeState(status) === "on") parts.push(`Codex: ${codexList(codexAllowedFrom(status))}`);
+  }
+  if (["mixed", "codex"].includes(mode)) parts.push(`Speed: ${state.codexSpeed.mode}`);
+  parts.push(`Codex review in claude mode: ${state.review.value}`);
+  return parts.join(" · ");
 }
 export function matchesScope(file, pattern) {
   const glob = pattern.replace(/\\/g, "/").replace(/^\.\//, "");
@@ -251,22 +268,53 @@ const context = (event, text) => text ? { hookSpecificOutput: { hookEventName: e
 const decision = (value, reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: value, permissionDecisionReason: reason } });
 const isWorker = (type) => workerNames.some((name) => type === `${pluginName}:${name}`);
 function wrapupFile(directory) { return data("wrapups", `${hash(comparable(directory))}.json`); }
-// An inline invoke brief starts right after its opening quote.
-const taskId = (text) => String(text || "").match(/(?:^|["'])[ \t]*TASK:[ \t]*([\w.-]{1,40})[ \t]*["']?[ \t]*$/m)?.[1];
+// An inline invoke brief starts right after its opening quote; a prompt file may use CRLF.
+const header = (text, name) => String(text || "").match(new RegExp(`(?:^|["'])[ \\t]*${name}:[ \\t]*([\\w.-]{1,40})[ \\t]*["']?[ \\t]*\\r?$`, "m"))?.[1];
+const taskId = (text) => header(text, "TASK");
+const verifyCommand = (text) => String(text || "").match(/^\s*VERIFY:[ \t]*([^\r\n]+)\r?$/m)?.[1].trim().replace(/^`([^`]+)`$/, "$1") || null;
+const shortTitle = (value) => {
+  const title = [...String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").trim()].slice(0, 120).join("").trim();
+  return title || null;
+};
+// On the invoke command's line, an inline brief starts after its still-open quote.
+const briefStart = (line) => {
+  if (!line.includes("codex-companion.mjs")) return line;
+  const open = ['"', "'"].find((quote) => line.split(quote).length % 2 === 0);
+  return open ? line.slice(line.lastIndexOf(open) + 1) : "";
+};
+// The first brief line that is not a header.
+const briefTitle = (text) => shortTitle(String(text || "").split(/\r?\n/).map((line) => briefStart(line).trim().replace(/^["']|["']$/g, "").trim())
+  .find((line) => line && !/^[A-Z][A-Z ]*:/.test(line)));
 const failedList = (state) => state.results.filter((r) => r.outcome === "fail").map((r) => `${r.worker} (${r.reason ?? "other"})`).join(", ");
 const floorFor = (state) => {
   const failed = state.failedWorkers.filter(({ sample }) => !sample);
   return taskFloor(state.plan.kind, state.plan.difficulty,
     failed.map(({ worker }) => benchmarks[benchmarkId(worker)]?.score), failed.length);
 };
-function taskLaunch(id, task, type, title, repair = false) {
-  const state = taskState(readResults(data("results.jsonl")), id, task);
-  const sess = session(id);
-  const launches = [...Object.values(sess.bindings).filter((b) => isWorker(b.type) && b.task === task).map((b) => ({ worker: b.type, time: b.time ?? 0 })),
-    ...sess.codexLaunches.filter((launch) => launch.task === task)].sort((a, b) => a.time - b.time);
-  const latest = launches.at(-1);
-  if (latest && !state.results.some((r) => Date.parse(r.time) >= latest.time)) return decision("deny", `Record the result of the previous attempt on task ${task} (${latest.worker}) with router result first.`);
-  if (!state.plan) return decision("deny", `Run router plan for task ${task} first.`);
+// The brief's KIND/DIFFICULTY lines record the plan; the launch that creates it may redirect to a sample worker once.
+async function taskLaunch({ id, project, task, type, title, brief, repair = false }) {
+  const file = data("results.jsonl");
+  let state = taskState(readResults(file), id, task);
+  const kind = header(brief, "KIND"), difficulty = header(brief, "DIFFICULTY");
+  if (!state.plan && (!kind || !difficulty)) {
+    const missing = [!kind && "KIND: <kind>", !difficulty && "DIFFICULTY: <difficulty>"].filter(Boolean);
+    return decision("deny", `Add ${missing.join(" and ")} line${missing.length > 1 ? "s" : ""} to the brief.`);
+  }
+  if (kind && !kinds.includes(kind)) return decision("deny", `KIND must be one of: ${kinds.join(", ")}.`);
+  if (difficulty && !difficulties.includes(difficulty)) return decision("deny", `DIFFICULTY must be one of: ${difficulties.join(", ")}.`);
+  const created = !state.plan;
+  if (kind && difficulty && (created || state.plan.kind !== kind || state.plan.difficulty !== difficulty)) {
+    const record = { type: "plan", time: new Date().toISOString(), sessionId: id, project, task, kind, difficulty, title: shortTitle(title),
+      codex: null, files: null, crossModule: null, check: null, repro: null, confidence: null, sample: null, source: "brief" };
+    const cfg = config();
+    // A re-plan keeps the first plan's sample decision, so only a new plan needs the worker rows.
+    const rows = created ? workerTable({ claudeAllowed: cfg.claudeAllowed, codexAllowed: codexAllowedFrom(await invokeStatus()),
+      mode: cfg.mode, low: usage()?.left <= 30, namespace: pluginName }) : [];
+    record.sample = sampleWorker(readResults(file), record, rows, { sampling: cfg.sampling, prefer: cfg.prefer, roll: sampleRoll() });
+    appendResult(file, record);
+    state = taskState(readResults(file), id, task);
+    if (created && record.sample && record.sample !== type) return decision("deny", `Sample attempt for task ${task}: launch ${record.sample} instead (about 1 in 10 trivial/small tasks); say sample attempt in your report.`);
+  }
   if (state.done) return decision("deny", `Task ${task} already passed; use a new task id for new work.`);
   const failed = state.failedWorkers.find(({ worker }) => worker === type);
   if (failed && !repair) return decision("deny", `${type} already failed task ${task} (${failed.reasons.join(", ")}); resume that worker for a repair or pick a candidate from router plan.`);
@@ -283,21 +331,24 @@ function shellOption(command, names) {
   const match = matches.at(-1);
   return match ? match[1] ?? match[2] ?? match[3] : undefined;
 }
-const invokePath = (command) => command.match(/(?:^|[\n;|(]|&&|\|\|)[ \t]*node(?:\.exe)?["']?\s+((?:"[^"]*|'[^']*|[^\s"']*)codex-companion\.mjs)["']?\s+invoke(?:\s|$)/)?.[1];
+// invoke-run (the codex-runner agent's launch) is an invoke; invoke-wait only waits for one.
+const invokePath = (command) => command.match(/(?:^|[\n;|(]|&&|\|\|)[ \t]*node(?:\.exe)?["']?\s+((?:"[^"]*|'[^']*|[^\s"']*)codex-companion\.mjs)["']?\s+invoke(?:-run)?(?:\s|$)/)?.[1];
 const isInvoke = (command) => {
   const companion = invokePath(command);
   return companion !== undefined && /(?:^|["'\\/])codex-dev[\\/]/.test(companion) === (pluginName === "router-dev");
 };
-function invokeTask(command, cwd) {
-  let task = taskId(command);
+// The brief of an invoke: the inline text and, with --prompt-file, the file's text.
+function invokeBrief(command, cwd) {
+  let task = taskId(command), text = command;
   const file = shellOption(command, ["--prompt-file"]);
-  if (!task && file) {
+  if (file) {
     const directory = shellOption(command, ["--cwd"]);
-    try { task = taskId(fs.readFileSync(path.resolve(directory ? path.resolve(cwd, directory) : cwd, file), "utf8")); }
-    catch { return undefined; }
+    try { text = fs.readFileSync(path.resolve(directory ? path.resolve(cwd, directory) : cwd, file), "utf8"); task = task ?? taskId(text); }
+    catch { if (!task) return undefined; }
   }
-  return task;
+  return task ? { task, text: text === command ? text : `${command}\n${text}`, title: briefTitle(text) } : undefined;
 }
+const invokeTask = (command, cwd) => invokeBrief(command, cwd)?.task;
 const codexWorker = (command) => {
   const model = shellOption(command, ["--model", "-m"]), effort = shellOption(command, ["--effort"]);
   return model && effort ? `${pluginName === "router-dev" ? "codex-dev" : "codex"}:${model}/${effort}` : null;
@@ -310,9 +361,11 @@ function codexLaunch(input) {
   const worker = codexWorker(command);
   return worker ? { task, worker, time: Date.now() } : null;
 }
-function hook(event, input) {
+async function hook(event, input) {
   const command = String(input.tool_input?.command || "");
   if (["PreToolUse", "PostToolUse", "PostToolUseFailure"].includes(event) && input.tool_name === "Bash" && !isInvoke(command)) return {};
+  // Runs outside the state lock: it takes the lock itself only to read and write state.
+  if (event === "SubagentStop") return subagentStop(input);
   // Expire old worker state, including a resumed session with this ID.
   if (event === "SessionStart" && fs.existsSync(data("sessions"))) for (const name of fs.readdirSync(data("sessions"))) {
     const file = data("sessions", name);
@@ -340,18 +393,6 @@ function hook(event, input) {
       scope: bound?.type === worker && Array.isArray(bound.scope) ? bound.scope : scopes(String(input.tool_input.prompt || "").match(/^\s*SCOPE:[ \t]*([^\r\n]+)$/m)?.[1]) }));
     return {};
   }
-  if (event === "SubagentStop" && isWorker(sess.bindings[input.agent_id]?.type)) {
-    const bound = sess.bindings[input.agent_id];
-    delete bound.resumedAt;
-    const stopped = sess.finished.find((worker) => worker.agentId === input.agent_id);
-    if (stopped) stopped.time = Date.now();
-    else sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
-    saveSession(id, sess);
-    appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
-      agentId: input.agent_id, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path),
-      self: parseSelfReport(typeof input.last_assistant_message === "string" ? input.last_assistant_message : transcriptText(input.agent_transcript_path)) });
-    return {};
-  }
   if (event === "SessionStart") {
     const lines = state.mode.value === "off" ? [] : [routerLine(state)];
     if (state.mode.value !== "off" && worktreeBaseRef(cwd) !== "head") lines.push(baseRefWarning);
@@ -362,14 +403,14 @@ function hook(event, input) {
   }
   if (event === "UserPromptSubmit") {
     if (state.mode.value === "off") return {};
-    const window = usage();
-    return context(event, `Router: mode=${state.mode.value} (${state.mode.source}) · Codex review in claude mode: ${state.review.value}${state.mode.value === "mixed" ? ` · Use first: ${state.prefer}` : ""} · Claude 5h: ${window ? `${window.left}% left` : "unknown"}${window && window.left <= 30 ? " · LOW: no Claude workers" : ""} · Claude workers: ${allowedList()}${["mixed", "codex"].includes(state.mode.value) ? ` · Speed: ${state.codexSpeed.mode}` : ""}`);
+    return context(event, await promptLine(state));
   }
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {
     const bound = sess.bindings[input.tool_input?.to];
     if (!bound) return {};
     bound.resumedAt = Date.now();
-    delete bound.appliedAt;
+    // A resumed worker is checked again when it next stops.
+    delete bound.appliedAt; delete bound.verdictPending;
     saveSession(id, sess);
     if (state.mode.value === "off" || !bound.task) return {};
     const task = taskState(readResults(data("results.jsonl")), id, bound.task);
@@ -379,16 +420,18 @@ function hook(event, input) {
   if (state.mode.value === "off") return {};
   if (event === "PreToolUse" && input.tool_name === "Bash") {
     if (sess.bindings[input.agent_id]) return decision("deny", "Router workers cannot start other agents.");
-    const task = invokeTask(command, cwd);
-    if (!task) return {};
+    const brief = invokeBrief(command, cwd);
+    if (!brief) return {};
     if (state.mode.value === "claude" && /(?:^|\s)--write(?:\s|$)/.test(command)) return decision("deny", "Claude mode: Codex does not write code; use a Claude worker.");
     const type = codexWorker(command);
     if (!type) return {};
-    return taskLaunch(id, task, type, command.split(/\r?\n/)[0], /(?:^|\s)--resume-thread(?:\s|$)/.test(command));
+    return taskLaunch({ id, project: projectKey(sess.projectDir || cwd), task: brief.task, type, title: brief.title, brief: brief.text,
+      repair: /(?:^|\s)--resume-thread(?:\s|$)/.test(command) });
   }
   if (event === "PreToolUse" && ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(input.tool_name)) {
     const bound = sess.bindings[input.agent_id];
     if (!bound) return isWorker(input.agent_type) ? decision("deny", "Router has no scope for this worker; stop and report.") : {};
+    if (bound.verdictPending) return decision("deny", "The router already checked your work; do not edit. Reply with your report and the ROUTER lines.");
     // Claude Code deletes an unchanged worker's worktree; a resume then runs in the main checkout.
     if (bound.cwd && !fs.existsSync(bound.cwd)) return decision("deny", `WORKTREE GONE: ${bound.cwd} no longer exists, so this edit would land in the main checkout. Do not edit; stop and tell the orchestrator to start a new worker.`);
     const file = input.tool_input?.file_path || input.tool_input?.notebook_path;
@@ -404,6 +447,8 @@ function hook(event, input) {
     if (sess.bindings[input.agent_id]) return decision("deny", "Router workers cannot start other agents.");
     if (["Explore", "Plan"].includes(type)) return {};
     if (workerNames.some((name) => type === `${pluginName === "router-dev" ? "router" : "router-dev"}:${name}`)) return {};
+    // The Codex plugin's runner starts invoke-run, which the Bash gate checks; claude mode still denies --write there.
+    if (type === "codex:codex-runner" || type === "codex-dev:codex-runner") return {};
     if (!isWorker(type)) return decision("deny", "use a router worker type");
     if (tool.model !== undefined) return decision("deny", "Router worker model is fixed; remove the model override.");
     if (state.mode.value === "codex") return decision("deny", "Codex mode denies Claude workers; send this to Codex.");
@@ -415,12 +460,13 @@ function hook(event, input) {
     const scope = scopes(String(tool.prompt || "").match(/^\s*SCOPE:[ \t]*([^\r\n]+)$/m)?.[1]);
     if (!scope.length) return decision("deny", "Add a line SCOPE: <globs> to the worker prompt (comma-separated paths).");
     const task = taskId(tool.prompt);
-    if (!task) return decision("deny", "Add a line TASK: <id> to the worker prompt (run router plan first).");
-    const permission = taskLaunch(id, task, type, String(tool.description || tool.prompt || "worker task").split(/\r?\n/)[0]);
+    if (!task) return decision("deny", "Add a line TASK: <id> to the worker prompt.");
+    const permission = await taskLaunch({ id, project: projectKey(sess.projectDir || cwd), task, type,
+      title: typeof tool.description === "string" && tool.description.trim() ? tool.description : briefTitle(tool.prompt), brief: tool.prompt });
     if (permission.hookSpecificOutput?.permissionDecision === "deny") return permission;
     // Record ask launches too: SubagentStart happens only after approval.
     sess.projectDir = sess.projectDir || projectKey(cwd);
-    sess.pending.push({ type, scope, task, time: Date.now() });
+    sess.pending.push({ type, scope, task, verify: verifyCommand(tool.prompt), time: Date.now() });
     saveSession(id, sess);
     return permission;
   }
@@ -428,7 +474,8 @@ function hook(event, input) {
     const pending = sess.pending.map((launch, index) => ({ launch, index })).filter(({ launch }) => launch.type === input.agent_type).sort((a, b) => a.launch.time - b.launch.time)[0];
     if (pending) {
       sess.pending.splice(pending.index, 1);
-      sess.bindings[input.agent_id] = { type: input.agent_type, scope: pending.launch.scope, task: pending.launch.task ?? null, cwd, time: Date.now() };
+      sess.bindings[input.agent_id] = { type: input.agent_type, scope: pending.launch.scope, task: pending.launch.task ?? null,
+        verify: pending.launch.verify ?? null, cwd, time: Date.now() };
       saveSession(id, sess);
     }
     if (input.cwd) sharedDependencies(cwd, sess.projectDir);
@@ -442,13 +489,17 @@ function checkFacts(args) {
   const cwd = option(args, "--cwd");
   if (!cwd) throw new Error("check requires --cwd");
   const verify = option(args, "--verify");
-  const lines = [], factsResult = { files: 0, added: 0, deleted: 0, verify: "none", scopeWarnings: 0 };
+  const lines = [], factsResult = { files: 0, added: 0, deleted: 0, verify: "none", scopeWarnings: 0, verifyText: "none", verifyTail: [], outside: [] };
   if (verify) {
     const started = Date.now();
     const result = spawnSync(verify, { cwd, shell: true, windowsHide: true, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
     factsResult.verify = result.status === 0 ? "passed" : "failed";
-    lines.push(result.status === 0 ? `Verify: passed (${verify}, ${Math.round((Date.now() - started) / 1000)}s)` : `Verify: FAILED (exit ${result.status ?? 127})`);
-    if (result.status !== 0) lines.push(...`${result.stdout || ""}${result.stderr || ""}${result.error?.message || ""}`.trimEnd().split(/\r?\n/).slice(-40));
+    factsResult.verifyText = result.status === 0 ? `passed (${verify}, ${Math.round((Date.now() - started) / 1000)}s)` : `FAILED (exit ${result.status ?? 127})`;
+    lines.push(`Verify: ${factsResult.verifyText}`);
+    if (result.status !== 0) {
+      factsResult.verifyTail = `${result.stdout || ""}${result.stderr || ""}${result.error?.message || ""}`.trimEnd().split(/\r?\n/).slice(-40);
+      lines.push(...factsResult.verifyTail);
+    }
   }
   let root;
   try { root = layout(cwd).root; } catch { return { ...factsResult, output: [...lines, "git: not a repository"].join("\n") }; }
@@ -467,12 +518,12 @@ function checkFacts(args) {
   }
   facts.sort((a, b) => a.path.localeCompare(b.path));
   const scope = scopes(option(args, "--scope"));
-  if (scope.length) for (const file of facts) if (!scope.some((pattern) => matchesScope(file.path, pattern))) lines.push(`WARNING: changed outside --scope: ${file.path}`);
+  const outside = scope.length ? facts.filter((file) => !scope.some((pattern) => matchesScope(file.path, pattern))).map((file) => file.path) : [];
+  for (const file of outside) lines.push(`WARNING: changed outside --scope: ${file}`);
   const shown = facts.slice(0, 20).map((file) => `${file.path} (+${file.added} −${file.deleted})`).join(", ") || "none";
   lines.push(`Changed files (git): ${shown}${facts.length > 20 ? `, and ${facts.length - 20} more` : ""}; ${facts.length} files, +${facts.reduce((sum, file) => sum + file.added, 0)} −${facts.reduce((sum, file) => sum + file.deleted, 0)}`);
   return { ...factsResult, files: facts.length, added: facts.reduce((sum, file) => sum + file.added, 0),
-    deleted: facts.reduce((sum, file) => sum + file.deleted, 0),
-    scopeWarnings: lines.filter((line) => line.startsWith("WARNING: changed outside --scope")).length, output: lines.join("\n") };
+    deleted: facts.reduce((sum, file) => sum + file.deleted, 0), scopeWarnings: outside.length, outside, output: lines.join("\n") };
 }
 function apply(args) {
   const worktree = option(args, "--worktree");
@@ -671,23 +722,29 @@ function sampleRoll() {
   const roll = value === undefined || value.trim() === "" ? NaN : Number(value);
   return Number.isFinite(roll) && roll >= 0 && roll <= 1 ? roll : Math.random();
 }
-function plan(args) {
+// Codex rows come from the plan's --codex list or, without one, from GSwitch's Invoke status.
+const planCodex = async (record) => record.codex == null ? codexAllowedFrom(await invokeStatus()) : codexAllowed(record.codex);
+async function plan(args) {
   if (resolved().mode.value === "off") return "Router is off.";
   const at = args.indexOf("--codex");
   if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith("--"))) throw new Error(`--codex needs a value: "<model>:<effort>[,<effort>...][;<model>:...]"`);
   const record = planRecord(args, projectKey);
   if (record.codex != null) codexAllowed(record.codex);
-  const cfg = config();
-  const rows = workerTable({ claudeAllowed: cfg.claudeAllowed, codexAllowed: record.codex == null ? {} : codexAllowed(record.codex),
+  const cfg = config(), codex = await planCodex(record);
+  const rows = workerTable({ claudeAllowed: cfg.claudeAllowed, codexAllowed: codex,
     mode: resolved().mode.value, low: usage()?.left <= 30, namespace: pluginName });
   record.sample = sampleWorker(readResults(data("results.jsonl")), record, rows, { sampling: cfg.sampling, prefer: cfg.prefer, roll: sampleRoll() });
   appendResult(data("results.jsonl"), record);
   const state = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
-  return planView(state);
+  return planView(state, codex);
 }
-function planView(state) {
-  const record = state.plan, text = record.codex;
-  const codex = text == null ? {} : codexAllowed(text);
+// Allowed workers that meet the task's floor and have not failed it, in the owner's order.
+function nextCandidates(state, codex) {
+  const rows = workerTable({ claudeAllowed: config().claudeAllowed, codexAllowed: codex, mode: resolved().mode.value, low: usage()?.left <= 30, namespace: pluginName });
+  return candidates(rows, { floor: floorFor(state).floor, exclude: state.failedWorkers.map(({ worker }) => worker), prefer: config().prefer });
+}
+function planView(state, codex) {
+  const record = state.plan;
   const { floor, level } = floorFor(state), mode = resolved().mode.value;
   const lines = [`Plan ${record.task}: ${record.kind}, ${record.difficulty} · floor ${floor} (${level}) · ${state.failures} failed of ${ownerCheckAfter} before the owner is asked`];
   if (state.failures) lines.push(`Failed: ${failedList(state)}`);
@@ -698,15 +755,14 @@ function planView(state) {
   if (state.failures >= ownerCheckAfter) lines.push(`Owner check: ask the owner before attempt ${state.failures + 1}; the launch will show an approval prompt.`);
   if (state.done) lines.push(`Task ${record.task} already passed; start a new task id for new work.`);
   else {
-    const rows = workerTable({ claudeAllowed: config().claudeAllowed, codexAllowed: codex, mode, low: usage()?.left <= 30, namespace: pluginName });
     const prefer = config().prefer;
-    const choices = candidates(rows, { floor, exclude: state.failedWorkers.map(({ worker }) => worker), prefer }).slice(0, 6);
+    const choices = nextCandidates(state, codex).slice(0, 6);
     const order = mode !== "mixed" || prefer === "price" ? "cheapest first" : prefer === "codex" ? "Codex first, then cheapest" : "Claude first, then cheapest";
     if (!state.hasResults && record.sample) lines.push('Sample attempt (about 1 in 10 trivial/small tasks): ' + record.sample + ' — start with it to measure it; if it fails, use the candidates below. Say "sample attempt" in the report.');
     if (!choices.length) lines.push(`No allowed worker meets floor ${floor}: stop and ask the owner.`);
     else lines.push(`Candidates (${order}):`, ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
   }
-  if (text == null && ["mixed", "codex"].includes(mode)) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
+  if (!Object.keys(codex).length && ["mixed", "codex"].includes(mode)) lines.push("Codex workers not listed: pass --codex with the allowed models and efforts from invoke-status.");
   const speed = config().codexSpeed;
   if (["mixed", "codex"].includes(mode)) {
     if (speed.mode === "orchestrator") lines.push(`Codex speed: Orchestrator decides — add --speed fast --speed-reason "<why>" only when the owner is waiting on this result to continue; otherwise Normal. Fast falls back to Normal below ${speed.fastMinRemaining}% usage left.`);
@@ -715,17 +771,50 @@ function planView(state) {
   lines.push(`Brief lines: TASK: ${record.task} · SCOPE: <globs> · VERIFY: <command>`);
   return lines.join("\n");
 }
-function recordResult(record) {
+// Appends a result, marking a first attempt by the plan's sample worker.
+function appendWorkerResult(record) {
   const before = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
   record.sample = !before.hasResults && record.worker === before.plan?.sample;
   appendResult(data("results.jsonl"), record);
+  return taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
+}
+async function recordResult(record) {
+  const state = appendWorkerResult(record);
   const lines = [`Result: recorded ${record.task} ${record.worker} ${record.outcome}`];
-  const state = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
-  if (record.outcome === "fail" && state.plan) lines.push(planView(state));
+  if (record.outcome === "fail" && state.plan) lines.push(planView(state, await planCodex(state.plan)));
   return lines.join("\n");
 }
+// A bound worker's result with the plan's difficulty and title; the step follows earlier results on the task.
+function workerResult(id, directory, agent, bound, outcome, reason) {
+  const state = taskState(readResults(data("results.jsonl")), id, bound.task);
+  if (!state.plan) throw new Error(`No plan for task ${bound.task}; add KIND: and DIFFICULTY: lines to its brief.`);
+  const step = !state.results.length ? "start" : state.results.some((r) => r.agentId === agent) ? "repair" : "escalation";
+  return resultRecord([id, directory, "--task", bound.task, "--difficulty", state.plan.difficulty,
+    "--worker", bound.type, "--outcome", outcome, ...(reason ? ["--reason", reason] : []), "--step", step, "--agent", agent,
+    ...(state.plan.title ? ["--title", state.plan.title] : [])], projectKey, pluginName);
+}
 export function worktreeApplied(output) { return /^Worktree: applied \d+ files$/m.test(output); }
-// Runs outside the state lock (verify can take minutes); session writes and failures take it.
+// Verifies, scope-checks and applies a stopped worker's worktree; shared by router finish and the SubagentStop hook.
+// Runs outside the state lock (verify can take minutes); session writes take it, and applies wait for each other.
+async function checkWorktree(id, directory, agent, bound, verify) {
+  const keepLocked = worktrees(directory).find((item) => comparable(item.root) === comparable(bound.cwd))?.locked;
+  const base = gitText(directory, ["merge-base", "HEAD", gitText(bound.cwd, ["rev-parse", "HEAD"])]);
+  const facts = checkFacts(["--cwd", bound.cwd, "--base", base, "--scope", (bound.scope || []).join(","), ...(verify ? ["--verify", verify] : [])]);
+  let applied = null;
+  if (facts.verify !== "failed" && !facts.scopeWarnings) {
+    applied = await locked(() => apply(["--worktree", bound.cwd, "--cwd", directory, ...(keepLocked ? ["--keep-locked"] : [])]), "apply.lock", 600000, 900000);
+    if (worktreeApplied(applied)) await locked(() => {
+      const current = session(id);
+      current.bindings[agent].appliedAt = Date.now();
+      saveSession(id, current);
+    });
+  }
+  const finishRecord = { type: "finish", time: new Date().toISOString(), sessionId: id, project: projectKey(directory),
+    task: bound.task, worker: bound.type, agentId: agent, files: facts.files, added: facts.added, deleted: facts.deleted,
+    verify: facts.verify, scopeWarnings: facts.scopeWarnings, applied: applied !== null && worktreeApplied(applied) };
+  return { facts, applied, finishRecord };
+}
+// Manual fallback for the SubagentStop check, for example after router scope approves out-of-scope files.
 async function finish(args) {
   const [id, directory] = args, agent = option(args, "--agent");
   if (!id || !directory || !agent) throw new Error("finish requires <sessionId> <projectDir> --agent <agentId>");
@@ -736,60 +825,113 @@ async function finish(args) {
   const stopped = sess.finished.find((worker) => worker.agentId === agent);
   if (!stopped || (bound.resumedAt != null && !(bound.resumedAt < stopped.time))) return "Worker still running or not stopped: wait for its completion notice, then run router finish again. If it has stopped and this repeats, apply it with router apply.";
   if (!bound.cwd || !fs.existsSync(bound.cwd) || comparable(bound.cwd) === comparable(layout(directory).root)) return "Worker changed nothing (no worktree).";
-  const entry = worktrees(directory).find((item) => comparable(item.root) === comparable(bound.cwd));
-  const keepLocked = entry?.locked;
-  const failure = (reason) => locked(() => {
-    const state = taskState(readResults(data("results.jsonl")), id, bound.task);
-    if (!state.plan) throw new Error(`Run router plan for task ${bound.task} first.`);
-    const step = !state.results.length ? "start" : state.results.some((r) => r.agentId === agent) ? "repair" : "escalation";
-    const record = resultRecord([id, directory, "--task", bound.task, "--difficulty", state.plan.difficulty,
-      "--worker", bound.type, "--outcome", "fail", "--reason", reason, "--step", step, "--agent", agent,
-      ...(state.plan.title ? ["--title", state.plan.title] : [])], projectKey, pluginName);
-    return recordResult(record);
-  });
-  const verify = option(args, "--verify");
-  const base = gitText(directory, ["merge-base", "HEAD", gitText(bound.cwd, ["rev-parse", "HEAD"])]);
-  const facts = checkFacts(["--cwd", bound.cwd, "--base", base, "--scope", (bound.scope || []).join(","), ...(verify ? ["--verify", verify] : [])]);
+  const failure = (reason) => locked(() => recordResult(workerResult(id, directory, agent, bound, "fail", reason)));
+  const { facts, applied, finishRecord } = await checkWorktree(id, directory, agent, bound, option(args, "--verify") ?? bound.verify);
   const checked = facts.output;
-  const capture = (applied) => locked(() => {
-    appendResult(data("results.jsonl"), { type: "finish", time: new Date().toISOString(), sessionId: id, project: projectKey(directory),
-      task: bound.task, worker: bound.type, agentId: agent, files: facts.files, added: facts.added, deleted: facts.deleted,
-      verify: facts.verify, scopeWarnings: facts.scopeWarnings, applied });
-  });
+  const capture = () => locked(() => appendResult(data("results.jsonl"), finishRecord));
   if (facts.verify === "failed") {
     const result = await failure("verify");
-    await capture(false);
+    await capture();
     return checked + "\n" + result;
   }
   if (facts.scopeWarnings) {
-    await capture(false);
+    await capture();
     return checked + "\nNot applied: decide the out-of-scope changes (approve with router scope, or record the result yourself).";
   }
-  const applied = apply(["--worktree", bound.cwd, "--cwd", directory, ...(keepLocked ? ["--keep-locked"] : [])]);
-  if (worktreeApplied(applied)) await locked(() => {
-    const current = session(id);
-    current.bindings[agent].appliedAt = Date.now();
-    saveSession(id, current);
-  });
-  await capture(worktreeApplied(applied));
+  await capture();
   return `${checked}\n${applied}\n${worktreeApplied(applied) ? "Applied. Review it, then record pass (or a review failure) with router result." : await failure("worktree")}`;
 }
-function command(args, raw) {
+const quote = (value) => `"${String(value).replace(/"/g, '\\"')}"`;
+// Checks, applies and records a bound worker's attempt when it stops, then blocks it once so that its final
+// message (the orchestrator's completion notice) ends with the router's verdict.
+async function subagentStop(input) {
+  const id = input.session_id, cwd = input.cwd || process.cwd(), agent = input.agent_id;
+  const text = typeof input.last_assistant_message === "string" ? input.last_assistant_message : transcriptText(input.agent_transcript_path);
+  const start = await locked(() => {
+    const sess = session(id), bound = sess.bindings[agent];
+    if (!isWorker(bound?.type)) return null;
+    delete bound.resumedAt;
+    const pending = bound.verdictPending === true || input.stop_hook_active === true;
+    delete bound.verdictPending;
+    const stopped = sess.finished.find((worker) => worker.agentId === agent);
+    if (stopped) stopped.time = Date.now();
+    else sess.finished.push({ agentId: agent, ...bound, time: Date.now() });
+    saveSession(id, sess);
+    appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
+      agentId: agent, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path),
+      self: parseSelfReport(text) });
+    return { bound: { ...bound }, projectDir: sess.projectDir, pending };
+  });
+  // The second stop after our block is the worker's repeated report: let it end.
+  if (!start || start.pending || !start.bound.task) return {};
+  const { bound } = start;
+  const plan = taskState(readResults(data("results.jsonl")), id, bound.task).plan;
+  if (!plan) return {};
+  let directory = start.projectDir || cwd;
+  try { directory = layout(directory).root; }
+  catch { try { directory = mainWorktree(bound.cwd).main; } catch {} }
+  const worktree = !!bound.cwd && fs.existsSync(bound.cwd) && comparable(bound.cwd) !== comparable(directory);
+  const stoppedLine = text.match(/^[\s>*`-]*STOPPED:[ \t]*([^\r\n]*)$/m)?.[1];
+  let outcome = "fail", reason = null, check = null, nothing = false;
+  const lines = [];
+  if (/^[\s>*`-]*SCOPE REQUEST:/m.test(text)) reason = "scope";
+  else if (stoppedLine !== undefined) reason = /too hard/i.test(stoppedLine) ? "capability" : /unclear brief/i.test(stoppedLine) ? "context" : /environment/i.test(stoppedLine) ? "tool" : "other";
+  else {
+    try {
+      nothing = !worktree || checkFacts(["--cwd", bound.cwd, "--base", gitText(directory, ["merge-base", "HEAD", gitText(bound.cwd, ["rev-parse", "HEAD"])])]).files === 0;
+      if (!nothing) check = await checkWorktree(id, directory, agent, bound, bound.verify);
+    } catch (error) { reason = "worktree"; lines.push(`Worktree kept: ${bound.cwd} — ${error.message}`); }
+    if (reason === "worktree") { /* the check itself failed; nothing applied */ }
+    else if (nothing) {
+      if (["research", "review"].includes(plan.kind)) outcome = "unverified";
+      else reason = "incomplete";
+      lines.push("Worker changed nothing.");
+    } else if (check.facts.verify === "failed") {
+      reason = "verify";
+      lines.push(`Worktree kept: ${bound.cwd} — verify failed`, ...check.facts.verifyTail.slice(-15));
+    } else if (check.facts.scopeWarnings) {
+      outcome = "blocked"; reason = "scope";
+      lines.push(`Worktree kept: ${bound.cwd} — changed outside SCOPE: ${check.facts.outside.join(", ")}`,
+        `Approve: node ${quote(routerScript)} scope ${id} ${agent} --add ${quote(check.facts.outside.join(","))}`,
+        `Then apply: node ${quote(routerScript)} finish ${id} ${quote(directory)} --agent ${agent}`);
+    } else if (worktreeApplied(check.applied)) {
+      outcome = check.facts.verify === "passed" ? "pass" : "unverified";
+      lines.push(...check.applied.split(/\r?\n/).filter((line) => /^(Worktree|Branch) kept: /.test(line)));
+    } else {
+      reason = "worktree";
+      lines.push(check.applied);
+    }
+  }
+  const codex = outcome === "fail" ? await planCodex(plan) : {};
+  const { record, state } = await locked(() => {
+    if (check) appendResult(data("results.jsonl"), check.finishRecord);
+    const record = { ...workerResult(id, directory, agent, bound, outcome, reason), source: "hook" };
+    const state = appendWorkerResult(record);
+    const current = session(id);
+    if (current.bindings[agent]) { current.bindings[agent].verdictPending = true; saveSession(id, current); }
+    return { record, state };
+  });
+  const applied = check?.applied && worktreeApplied(check.applied) ? `applied ${check.applied.match(/^Worktree: applied (\d+) files$/m)[1]} files` : "not applied";
+  lines.unshift(`ROUTER: ${bound.task} ${bound.type} ${outcome}${reason ? ` (${reason})` : ""} · ${applied} · Verify: ${check?.facts.verifyText ?? "none"}`);
+  if (outcome === "fail") {
+    lines.push(`Next: ${record.sample ? "use a candidate below; do not repair the sample worker" : recovery[reason]}`);
+    if (state.failures >= ownerCheckAfter) lines.push(`Owner check: ask the owner before attempt ${state.failures + 1}.`);
+    const choices = nextCandidates(state, codex).slice(0, 3);
+    lines.push(choices.length ? `Candidates: ${choices.map((row) => `${row.worker}${needsApproval(benchmarkId(row.worker)) ? " (needs owner approval)" : ""}`).join(" · ")}`
+      : `No allowed worker meets floor ${floorFor(state).floor}: stop and ask the owner.`);
+  }
+  return { decision: "block", reason: `Router check done. Do not edit files or run commands. Reply with your report from before, unchanged, and end it with these lines exactly:\n${lines.join("\n")}` };
+}
+async function command(args, raw) {
   const [name, ...rest] = args;
-  if (name === "hook") return JSON.stringify(hook(rest[0], object(JSON.parse(raw || "{}"))));
+  if (name === "hook") return JSON.stringify(await hook(rest[0], object(JSON.parse(raw || "{}"))));
   if (name === "check") return check(rest);
   if (name === "apply") return apply(rest);
   if (name === "finish") return finish(rest);
-  if (name === "usage") return usageLine();
   if (name === "plan") return plan(rest);
   if (name === "result") {
     const record = resultRecord(rest, projectKey, pluginName);
     return recordResult(record);
-  }
-  if (name === "close") {
-    const record = closeRecord(rest, projectKey, readResults(data("results.jsonl")));
-    appendResult(data("results.jsonl"), record);
-    return "Closed " + record.task + ": planned " + record.planned + ", actual " + record.actual + ", " + record.attempts + " attempts, " + (record.passed ? "passed" : "not passed");
   }
   if (name === "stats") {
     const records = readResults(data("results.jsonl")), options = statsOptions(rest, comparable);
@@ -847,12 +989,15 @@ async function main() {
     const raw = ["hook", "statusline"].includes(args[0]) ? fs.readFileSync(0, "utf8") : "";
     // Parsed before the lock so a lock timeout can still deny a worker's edit.
     if (isHook) try { input = object(JSON.parse(raw || "{}")); } catch {}
-    // Git and verification operations have private indexes and need no state lock.
-    const readHook = isHook && args[1] === "PreToolUse" && input.tool_name === "Bash";
-    if (isHook && ["PostToolUse", "PostToolUseFailure"].includes(args[1]) && input.tool_name === "Bash" && !codexLaunch(input)) {
+    // Commands that are not invokes never touch router state.
+    const bash = isHook && ["PreToolUse", "PostToolUse", "PostToolUseFailure"].includes(args[1]) && input.tool_name === "Bash";
+    if (bash && (!isInvoke(String(input.tool_input?.command || "")) || (args[1] !== "PreToolUse" && !codexLaunch(input)))) {
       process.stdout.write("{}\n"); return;
     }
-    const output = readHook || ["check", "apply", "finish", "usage", "statusline"].includes(args[0]) ? await command(args, raw) : await locked(() => command(args, raw));
+    // Git and verification operations have private indexes and need no state lock; SubagentStop takes the lock
+    // itself around its state reads and writes (its verify can take minutes); UserPromptSubmit only reads.
+    const unlocked = ["check", "apply", "finish", "statusline"].includes(args[0]) || (isHook && ["SubagentStop", "UserPromptSubmit"].includes(args[1]));
+    const output = unlocked ? await command(args, raw) : await locked(() => command(args, raw));
     process.stdout.write(args[0] === "statusline" ? output : `${output}\n`);
   } catch (error) {
     if (isHook) {

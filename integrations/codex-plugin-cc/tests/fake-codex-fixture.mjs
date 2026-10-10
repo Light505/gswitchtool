@@ -263,6 +263,7 @@ function taskPayload(prompt, resume) {
       fs.writeFileSync(file, resolved, "utf8");
     }
   }
+  if (process.env.GSWITCH_TEST_ANSWER) return process.env.GSWITCH_TEST_ANSWER;
   if (prompt.includes("Reply format (end with at most 16 lines):")) {
     const resultLine = process.env.GSWITCH_TEST_RESULT_LINE ? "\\n" + process.env.GSWITCH_TEST_RESULT_LINE : "";
     return "Changed: " + (changedFile ? changedFile + " — added fixture changes" : "none") + "\\nTests: fixture — passed\\nOpen questions: none" + resultLine;

@@ -147,22 +147,6 @@ test("sampling setting, modes, kinds, results and roll boundaries at the command
   f.plan([], "claude"); assert.equal(readResults(f.file).at(-1).sample, null);
 });
 
-test("close captures hindsight, works when off, appends repeated closures and rejects invalid input", (t) => {
-  const f = fixture(t);
-  const args = ["close", "s1", f.project, "--task", "t1", "--actual", "moderate", "--orchestrator-fix", "yes"];
-  assert.equal(f.invoke(args).status, 1);
-  f.plan();
-  assert.equal(f.run(args).trim(), "Closed t1: planned small, actual moderate, 0 attempts, not passed");
-  f.result("orchestrator", [], "pass"); f.result("router:haiku-low", [], "pass");
-  f.setup({ mode: "off" });
-  assert.equal(f.run([...args, "--note", "fixed it"]).trim(), "Closed t1: planned small, actual moderate, 1 attempts, passed");
-  const closes = readResults(f.file).filter((r) => r.type === "close");
-  assert.equal(closes.length, 2); assert.equal(closes[0].note, null);
-  assert.deepEqual({ ...closes[1], time: null, project: null }, { type: "close", time: null, sessionId: "s1", project: null, task: "t1", planned: "small", actual: "moderate", orchestratorFix: true, attempts: 1, passed: true, note: "fixed it" });
-  for (const flags of [["--note", "x".repeat(121)], ["--actual", "bad"], ["--orchestrator-fix", "maybe"]]) assert.equal(f.invoke([...args, ...flags]).status, 1);
-  assert.equal(f.invoke(["close", "s1", f.project, "--task", "t1"]).status, 1);
-});
-
 test("self report reads the last RESULT line with reordered keys and independent invalid parts", () => {
   assert.equal(parseSelfReport("no report"), null); assert.equal(parseSelfReport(null), null);
   for (const separator of ["·", "|", ";", ","]) {

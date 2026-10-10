@@ -103,8 +103,8 @@ test("the app alone supplies mode, review and allowed workers, read on each mess
   for (const mode of ["mixed", "claude", "codex"]) {
     f.settings({ mode, claudeOnlyReview: "off", claudeAllowed: { haiku: ["medium"], sonnet: ["low"], opus: [] } });
     const line = f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext;
-    assert.match(line, new RegExp(`^Router: mode=${mode} \\(GSwitch setup\\).*review in claude mode: off`));
-    assert.ok(line.endsWith(`Claude workers: haiku medium · sonnet low${mode === "claude" ? "" : " · Speed: normal"}`));
+    assert.match(line, new RegExp(`^Router: mode=${mode} · `));
+    assert.ok(line.endsWith(`Claude workers: haiku medium · sonnet low${mode === "claude" ? "" : " · Invoke: unknown · Speed: normal"} · Codex review in claude mode: off`));
   }
 });
 
@@ -256,7 +256,11 @@ test("corrupt files default safely, malformed hooks allow and log", (t) => {
   const f = fixture(t);
   for (const file of ["config.json", "sessions/s1.json", "usage.json"]) f.write(file, "{broken");
   assert.match(f.run(["mode", "s1", f.project]), /^Automatic team is off/);
-  assert.match(f.run(["usage"]), /unknown/);
+  // The Router line and records replace the usage and close commands.
+  for (const name of ["usage", "close"]) {
+    const removed = spawnSync(process.execPath, [script, name, "s1", f.project], { cwd: f.home, env: f.env, encoding: "utf8", windowsHide: true });
+    assert.equal(removed.status, 1); assert.match(removed.stderr, /Unknown router command/);
+  }
   assert.deepEqual(f.hook("UserPromptSubmit"), {});
   assert.equal(f.run(["hook", "PreToolUse"], "{bad").trim(), "{}");
   assert.match(fs.readFileSync(path.join(f.data, "router.log"), "utf8"), /PreToolUse:/);
@@ -285,14 +289,45 @@ test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) =
 test("UserPromptSubmit exact context and LOW threshold", (t) => {
   const f = fixture(t);
   f.mode("mixed");
-  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed (GSwitch setup) · Codex review in claude mode: on · Use first: codex · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Speed: normal");
+  assert.equal(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, "Router: mode=mixed · Use first: codex · Claude 5h: unknown · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Invoke: unknown · Speed: normal · Codex review in claude mode: on");
   f.write("usage.json", { fiveHour: { usedPercentage: 70, resetsAt: Date.now() / 1000 + 3600 }, updatedAt: new Date().toISOString() });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Speed: normal$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /30% left · LOW: no Claude workers · Claude workers: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max · Invoke: unknown · Speed: normal · Codex review in claude mode: on$/);
   f.settings({ claudeAllowed: { ...defaultAllowed(), sonnet: ["max","low"] } });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max · Speed: normal$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: haiku low, medium · sonnet low, max · opus low, medium, high, xhigh, max · Invoke: unknown/);
   f.settings({ claudeAllowed: {} });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none · Speed: normal$/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude workers: none · Invoke: unknown · Speed: normal · /);
   f.mode("off"); assert.deepEqual(f.hook("UserPromptSubmit"), {});
+});
+
+test("Router line carries injected Invoke status and allowed Codex models without account data", (t) => {
+  const f = fixture(t);
+  const status = path.join(f.home, "status.json");
+  f.env.GSWITCH_ROUTER_INVOKE_STATUS = status;
+  const line = () => f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext;
+  const profiles = [{ model: "gpt-6.1-sol", reasoning_efforts: ["low", "medium", "turbo"] }, { model: "gpt-6-luna", reasoning_efforts: ["max"], exclusive: true }];
+  fs.writeFileSync(status, JSON.stringify({ invoke_mode: true, paused: null, allowed_invocation_profiles: profiles, allowed_accounts: 2, email: "owner@example.invalid", codex_home: "C:/secret" }));
+  f.settings({ mode: "mixed" });
+  assert.ok(line().endsWith(" · Invoke: on · Codex: gpt-6.1-sol low, medium · gpt-6-luna max · Speed: normal · Codex review in claude mode: on"));
+  assert.doesNotMatch(line(), /owner@|secret|accounts/);
+  f.settings({ mode: "codex" });
+  assert.match(line(), /^Router: mode=codex · Claude 5h: unknown · .* · Invoke: on · Codex: gpt-6.1-sol low, medium · gpt-6-luna max · Speed: normal/);
+  f.settings({ mode: "claude", claudeOnlyReview: "on" });
+  assert.ok(line().endsWith(" · Invoke: on · Codex: gpt-6.1-sol low, medium · gpt-6-luna max · Codex review in claude mode: on"));
+  f.settings({ claudeOnlyReview: "off" });
+  assert.doesNotMatch(line(), /Invoke|Codex:/);
+  f.settings({ mode: "mixed" });
+  fs.writeFileSync(status, JSON.stringify({ invoke_mode: false, allowed_invocation_profiles: profiles }));
+  assert.match(line(), / · Invoke: off · Speed: normal · /); assert.doesNotMatch(line(), /Codex:/);
+  fs.writeFileSync(status, JSON.stringify({ invoke_mode: true, paused: { resumes_at: 1 }, allowed_invocation_profiles: profiles }));
+  assert.match(line(), / · Invoke: paused · Speed: normal · /); assert.doesNotMatch(line(), /Codex:/);
+  fs.writeFileSync(status, JSON.stringify({ invoke_mode: true, allowed_invocation_profiles: [] }));
+  assert.match(line(), / · Invoke: on · Codex: none · /);
+  for (const broken of ["{broken", "null"]) {
+    fs.writeFileSync(status, broken);
+    assert.match(line(), / · Invoke: unknown · Speed: normal · /);
+  }
+  fs.rmSync(status);
+  assert.match(line(), / · Invoke: unknown · /);
 });
 
 test("Use first appears only in mixed mode and labels the configured preference", (t) => {
@@ -304,7 +339,7 @@ test("Use first appears only in mixed mode and labels the configured preference"
   assert.doesNotMatch(f.run(["statusline"]), /Try first/);
 
   f.settings({ mode: "mixed", prefer: "price" });
-  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Codex review in claude mode: on · Use first: price · Claude 5h:/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /^Router: mode=mixed · Use first: price · Claude 5h:/);
   assert.match(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Try first: Cheapest/);
   assert.match(f.run(["mode", "s1", f.project]), /Try first: Cheapest/);
   assert.match(f.run(["statusline"]), /Try first: Cheapest/);
@@ -393,7 +428,7 @@ test("statusline captures usage, passes exact stdin/output, removes expired wind
   const input = { session_id: "s1", cwd: f.project, rate_limits: { five_hour: { used_percentage: 71.5, resets_at: Date.now() / 1000 + 3600 } } };
   assert.match(f.run(["statusline"], input), /Claude models only/);
   assert.equal(f.read("usage.json").fiveHour.usedPercentage, 71.5);
-  assert.match(f.run(["usage"]), /28.5% left, resets/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude 5h: 28.5% left · /);
   const passthrough = path.join(f.home, "passthrough.mjs");
   fs.writeFileSync(passthrough, 'import fs from "node:fs"; process.stdout.write(fs.readFileSync(0, "utf8"));');
   f.write("config.json", { statusLineCommand: `"${process.execPath}" "${passthrough}"` });
@@ -402,7 +437,7 @@ test("statusline captures usage, passes exact stdin/output, removes expired wind
   input.rate_limits.five_hour.resets_at = Date.now() / 1000 - 1;
   f.run(["statusline"], input);
   assert.equal(fs.existsSync(path.join(f.data, "usage.json")), false);
-  assert.match(f.run(["usage"]), /unknown/);
+  assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Claude 5h: unknown · /);
   f.write("usage.json", { fiveHour: { usedPercentage: 80, resetsAt: new Date(Date.now() - 10000).toISOString() } });
   f.run(["statusline"], {});
   assert.equal(fs.existsSync(path.join(f.data, "usage.json")), false);
@@ -596,7 +631,7 @@ test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
     assert.deepEqual(normalizeCodexSpeed(value), { mode: "normal", fastMinRemaining: 20 });
     setup("mixed", value);
     assert.match(f.run(["mode", "s1", f.project]), / · Codex speed: Normal · /);
-    assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, / · Speed: normal$/);
+    assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, / · Speed: normal · Codex review in claude mode: on$/);
     assert.doesNotMatch(plan(), /Codex speed:/);
   }
   for (const [value, expected] of [
@@ -608,7 +643,7 @@ test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
   ]) {
     assert.deepEqual(normalizeCodexSpeed(value), expected);
     setup("mixed", value);
-    assert.ok(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext.endsWith(` · Speed: ${expected.mode}`));
+    assert.ok(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext.includes(` · Speed: ${expected.mode} · `));
     if (expected.mode === "normal") assert.doesNotMatch(plan(), /Codex speed:/);
     else assert.ok(plan().includes(`below ${expected.fastMinRemaining}% usage left`));
   }
@@ -620,7 +655,7 @@ test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
     if (mode === "claude") {
       assert.doesNotMatch(line + status + output, /Speed:|Codex speed:/); continue;
     }
-    assert.ok(line.endsWith(` · Speed: ${speed}`));
+    assert.ok(line.includes(` · Speed: ${speed} · `));
     const label = { normal: "Normal", fast: "Fast", orchestrator: "Claude decides" }[speed];
     assert.ok(status.includes(` · Codex speed: ${label} · `));
     if (speed === "normal") assert.doesNotMatch(output, /Codex speed:/);
