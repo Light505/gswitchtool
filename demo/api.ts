@@ -126,6 +126,17 @@ const displayOnly = {
     { at: Date.now() - 31 * 60_000, kind: "woke", accounts: ["demo-4"] },
     { at: Date.now() - 52 * 60_000, kind: "task_ended", task: "demo-task-0", model: "gpt-6-luna", thread_id: "01a1e9b8-demo", status: "completed", usage: { input_tokens: 30000, cached_input_tokens: 25000, output_tokens: 11200, reasoning_output_tokens: 400, total_tokens: 41200 } },
   ],
+  resultsSummary: async (days: number) => ({
+    since: new Date(Date.now() - Math.min(Math.max(days, 1), 365) * 86_400_000).toISOString(),
+    tasks: 41,
+    rows: [
+      { worker: "codex:gpt-6.1-sol/medium", family: "codex" as const, model: "gpt-6.1-sol", effort: "medium", difficulty: "moderate", attempts: 18, passes: 15, firstTries: 16, firstTryPasses: 13, samples: 0, medianMs: 612_000, medianTokens: 1_840_000, medianUsd: 0.62 },
+      { worker: "codex:gpt-6.1-sol/xhigh", family: "codex" as const, model: "gpt-6.1-sol", effort: "xhigh", difficulty: "hard", attempts: 7, passes: 6, firstTries: 5, firstTryPasses: 4, samples: 0, medianMs: 1_080_000, medianTokens: 3_150_000, medianUsd: 1.08 },
+      { worker: "codex:gpt-6-luna/low", family: "codex" as const, model: "gpt-6-luna", effort: "low", difficulty: "small", attempts: 3, passes: 2, firstTries: 3, firstTryPasses: 2, samples: 3, medianMs: 198_000, medianTokens: 410_000, medianUsd: 0.02 },
+      { worker: "router:haiku-low", family: "claude" as const, model: "haiku", effort: "low", difficulty: "trivial", attempts: 9, passes: 9, firstTries: 9, firstTryPasses: 9, samples: 0, medianMs: 95_000, medianTokens: 240_000, medianUsd: 0.05 },
+      { worker: "router:sonnet-medium", family: "claude" as const, model: "sonnet", effort: "medium", difficulty: "small", attempts: 8, passes: 7, firstTries: 8, firstTryPasses: 7, samples: 0, medianMs: 384_000, medianTokens: 1_120_000, medianUsd: 0.58 },
+    ],
+  }),
   onInvokeActivity: async () => () => undefined,
   onInvokeResumed: async () => () => undefined,
   modelCatalog: async () => [

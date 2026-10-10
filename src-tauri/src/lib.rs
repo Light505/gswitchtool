@@ -16,6 +16,7 @@ mod invoke_ipc;
 mod migration;
 mod model_access;
 mod quota;
+mod results;
 mod runtime;
 mod storage;
 mod switching;
@@ -341,6 +342,7 @@ pub fn run() {
             commands::stop_invoke_task,
             commands::get_paused_threads,
             commands::get_activity,
+            commands::results_summary,
             commands::read_task_log,
             commands::get_invoke_pause,
             commands::resume_invoke

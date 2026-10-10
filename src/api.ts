@@ -27,6 +27,7 @@ import type {
   InvokeTask,
   LogChunk,
   PausedThread,
+  ResultsSummary,
   SwitchOutcome,
   WakeOperationView,
   WakeStart,
@@ -129,6 +130,7 @@ export const api = {
   pausedThreads: () => invoke<PausedThread[]>("get_paused_threads"),
   readTaskLog: (threadId: string, offset: number) => invoke<LogChunk>("read_task_log", { threadId, offset }),
   activity: (limit = 200) => invoke<ActivityEntry[]>("get_activity", { limit }),
+  resultsSummary: (days: number) => invoke<ResultsSummary>("results_summary", { days }),
   onInvokeActivity: (handler: (entry: ActivityEntry) => void) =>
     listen<ActivityEntry>("invoke-activity", (event) => handler(event.payload)),
   onInvokeResumed: (handler: (resumed: { threads: PausedThread[]; by_user: boolean }) => void) =>

@@ -80,6 +80,11 @@ impl InvokeState {
         })
     }
 
+    /// The finished-task comparison log beside `claude-setup.json`.
+    pub fn codex_runs_path(&self) -> PathBuf {
+        self.path.with_file_name("codex-runs.jsonl")
+    }
+
     /// Logging is best-effort and serialized across workers. Errors reveal no task or provider data.
     pub fn append_codex_run(&self, run: &crate::failover::CodexRun) {
         let append = || -> Result<(), String> {
@@ -87,7 +92,7 @@ impl InvokeState {
                 .run_log
                 .lock()
                 .map_err(|_| "Run log lock unavailable")?;
-            let path = self.path.with_file_name("codex-runs.jsonl");
+            let path = self.codex_runs_path();
             fs::create_dir_all(path.parent().ok_or("Invalid run log path")?)
                 .map_err(|_| "Run log storage unavailable")?;
             let mut content = match fs::read_to_string(&path) {

@@ -245,6 +245,37 @@ pub fn get_activity(
     activity.recent(limit.unwrap_or(200).min(1000))
 }
 
+/// How each model did on routed coding tasks in the last `days` days. Reads
+/// the router's results log and the Codex run log; never writes.
+#[tauri::command]
+pub async fn results_summary(
+    app: AppHandle,
+    invoke: State<'_, InvokeState>,
+    days: u32,
+) -> Result<crate::results::ResultsSummary, String> {
+    use tauri::Manager;
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Your home folder is unavailable".to_string())?;
+    let dev = crate::build_identity::is_dev_identifier(&app.config().identifier);
+    let results = crate::results::router_results_path(&home, dev);
+    let codex_runs = invoke.codex_runs_path();
+    run_blocking(move || {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis() as i64)
+            .unwrap_or_default();
+        Ok(crate::results::summarize(
+            &results,
+            &codex_runs,
+            days,
+            now_ms,
+        ))
+    })
+    .await
+}
+
 /// The running app's version, shown next to its name.
 #[tauri::command]
 pub fn get_app_version(app: AppHandle) -> crate::types::AppVersion {

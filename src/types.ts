@@ -89,6 +89,29 @@ export interface LogChunk {
   offset: number;
 }
 
+/** How one worker did at one difficulty on routed coding tasks. Holds no titles, paths or identifiers. */
+export interface ResultsRow {
+  worker: string;
+  family: "claude" | "codex";
+  model: string;
+  effort: string;
+  difficulty: string;
+  attempts: number;
+  passes: number;
+  firstTries: number;
+  firstTryPasses: number;
+  samples: number;
+  medianMs: number | null;
+  medianTokens: number | null;
+  medianUsd: number | null;
+}
+
+export interface ResultsSummary {
+  since: string;
+  tasks: number;
+  rows: ResultsRow[];
+}
+
 export interface PausedThread {
   thread_id: string;
   model: string;
