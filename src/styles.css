@@ -2210,7 +2210,10 @@ textarea {
 }
 .claude-setup-choice span, .claude-setup-note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
 .claude-router-options { display: grid; gap: 12px; }
-.claude-router-mode { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.claude-router-mode { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 12px; }
+.claude-router-mode > span { white-space: nowrap; }
+.claude-router-mode.claude-check { display: flex; justify-content: flex-start; }
+.claude-check input { width: auto; min-height: 0; padding: 0; margin: 0; }
 .claude-option { display: grid; gap: 4px; }
 .claude-setup-choice .claude-setup-tag {
   justify-self: start;
@@ -2247,7 +2250,7 @@ textarea {
 .claude-worker-grid caption { text-align: left; padding: 8px 0; font-weight: 640; }
 .claude-worker-grid th, .claude-worker-grid td { padding: 9px 6px; border-bottom: 1px solid var(--border); text-align: center; }
 .claude-worker-grid th:first-child { text-align: left; }
-.claude-worker-grid input { margin: 0; accent-color: var(--accent); }
+.claude-worker-grid input { width: auto; min-height: 0; padding: 0; margin: 0; accent-color: var(--accent); }
 @media (max-width: 760px) {
   .claude-setup-cards { grid-template-columns: 1fr; }
 }

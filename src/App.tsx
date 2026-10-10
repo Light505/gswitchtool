@@ -1733,7 +1733,7 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
               </div>
             ) : null}
             <div className="claude-option">
-            <label className="claude-router-mode">
+            <label className="claude-router-mode claude-check">
               <input type="checkbox" disabled={saving} checked={draft.router.sampling === "on"}
                 onChange={(event) => {
                   const sampling = event.target.checked ? "on" : "off";
