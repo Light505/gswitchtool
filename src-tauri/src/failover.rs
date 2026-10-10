@@ -232,6 +232,26 @@ pub fn resolve_speed(
     }
 }
 
+/// The worker's own RESULT line. Only allowed values are kept, never free text.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelfReport {
+    pub status: Option<&'static str>,
+    pub confidence: Option<&'static str>,
+    pub felt: Option<&'static str>,
+    pub verify_fails: Option<u32>,
+}
+
+/// Token counts split the way API prices are.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenBreakdown {
+    pub input: u64,
+    pub cached_input: u64,
+    pub output: u64,
+    pub reasoning_output: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct TaskMetrics {
     pub job_id: Option<String>,
@@ -239,6 +259,15 @@ pub struct TaskMetrics {
     pub codex_ms: Option<u64>,
     pub total_ms: Option<u64>,
     pub tokens: Option<u64>,
+    pub self_report: Option<SelfReport>,
+    pub files_changed: Option<u64>,
+    pub lines_added: Option<u64>,
+    pub lines_deleted: Option<u64>,
+    pub verify: Option<&'static str>,
+    pub verify_retries: Option<u8>,
+    pub scope_requests: Option<u32>,
+    pub token_breakdown: Option<TokenBreakdown>,
+    pub long_prompt_tokens: Option<TokenBreakdown>,
 }
 
 /// Finished-task comparison data. Never includes account identity, folders, or provider payloads.
@@ -261,6 +290,15 @@ pub struct CodexRun {
     pub codex_ms: Option<u64>,
     pub total_ms: Option<u64>,
     pub tokens: Option<u64>,
+    pub self_report: Option<SelfReport>,
+    pub files_changed: Option<u64>,
+    pub lines_added: Option<u64>,
+    pub lines_deleted: Option<u64>,
+    pub verify: Option<&'static str>,
+    pub verify_retries: Option<u8>,
+    pub scope_requests: Option<u32>,
+    pub token_breakdown: Option<TokenBreakdown>,
+    pub long_prompt_tokens: Option<TokenBreakdown>,
 }
 
 struct Lease {
@@ -580,6 +618,15 @@ impl Coordinator {
             codex_ms: metrics.codex_ms,
             total_ms: metrics.total_ms,
             tokens: metrics.tokens,
+            self_report: metrics.self_report,
+            files_changed: metrics.files_changed,
+            lines_added: metrics.lines_added,
+            lines_deleted: metrics.lines_deleted,
+            verify: metrics.verify,
+            verify_retries: metrics.verify_retries,
+            scope_requests: metrics.scope_requests,
+            token_breakdown: metrics.token_breakdown,
+            long_prompt_tokens: metrics.long_prompt_tokens,
         }))
     }
 

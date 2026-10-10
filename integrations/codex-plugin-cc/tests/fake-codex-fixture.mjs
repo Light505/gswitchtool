@@ -263,8 +263,9 @@ function taskPayload(prompt, resume) {
       fs.writeFileSync(file, resolved, "utf8");
     }
   }
-  if (prompt.includes("Reply format (end with at most 15 lines):")) {
-    return "Changed: " + (changedFile ? changedFile + " — added fixture changes" : "none") + "\\nTests: fixture — passed\\nOpen questions: none";
+  if (prompt.includes("Reply format (end with at most 16 lines):")) {
+    const resultLine = process.env.GSWITCH_TEST_RESULT_LINE ? "\\n" + process.env.GSWITCH_TEST_RESULT_LINE : "";
+    return "Changed: " + (changedFile ? changedFile + " — added fixture changes" : "none") + "\\nTests: fixture — passed\\nOpen questions: none" + resultLine;
   }
 
   if (prompt.includes("<task>") && prompt.includes("Only review the work from the previous Claude turn.")) {
@@ -529,13 +530,22 @@ rl.on("line", (line) => {
         const tokenUpdates = JSON.parse(process.env.GSWITCH_TEST_TOKEN_USAGE || "null");
         if (Array.isArray(tokenUpdates)) {
           let totalTokens = thread.totalTokens ?? 1000;
-          for (const last of tokenUpdates) {
-            totalTokens += last;
-            const notification = { method: "thread/tokenUsage/updated", params: { threadId: thread.id, tokenUsage: { total: { totalTokens }, last: { totalTokens: last } } } };
+          // An entry is a token count, or an object with App Server breakdown fields.
+          const totals = thread.tokenTotals ?? {};
+          for (const entry of tokenUpdates) {
+            const last = typeof entry === "number" ? { totalTokens: entry } : entry;
+            totalTokens += last.totalTokens;
+            const total = { totalTokens };
+            for (const key of Object.keys(last).filter((key) => key !== "totalTokens")) {
+              totals[key] = (totals[key] ?? 1000) + last[key];
+              total[key] = totals[key];
+            }
+            const notification = { method: "thread/tokenUsage/updated", params: { threadId: thread.id, tokenUsage: { total, last } } };
             send(notification);
             if (process.env.GSWITCH_TEST_DUPLICATE_USAGE === "1") send(notification);
           }
           thread.totalTokens = totalTokens;
+          thread.tokenTotals = totals;
           saveState(state);
         }
 

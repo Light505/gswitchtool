@@ -1651,6 +1651,15 @@ function ClaudeSetupDialog({ settings, accounts, onClose, onSaved, onInvokeSaved
                 </select>
               </label>
             ) : null}
+            <label className="claude-router-mode">
+              <input type="checkbox" disabled={saving} checked={draft.router.sampling === "on"}
+                onChange={(event) => {
+                  const sampling = event.target.checked ? "on" : "off";
+                  setDraft((current) => ({ ...current, router: { ...current.router, sampling } }));
+                }} />
+              <span>Try cheaper models on easy tasks</span>
+            </label>
+            <p className="claude-setup-note">On trivial and small tasks, about 1 in 10 first attempts goes to a cheaper or untested allowed model so the router learns what it can do. If it fails, the usual choice follows.</p>
           </div>
         ) : null}
         {usesCodex ? (

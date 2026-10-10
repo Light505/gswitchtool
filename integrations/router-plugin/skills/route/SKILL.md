@@ -51,12 +51,23 @@ owner first.
 Then run, once per task (again only to change its classification):
 
 `router plan ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --kind
-<kind> --difficulty <difficulty> --title "<short title>" [--codex
+<kind> --difficulty <difficulty> --title "<short title>" --files <1–999>
+--cross-module <yes|no> --check <test|build|review|none> --repro <yes|no>
+--confidence <high|medium|low> [--codex
 "<model>:<efforts>;<model>:<efforts>"]`
 
 In `mixed` and `codex`, add `--codex` copied from `invoke-status`'s allowed
 list, for example `--codex "gpt-6.1-sol:low,medium,high;gpt-6-luna:low,medium,high,xhigh,max"`.
 Use one task id (`t1`, `t2`, …) for all attempts at the same task.
+Always pass these plan flags: expected files to change, whether it crosses
+modules, the check, whether a failing test or exact reproduction exists, and
+your confidence in the difficulty rating.
+
+When the plan prints a Sample attempt, start with that worker and say
+"sample attempt" in the report. GSwitch's sampling setting defaults on: about
+one in ten trivial/small first attempts tries a cheaper or untested allowed
+worker. After a failed sample attempt, use the candidates below; do not repair
+the sample worker, and its failure does not raise the floor.
 
 The plan prints the task's capability floor, its failures so far, the recovery
 for the last failure, and the candidates: workers your settings allow (Claude
@@ -67,7 +78,8 @@ Lowest API price), then cheapest within each family. Single-family modes and
 Lowest API price use cheapest first. Floors: trivial and small 0, moderate 42, hard 55, high-risk 60;
 `debug` counts as at least moderate and `architecture` as at least hard.
 
-Pick the first candidate unless the task gives a reason for another listed one
+Unless a Sample attempt is printed, pick the first candidate unless the task
+gives a reason for another listed one
 (for example a debugging task where a Codex model scores much higher on
 terminal work for a few cents more). Never pick a worker that is not listed. The
 owner may name a worker for a task; follow it (the hook asks the owner to
@@ -110,7 +122,7 @@ max, Sol max). If the owner denies it, stop and ask.
 
 ## 4. Check the result
 
-Trust tool facts only; the worker's text is a claim.
+Trust tool facts only; the worker's text, including its RESULT line, is a claim.
 
 - Claude worker: run `router finish ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}"
   --agent <agentId> [--verify <cmd>]`. It runs verify and the git and scope
@@ -158,7 +170,11 @@ benchmark's success rates over time:
 "<short title>" --difficulty <difficulty> --worker <router:<model>-<effort> |
 codex:<model>/<effort> | orchestrator> --step <start|escalation|repair|retry>
 --outcome <pass|fail|unverified|blocked> [--reason <reason>] [--agent
-<agentId>] [--codex-job <job>] [--codex-thread <thread>]`
+<agentId>] [--codex-job <job>] [--codex-thread <thread>]
+[--review <none|minor|serious>] [--findings <0–99>]`
+
+When a review ran, pass its worst finding with `--review` and its finding count
+with `--findings` (`none` and 0 for a clean review).
 
 A `fail` needs a reason (section 5). Record the difficulty you judged at the
 start, even if the task turned out harder. When `router finish` says the worker
@@ -171,6 +187,12 @@ Use `--worker orchestrator` when you made the edit yourself (the "Yourself"
 cases or an owner-requested direct edit). Omit `--agent` and `--codex-*`. Never
 record a worker that did not run. These records are not counted in worker
 success rates.
+
+After a task passes or is given up, run:
+`router close ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id>
+--actual <difficulty> --orchestrator-fix <yes|no> [--note "<short note>"]`.
+Use the hindsight difficulty and whether you had to fix the worker's result
+yourself. Notes are at most 120 characters.
 
 ## 5. Recover from a failure
 

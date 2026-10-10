@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 
 import { parseArgs, splitRawArgumentString } from "./lib/args.mjs";
 import {
+    addTokenBreakdown,
     buildPersistentTaskThreadName,
     DEFAULT_CONTINUE_PROMPT,
     INVOKE_SCOPE_APPROVAL_POLICY,
@@ -28,6 +29,7 @@ import { DISABLE_BROKER_ENV } from "./lib/app-server.mjs";
 import { resolveClaudeSessionPath } from "./lib/claude-session-transfer.mjs";
 import { GSwitchError, GSwitchSession, PAUSE_ALL_WORK, gswitchTargetAppName, pauseInstruction, readClaudeSetup, readInvokeStatus } from "./lib/gswitch.mjs";
 import { readStdinIfPiped } from "./lib/fs.mjs";
+import { parseSelfReport } from "./lib/self-report.mjs";
 import { collectReviewContext, ensureGitRepository, resolveReviewTarget, unmatchedCodexPaths } from "./lib/git.mjs";
 import { binaryAvailable, terminateProcessTree } from "./lib/process.mjs";
 import { loadPromptTemplate, interpolateTemplate } from "./lib/prompts.mjs";
@@ -1146,10 +1148,11 @@ async function handleInvokeStatus(argv) {
 
 const INVOKE_REPLY_FORMAT = [
   "Work rules: understand the code you change and the code that calls it before editing; match the surrounding style; keep the change small but complete. Keep the output of passing commands short, but read the full error when a command fails. Do not weaken, skip or delete tests.",
-  "Reply format (end with at most 15 lines):",
+  "Reply format (end with at most 16 lines):",
   "Changed: one line per file (path from the repository root), what changed",
   "Tests: commands run + pass/fail",
-  "Open questions: none, or list them"
+  "Open questions: none, or list them",
+  "The very last line is exactly: RESULT: <done|partial|stopped> · confidence: <high|medium|low> · felt: <trivial|small|moderate|hard|high-risk> · verify-fails: <n> (felt = how hard the task turned out; verify-fails = failed test runs before the final one, 0 if none)"
 ].join("\n");
 
 const VERIFY_RETRY_PROMPT = (command, output) =>
@@ -1568,6 +1571,10 @@ function renderInvokeResult(result) {
   const speedLabel = result.speed === "fast" ? "Fast (priority)" : result.speed === "mixed" ? "Mixed (Fast / Normal)" : "Normal";
   const speedDetail = result.speed === "fast" ? result.speedReason ?? "Speed setting is Fast" : result.speedNotes?.join("; ");
   lines.push(`Speed: ${speedLabel}${speedDetail ? ` — ${speedDetail}` : ""}`);
+  if (result.selfReport) {
+    const { status, confidence, felt, verifyFails } = result.selfReport;
+    lines.push(`Self-report: ${status ?? "-"} · confidence ${confidence ?? "-"} · felt ${felt ?? "-"} · verify-fails ${verifyFails ?? "-"}`);
+  }
   if (result.scopeRequests) {
     for (const request of result.scopeRequests) lines.push(`SCOPE REQUEST: ${request.path}${request.reason ? ` — ${request.reason}` : ""}`);
     lines.push(`Scope: ${result.scopeRequests.length} change(s) declined`);
@@ -1595,6 +1602,27 @@ function renderInvokeResult(result) {
   return `${lines.join("\n")}\n`;
 }
 
+function runLogTokens(tokens) {
+  return tokens ? { input: tokens.input, cached_input: tokens.cachedInput, output: tokens.output, reasoning_output: tokens.reasoningOutput } : null;
+}
+
+// Run-log facts for GSwitch: counts and fixed values only, never answer text or paths.
+function taskResultDetails(result, scopeRequestCount) {
+  const report = result.selfReport ?? null;
+  const diff = result.diff?.repository ? result.diff : null;
+  return {
+    self_report: report && { status: report.status, confidence: report.confidence, felt: report.felt, verify_fails: report.verifyFails },
+    files_changed: diff ? diff.totalFiles : null,
+    lines_added: diff ? diff.added : null,
+    lines_deleted: diff ? diff.deleted : null,
+    verify: result.verify ? (result.verify.passed ? "passed" : "failed") : result.verifySkipped ? "skipped" : "none",
+    verify_retries: result.verify?.retries ?? 0,
+    scope_requests: scopeRequestCount,
+    token_breakdown: runLogTokens(result.tokenBreakdown),
+    long_prompt_tokens: runLogTokens(result.longPromptTokens)
+  };
+}
+
 // Fixed by GSwitch Invoke Mode: the continuation after an account switch is
 // owned by this code, never reworded by the invoking model.
 const FAILOVER_RESUME_PROMPT =
@@ -1606,7 +1634,7 @@ const SIMULATE_USAGE_LIMIT_ENV = "GSWITCH_INVOKE_SIMULATE_USAGE_LIMIT";
 
 async function handleInvoke(argv) {
   const startedAt = performance.now();
-  const metrics = { codexMs: 0, tokens: null, speeds: [], speedNotes: [], jobId: null, threadId: null };
+  const metrics = { codexMs: 0, tokens: null, tokenBreakdown: null, longPromptTokens: null, speeds: [], speedNotes: [], jobId: null, threadId: null };
   const { options, positionals } = parseCommandInput(argv, {
     valueOptions: ["model", "effort", "cwd", "prompt-file", "resume-thread", "scope", "verify", "worktree-dir", "speed", "speed-reason"],
     repeatableOptions: ["scope"],
@@ -1631,7 +1659,8 @@ async function handleInvoke(argv) {
   const speedResult = () => ({
     speed: new Set(metrics.speeds).size > 1 ? "mixed" : metrics.speeds[0] ?? "normal",
     speedRequested, speedReason, speedNotes: metrics.speedNotes,
-    codexMs: metrics.codexMs, totalMs: Math.max(0, Math.round(performance.now() - startedAt)), tokens: metrics.tokens
+    codexMs: metrics.codexMs, totalMs: Math.max(0, Math.round(performance.now() - startedAt)), tokens: metrics.tokens,
+    tokenBreakdown: metrics.tokenBreakdown, longPromptTokens: metrics.longPromptTokens
   });
   const resumeThreadId = normalizeResumeThreadId(options["resume-thread"]);
   const brief = readTaskPrompt(cwd, options, positionals);
@@ -1862,15 +1891,21 @@ async function handleInvoke(argv) {
       }
     }
     Object.assign(result, speedResult());
+    result.selfReport = parseSelfReport(result.output);
+    const scopeRequestCount = scopedWrite && result.jobId ? scopeRequests(declined, result.output).length : 0;
     // GSwitch keeps one comparison entry for the whole task, including retries.
     await session
-      .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null, job_id: result.jobId, thread_id: result.threadId, codex_ms: result.codexMs, total_ms: result.totalMs, tokens: result.tokens })
+      .request("task_result", { lease_id: leaseId, status: result.status, code: result.code ?? null, job_id: result.jobId, thread_id: result.threadId, codex_ms: result.codexMs, total_ms: result.totalMs, tokens: result.tokens, ...taskResultDetails(result, scopeRequestCount) })
       .catch(() => {});
     finish(result);
   } catch (error) {
     const timing = speedResult();
     await session
-      .request("task_result", { lease_id: leaseId, status: "failed", code: worktreeState ? "WORKTREE_RUN_FAILED" : "CODEX_FAILED", job_id: metrics.jobId, thread_id: metrics.threadId, codex_ms: timing.codexMs, total_ms: timing.totalMs, tokens: timing.tokens })
+      .request("task_result", {
+        lease_id: leaseId, status: "failed", code: worktreeState ? "WORKTREE_RUN_FAILED" : "CODEX_FAILED", job_id: metrics.jobId, thread_id: metrics.threadId, codex_ms: timing.codexMs, total_ms: timing.totalMs, tokens: timing.tokens,
+        self_report: null, files_changed: null, lines_added: null, lines_deleted: null, verify: null, verify_retries: null, scope_requests: null,
+        token_breakdown: runLogTokens(timing.tokenBreakdown), long_prompt_tokens: runLogTokens(timing.longPromptTokens)
+      })
       .catch(() => {});
     if (!worktreeState) {
       finish({ ...base, status: "failed", code: "CODEX_FAILED", message: error instanceof Error ? error.message : String(error), jobId: metrics.jobId, threadId: metrics.threadId, ...timing });
@@ -1961,6 +1996,8 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
             onTurnMetrics: (turn) => {
               metrics.codexMs += turn.codexMs;
               if (turn.tokens !== null) metrics.tokens = (metrics.tokens ?? 0) + turn.tokens;
+              metrics.tokenBreakdown = addTokenBreakdown(metrics.tokenBreakdown, turn.tokenBreakdown);
+              metrics.longPromptTokens = addTokenBreakdown(metrics.longPromptTokens, turn.longPromptTokens);
             },
             jobId: job.id,
             appServerEnv: codexHome ? { ...process.env, CODEX_HOME: codexHome } : undefined,

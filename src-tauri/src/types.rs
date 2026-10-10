@@ -173,6 +173,25 @@ where
     })
 }
 
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ClaudeRouterSampling {
+    #[default]
+    On,
+    Off,
+}
+
+fn deserialize_router_sampling<'de, D>(deserializer: D) -> Result<ClaudeRouterSampling, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Value::deserialize(deserializer)?;
+    Ok(match value.as_str() {
+        Some("off") => ClaudeRouterSampling::Off,
+        _ => ClaudeRouterSampling::On,
+    })
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
 pub enum ClaudeEffort {
@@ -198,6 +217,8 @@ pub struct ClaudeRouterOptions {
     pub mode: ClaudeRouterMode,
     #[serde(default, deserialize_with = "deserialize_router_prefer")]
     pub prefer: ClaudeRouterPrefer,
+    #[serde(default, deserialize_with = "deserialize_router_sampling")]
+    pub sampling: ClaudeRouterSampling,
     pub claude_allowed: ClaudeAllowed,
     pub claude_only_review: ClaudeOnlyReview,
 }
@@ -208,6 +229,7 @@ impl Default for ClaudeRouterOptions {
         Self {
             mode: ClaudeRouterMode::Mixed,
             prefer: ClaudeRouterPrefer::Codex,
+            sampling: ClaudeRouterSampling::On,
             claude_allowed: ClaudeAllowed {
                 haiku: vec![Low, Medium],
                 sonnet: vec![Low, Medium, High, Xhigh, Max],

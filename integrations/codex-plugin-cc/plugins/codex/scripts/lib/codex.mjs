@@ -306,6 +306,30 @@ function describeCompletedItem(state, item) {
   }
 }
 
+// App Server tokenUsage fields, named as the run log's token breakdown.
+const TOKEN_BREAKDOWN_FIELDS = [
+  ["input", "inputTokens"],
+  ["cachedInput", "cachedInputTokens"],
+  ["output", "outputTokens"],
+  ["reasoningOutput", "reasoningOutputTokens"]
+];
+const LONG_PROMPT_INPUT_TOKENS = 272000;
+
+function tokenCount(value) {
+  return Number.isSafeInteger(value) && value >= 0 ? value : null;
+}
+
+function emptyTokenBreakdown() {
+  return { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 };
+}
+
+/** Sums two token breakdowns; null means none was reported. */
+export function addTokenBreakdown(sum, added) {
+  if (!added) return sum;
+  const base = sum ?? emptyTokenBreakdown();
+  return Object.fromEntries(TOKEN_BREAKDOWN_FIELDS.map(([name]) => [name, base[name] + (added[name] ?? 0)]));
+}
+
 /** @returns {TurnCaptureState} */
 function createTurnCaptureState(threadId, options = {}) {
   let resolveCompletion;
@@ -341,6 +365,9 @@ function createTurnCaptureState(threadId, options = {}) {
     commandExecutions: [],
     tokens: null,
     tokenTotals: new Map(),
+    tokenBreakdown: null,
+    longPromptTokens: null,
+    tokenBreakdownTotals: new Map(),
     completedAt: null,
     onProgress: options.onProgress ?? null
   };
@@ -559,6 +586,23 @@ function applyTurnNotification(state, message) {
         state.tokens = (state.tokens ?? 0) + added;
         if (Number.isSafeInteger(total) && total >= 0) state.tokenTotals.set(message.params.threadId, total);
       }
+      const fields = TOKEN_BREAKDOWN_FIELDS.filter(([, key]) => tokenCount(usage?.last?.[key]) !== null || tokenCount(usage?.total?.[key]) !== null);
+      if (fields.length) {
+        const previous = state.tokenBreakdownTotals.get(message.params.threadId) ?? {};
+        const totals = { ...previous };
+        const added = emptyTokenBreakdown();
+        for (const [name, key] of fields) {
+          const lastValue = tokenCount(usage?.last?.[key]);
+          const totalValue = tokenCount(usage?.total?.[key]);
+          added[name] = previous[name] !== undefined && totalValue !== null && totalValue >= previous[name] ? totalValue - previous[name] : lastValue ?? 0;
+          if (totalValue !== null) totals[name] = totalValue;
+        }
+        state.tokenBreakdownTotals.set(message.params.threadId, totals);
+        state.tokenBreakdown = addTokenBreakdown(state.tokenBreakdown, added);
+        // Prompts above this size are billed at OpenAI's long-prompt price.
+        const longPrompt = (tokenCount(usage?.last?.inputTokens) ?? 0) > LONG_PROMPT_INPUT_TOKENS;
+        state.longPromptTokens = addTokenBreakdown(state.longPromptTokens, longPrompt ? added : emptyTokenBreakdown());
+      }
       break;
     }
     case "turn/completed":
@@ -634,7 +678,12 @@ async function captureTurn(client, threadId, startRequest, options = {}) {
     });
     return await Promise.race([state.completion, exited]);
   } finally {
-    options.onTurnMetrics?.({ codexMs: Math.max(0, Math.round((state.completedAt ?? performance.now()) - startedAt)), tokens: state.tokens });
+    options.onTurnMetrics?.({
+      codexMs: Math.max(0, Math.round((state.completedAt ?? performance.now()) - startedAt)),
+      tokens: state.tokens,
+      tokenBreakdown: state.tokenBreakdown,
+      longPromptTokens: state.longPromptTokens
+    });
     clearCompletionTimer(state);
     client.setNotificationHandler(previousHandler ?? null);
   }

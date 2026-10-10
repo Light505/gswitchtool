@@ -7,7 +7,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { directoryName, appDataDirectory } from "./setup.mjs";
 import { models, efforts, prefers, workerNames, defaultAllowed, needsApproval, workerTable, benchmarks, benchmarkId, taskFloor, candidates, ownerCheckAfter } from "./workers.mjs";
-import { appendResult, readResults, resultRecord, planRecord, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable, speedComparisons } from "./results.mjs";
+import { appendResult, readResults, resultRecord, planRecord, closeRecord, parseSelfReport, transcriptText, taskState, attemptRecord, transcriptTotals, aggregateStats, orchestratorEdits, statsOptions, statsTable, speedComparisons } from "./results.mjs";
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const modes = ["off", "mixed", "codex", "claude"];
@@ -90,6 +90,7 @@ function config() {
   return { mode: valid && setup.setup === "router" ? value.mode : "off",
     codexSpeed: normalizeCodexSpeed(setup.codexSpeed),
     prefer: prefers.includes(value.prefer) ? value.prefer : "codex",
+    sampling: value.sampling === "off" ? "off" : "on",
     claudeOnlyReview: value.claudeOnlyReview ?? "on", claudeAllowed: claudeAllowed(value.claudeAllowed) };
 }
 // Only status-line passthrough state remains in the router's old config file.
@@ -252,8 +253,11 @@ function wrapupFile(directory) { return data("wrapups", `${hash(comparable(direc
 // An inline invoke brief starts right after its opening quote.
 const taskId = (text) => String(text || "").match(/(?:^|["'])[ \t]*TASK:[ \t]*([\w.-]{1,40})[ \t]*["']?[ \t]*$/m)?.[1];
 const failedList = (state) => state.results.filter((r) => r.outcome === "fail").map((r) => `${r.worker} (${r.reason ?? "other"})`).join(", ");
-const floorFor = (state) => taskFloor(state.plan.kind, state.plan.difficulty,
-  state.failedWorkers.map(({ worker }) => benchmarks[benchmarkId(worker)]?.score), state.failedWorkers.length);
+const floorFor = (state) => {
+  const failed = state.failedWorkers.filter(({ sample }) => !sample);
+  return taskFloor(state.plan.kind, state.plan.difficulty,
+    failed.map(({ worker }) => benchmarks[benchmarkId(worker)]?.score), failed.length);
+};
 function taskLaunch(id, task, type, title, repair = false) {
   const state = taskState(readResults(data("results.jsonl")), id, task);
   const sess = session(id);
@@ -343,7 +347,8 @@ function hook(event, input) {
     else sess.finished.push({ agentId: input.agent_id, ...bound, time: Date.now() });
     saveSession(id, sess);
     appendResult(data("results.jsonl"), { ...attemptRecord(input, { sessionId: id, project: projectKey(sess.projectDir || cwd),
-      agentId: input.agent_id, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path) });
+      agentId: input.agent_id, worker: bound.type, task: bound.task ?? null, scope: Array.isArray(bound.scope) ? bound.scope : [] }), ...transcriptTotals(input.agent_transcript_path),
+      self: parseSelfReport(typeof input.last_assistant_message === "string" ? input.last_assistant_message : transcriptText(input.agent_transcript_path)) });
     return {};
   }
   if (event === "SessionStart") {
@@ -431,19 +436,21 @@ function hook(event, input) {
 }
 
 function option(args, name) { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; }
-function check(args) {
+function check(args) { return checkFacts(args).output; }
+function checkFacts(args) {
   const cwd = option(args, "--cwd");
   if (!cwd) throw new Error("check requires --cwd");
   const verify = option(args, "--verify");
-  const lines = [];
+  const lines = [], factsResult = { files: 0, added: 0, deleted: 0, verify: "none", scopeWarnings: 0 };
   if (verify) {
     const started = Date.now();
     const result = spawnSync(verify, { cwd, shell: true, windowsHide: true, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    factsResult.verify = result.status === 0 ? "passed" : "failed";
     lines.push(result.status === 0 ? `Verify: passed (${verify}, ${Math.round((Date.now() - started) / 1000)}s)` : `Verify: FAILED (exit ${result.status ?? 127})`);
     if (result.status !== 0) lines.push(...`${result.stdout || ""}${result.stderr || ""}${result.error?.message || ""}`.trimEnd().split(/\r?\n/).slice(-40));
   }
   let root;
-  try { root = layout(cwd).root; } catch { return [...lines, "git: not a repository"].join("\n"); }
+  try { root = layout(cwd).root; } catch { return { ...factsResult, output: [...lines, "git: not a repository"].join("\n") }; }
   const head = git(root, ["rev-parse", "--verify", "HEAD"]);
   const base = option(args, "--base") ?? (head.status === 0 ? "HEAD" : gitText(root, ["hash-object", "-t", "tree", "--stdin"], { input: "" }));
   const facts = gitText(root, ["diff", "--numstat", "-z", "--no-renames", base]).split("\0").filter(Boolean).map((line) => {
@@ -462,7 +469,9 @@ function check(args) {
   if (scope.length) for (const file of facts) if (!scope.some((pattern) => matchesScope(file.path, pattern))) lines.push(`WARNING: changed outside --scope: ${file.path}`);
   const shown = facts.slice(0, 20).map((file) => `${file.path} (+${file.added} −${file.deleted})`).join(", ") || "none";
   lines.push(`Changed files (git): ${shown}${facts.length > 20 ? `, and ${facts.length - 20} more` : ""}; ${facts.length} files, +${facts.reduce((sum, file) => sum + file.added, 0)} −${facts.reduce((sum, file) => sum + file.deleted, 0)}`);
-  return lines.join("\n");
+  return { ...factsResult, files: facts.length, added: facts.reduce((sum, file) => sum + file.added, 0),
+    deleted: facts.reduce((sum, file) => sum + file.deleted, 0),
+    scopeWarnings: lines.filter((line) => line.startsWith("WARNING: changed outside --scope")).length, output: lines.join("\n") };
 }
 function apply(args) {
   const worktree = option(args, "--worktree");
@@ -639,12 +648,38 @@ const recovery = {
   worktree: "keep the worktree, tell the owner its path and reason; retry on a fresh worktree or ask",
   stopped: "ask the owner"
 };
+export function sampleWorker(records, record, rows, { sampling = "on", prefer = "codex", roll = Math.random() } = {}) {
+  const state = taskState(records, record.sessionId, record.task);
+  const { floor, level } = taskFloor(record.kind, record.difficulty);
+  if (sampling !== "on" || !["trivial", "small"].includes(record.difficulty) ||
+      !["trivial", "small"].includes(level)) return null;
+  const earlier = records.find((r) => r.type === "plan" && r.sessionId === record.sessionId && r.task === record.task);
+  if (earlier) return earlier.sample ?? null;
+  if (state.hasResults || roll >= 0.1) return null;
+  const first = candidates(rows, { floor, prefer })[0];
+  if (!first) return null;
+  const count = (worker) => records.filter((r) => r.type === "result" && r.worker !== "orchestrator" && r.worker === worker && r.difficulty === record.difficulty).length;
+  const pool = rows.filter((row) => row.worker !== first.worker && !row.approval && !needsApproval(benchmarkId(row.worker)) &&
+    (row.cost === null || row.cost < first.cost));
+  pool.sort((a, b) => count(a.worker) - count(b.worker) || (a.cost === null ? 0 : 1) - (b.cost === null ? 0 : 1) ||
+    (a.cost ?? 0) - (b.cost ?? 0) || a.worker.localeCompare(b.worker));
+  return pool[0]?.worker ?? null;
+}
+function sampleRoll() {
+  const value = process.env.GSWITCH_ROUTER_SAMPLE_ROLL;
+  const roll = value === undefined || value.trim() === "" ? NaN : Number(value);
+  return Number.isFinite(roll) && roll >= 0 && roll <= 1 ? roll : Math.random();
+}
 function plan(args) {
   if (resolved().mode.value === "off") return "Router is off.";
   const at = args.indexOf("--codex");
   if (at >= 0 && (args[at + 1] === undefined || args[at + 1].startsWith("--"))) throw new Error(`--codex needs a value: "<model>:<effort>[,<effort>...][;<model>:...]"`);
   const record = planRecord(args, projectKey);
   if (record.codex != null) codexAllowed(record.codex);
+  const cfg = config();
+  const rows = workerTable({ claudeAllowed: cfg.claudeAllowed, codexAllowed: record.codex == null ? {} : codexAllowed(record.codex),
+    mode: resolved().mode.value, low: usage()?.left <= 30, namespace: pluginName });
+  record.sample = sampleWorker(readResults(data("results.jsonl")), record, rows, { sampling: cfg.sampling, prefer: cfg.prefer, roll: sampleRoll() });
   appendResult(data("results.jsonl"), record);
   const state = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
   return planView(state);
@@ -655,7 +690,10 @@ function planView(state) {
   const { floor, level } = floorFor(state), mode = resolved().mode.value;
   const lines = [`Plan ${record.task}: ${record.kind}, ${record.difficulty} · floor ${floor} (${level}) · ${state.failures} failed of ${ownerCheckAfter} before the owner is asked`];
   if (state.failures) lines.push(`Failed: ${failedList(state)}`);
-  if (state.last?.outcome === "fail") lines.push(`Next after ${state.last.reason ?? "other"}: ${recovery[state.last.reason ?? "other"]}`);
+  if (state.last?.outcome === "fail") {
+    if (state.last.sample === true) lines.push("Next after a failed sample attempt: use the candidates below; do not repair the sample worker.");
+    else lines.push(`Next after ${state.last.reason ?? "other"}: ${recovery[state.last.reason ?? "other"]}`);
+  }
   if (state.failures >= ownerCheckAfter) lines.push(`Owner check: ask the owner before attempt ${state.failures + 1}; the launch will show an approval prompt.`);
   if (state.done) lines.push(`Task ${record.task} already passed; start a new task id for new work.`);
   else {
@@ -663,6 +701,7 @@ function planView(state) {
     const prefer = config().prefer;
     const choices = candidates(rows, { floor, exclude: state.failedWorkers.map(({ worker }) => worker), prefer }).slice(0, 6);
     const order = mode !== "mixed" || prefer === "price" ? "cheapest first" : prefer === "codex" ? "Codex first, then cheapest" : "Claude first, then cheapest";
+    if (!state.hasResults && record.sample) lines.push('Sample attempt (about 1 in 10 trivial/small tasks): ' + record.sample + ' — start with it to measure it; if it fails, use the candidates below. Say "sample attempt" in the report.');
     if (!choices.length) lines.push(`No allowed worker meets floor ${floor}: stop and ask the owner.`);
     else lines.push(`Candidates (${order}):`, ...choices.map((row) => `  ${row.worker}  ${row.score}  USD ${row.cost.toFixed(2)}  ${row.minutes} min${needsApproval(benchmarkId(row.worker)) ? "  needs owner approval" : ""}`));
   }
@@ -676,6 +715,8 @@ function planView(state) {
   return lines.join("\n");
 }
 function recordResult(record) {
+  const before = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
+  record.sample = !before.hasResults && record.worker === before.plan?.sample;
   appendResult(data("results.jsonl"), record);
   const lines = [`Result: recorded ${record.task} ${record.worker} ${record.outcome}`];
   const state = taskState(readResults(data("results.jsonl")), record.sessionId, record.task);
@@ -707,15 +748,29 @@ async function finish(args) {
   });
   const verify = option(args, "--verify");
   const base = gitText(directory, ["merge-base", "HEAD", gitText(bound.cwd, ["rev-parse", "HEAD"])]);
-  const checked = check(["--cwd", bound.cwd, "--base", base, "--scope", (bound.scope || []).join(","), ...(verify ? ["--verify", verify] : [])]);
-  if (/^Verify: FAILED/m.test(checked)) return `${checked}\n${await failure("verify")}`;
-  if (/^WARNING: changed outside --scope/m.test(checked)) return `${checked}\nNot applied: decide the out-of-scope changes (approve with router scope, or record the result yourself).`;
+  const facts = checkFacts(["--cwd", bound.cwd, "--base", base, "--scope", (bound.scope || []).join(","), ...(verify ? ["--verify", verify] : [])]);
+  const checked = facts.output;
+  const capture = (applied) => locked(() => {
+    appendResult(data("results.jsonl"), { type: "finish", time: new Date().toISOString(), sessionId: id, project: projectKey(directory),
+      task: bound.task, worker: bound.type, agentId: agent, files: facts.files, added: facts.added, deleted: facts.deleted,
+      verify: facts.verify, scopeWarnings: facts.scopeWarnings, applied });
+  });
+  if (facts.verify === "failed") {
+    const result = await failure("verify");
+    await capture(false);
+    return checked + "\n" + result;
+  }
+  if (facts.scopeWarnings) {
+    await capture(false);
+    return checked + "\nNot applied: decide the out-of-scope changes (approve with router scope, or record the result yourself).";
+  }
   const applied = apply(["--worktree", bound.cwd, "--cwd", directory, ...(keepLocked ? ["--keep-locked"] : [])]);
   if (worktreeApplied(applied)) await locked(() => {
     const current = session(id);
     current.bindings[agent].appliedAt = Date.now();
     saveSession(id, current);
   });
+  await capture(worktreeApplied(applied));
   return `${checked}\n${applied}\n${worktreeApplied(applied) ? "Applied. Review it, then record pass (or a review failure) with router result." : await failure("worktree")}`;
 }
 function command(args, raw) {
@@ -729,6 +784,11 @@ function command(args, raw) {
   if (name === "result") {
     const record = resultRecord(rest, projectKey, pluginName);
     return recordResult(record);
+  }
+  if (name === "close") {
+    const record = closeRecord(rest, projectKey, readResults(data("results.jsonl")));
+    appendResult(data("results.jsonl"), record);
+    return "Closed " + record.task + ": planned " + record.planned + ", actual " + record.actual + ", " + record.attempts + " attempts, " + (record.passed ? "passed" : "not passed");
   }
   if (name === "stats") {
     const records = readResults(data("results.jsonl")), options = statsOptions(rest, comparable);

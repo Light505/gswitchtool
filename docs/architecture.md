@@ -67,6 +67,7 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
   "router": {
     "mode": "mixed",
     "prefer": "codex",
+    "sampling": "on",
     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
     "claudeOnlyReview": "on"
   },
@@ -81,6 +82,7 @@ xhigh, max. Defaults allow Haiku low/medium and every listed effort for Sonnet
 and Opus, with mixed mode, Codex first and review on. `prefer` accepts `codex`,
 `claude`, or `price`; older files without it default to `codex`. Rust rejects
 unknown options other than lenient preferences; Rust and plugin readers treat invalid `prefer` values as missing.
+`sampling` accepts `on` or `off`, defaults to `on` for missing or invalid values, and lets the router try cheaper or untested allowed workers on about one in ten trivial/small first attempts.
 Publication failure returns a save error and attempts to restore the saved
 policy; startup logs publication failure and continues. A successful human
 setup save ends an Invoke pause. Plugins consume the setup starting with the
@@ -89,6 +91,7 @@ next message.
 `codexSpeed` in the same setup owns `mode` (`normal`, `fast`, `orchestrator`) and `fastMinRemaining` (0–90, default 20); missing or invalid values default independently without resetting policy.
 `run_begin` resolves the turn-only `default` or `priority` tier for every run from the owner setting, lease request, catalog Fast support and current account usage; it never sets the thread tier.
 Rust owns the best-effort `codex-runs.jsonl` comparison log beside `claude-setup.json`, retaining the newest 5,000 finished tasks with speed, timing and optional tokens, without credentials or account identifiers.
+`task_result` may also carry `self_report` (the worker's parsed `RESULT` line), `files_changed`, `lines_added`, `lines_deleted`, `verify` (`passed`, `failed`, `skipped`, `none`), `verify_retries`, `scope_requests`, and `token_breakdown` / `long_prompt_tokens` (input, cached input, output, reasoning output; long prompt = above 272K input tokens); `invoke_ipc.rs` reads each leniently, so a missing, wrong-typed, out-of-range or unlisted value is logged as null and never fails the request or reaches the log as text. Entries stay `version: 1`.
 
 Unknown, stale, timed-out, or conflicting state remains unknown. A cache is a
 projection, not a second authority over runtime or provider facts.

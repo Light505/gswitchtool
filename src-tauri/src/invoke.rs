@@ -776,6 +776,77 @@ mod tests {
     }
 
     #[test]
+    fn setup_sampling_defaults_for_old_files_and_round_trips() {
+        use crate::types::ClaudeRouterSampling;
+        let mut old = serde_json::to_value(ClaudeSetup::default()).unwrap();
+        old["router"].as_object_mut().unwrap().remove("sampling");
+        let setup: ClaudeSetup = serde_json::from_value(old).unwrap();
+        assert_eq!(setup.router.sampling, ClaudeRouterSampling::On);
+        for sampling in ["on", "off"] {
+            let mut value = serde_json::to_value(&setup).unwrap();
+            value["router"]["sampling"] = json!(sampling);
+            let parsed: ClaudeSetup = serde_json::from_value(value.clone()).unwrap();
+            assert_eq!(serde_json::to_value(parsed).unwrap(), value);
+        }
+    }
+
+    #[test]
+    fn invalid_setup_sampling_loads_without_resetting_policy() {
+        use crate::types::ClaudeRouterSampling;
+        let path = temp_path("invalid-setup-sampling");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let policy = json!({
+            "invoke_mode": true,
+            "claude_setup": {
+                "setup": "router",
+                "router": {
+                    "mode": "codex",
+                    "prefer": "claude",
+                    "sampling": "on",
+                    "claudeAllowed": { "haiku": ["high"], "sonnet": ["low"], "opus": [] },
+                    "claudeOnlyReview": "off"
+                }
+            },
+            "allowed_invocation_profiles": [{ "model": "gpt-6.1-sol", "reasoning_efforts": ["low"] }],
+            "account_priority": ["saved-account"],
+            "preferred_min_remaining": 35,
+            "max_concurrent_tasks": 3,
+            "auto_wake": true
+        });
+        let expected: InvokeSettings = serde_json::from_value(policy.clone()).unwrap();
+        let mut omitted = policy.clone();
+        omitted["claude_setup"]["router"]
+            .as_object_mut()
+            .unwrap()
+            .remove("sampling");
+        fs::write(&path, omitted.to_string()).unwrap();
+        assert_eq!(
+            InvokeState::load(path.clone()).settings().unwrap(),
+            expected
+        );
+        for sampling in [
+            json!("unknown"),
+            Value::Null,
+            json!(42),
+            json!(false),
+            json!([]),
+            json!({}),
+        ] {
+            let mut invalid = policy.clone();
+            invalid["claude_setup"]["router"]["sampling"] = sampling;
+            fs::write(&path, invalid.to_string()).unwrap();
+            let loaded = InvokeState::load(path.clone()).settings().unwrap();
+            assert_eq!(
+                loaded.claude_setup.router.sampling,
+                ClaudeRouterSampling::On
+            );
+            assert!(loaded.invoke_mode);
+            assert_eq!(loaded, expected);
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
     fn shared_setup_has_exact_shape_order_and_leaves_no_temporary_file() {
         use crate::types::ClaudeEffort;
         let path = temp_path("shared-setup");
@@ -796,12 +867,14 @@ mod tests {
                 "router": {
                     "mode": "mixed",
                     "prefer": "codex",
+                    "sampling": "on",
                     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
                     "claudeOnlyReview": "on"
                 },
                 "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 }
             })
         );
+        assert!(content.find("\"prefer\"").unwrap() < content.find("\"sampling\"").unwrap());
         assert!(content.find("\"haiku\"").unwrap() < content.find("\"sonnet\"").unwrap());
         assert!(content.find("\"sonnet\"").unwrap() < content.find("\"opus\"").unwrap());
         assert_eq!(
@@ -1017,6 +1090,25 @@ mod tests {
             codex_ms: Some(123),
             total_ms: Some(456),
             tokens: Some(789),
+            self_report: Some(crate::failover::SelfReport {
+                status: Some("done"),
+                confidence: Some("medium"),
+                felt: None,
+                verify_fails: Some(0),
+            }),
+            files_changed: Some(2),
+            lines_added: Some(10),
+            lines_deleted: Some(3),
+            verify: Some("passed"),
+            verify_retries: Some(0),
+            scope_requests: Some(1),
+            token_breakdown: Some(crate::failover::TokenBreakdown {
+                input: 700,
+                cached_input: 500,
+                output: 89,
+                reasoning_output: 40,
+            }),
+            long_prompt_tokens: None,
         }
     }
 
@@ -1055,7 +1147,12 @@ mod tests {
                 "threadId": "thread-1", "model": "model-a", "effort": "high", "write": false,
                 "status": "completed", "code": null, "speedRequested": "fast",
                 "speedReason": "blocks the next step", "speed": "mixed",
-                "speedNotes": ["usage unknown"], "codexMs": 123, "totalMs": 456, "tokens": 789
+                "speedNotes": ["usage unknown"], "codexMs": 123, "totalMs": 456, "tokens": 789,
+                "selfReport": { "status": "done", "confidence": "medium", "felt": null, "verifyFails": 0 },
+                "filesChanged": 2, "linesAdded": 10, "linesDeleted": 3, "verify": "passed",
+                "verifyRetries": 0, "scopeRequests": 1,
+                "tokenBreakdown": { "input": 700, "cachedInput": 500, "output": 89, "reasoningOutput": 40 },
+                "longPromptTokens": null
             })
         );
         fs::remove_dir_all(path.parent().unwrap()).unwrap();

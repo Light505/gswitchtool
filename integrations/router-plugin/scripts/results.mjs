@@ -58,12 +58,28 @@ function flags(args, names) {
   return values;
 }
 
+function choice(f, flag, allowed) {
+  if (f[flag] === undefined) return null;
+  if (!allowed.includes(f[flag])) throw new Error("Invalid " + flag.slice(2) + ". Valid values: " + allowed.join(", "));
+  return f[flag];
+}
+function integer(f, flag, min, max) {
+  if (f[flag] === undefined) return null;
+  if (!/^\d+$/.test(f[flag]) || Number(f[flag]) < min || Number(f[flag]) > max)
+    throw new Error(flag + " requires an integer " + min + "–" + max);
+  return Number(f[flag]);
+}
+function yesNo(f, flag) {
+  const value = choice(f, flag, ["yes", "no"]);
+  return value === null ? null : value === "yes";
+}
+
 export function resultRecord(args, normalizeProject, namespace = "router") {
   const [sessionId, directory, ...rest] = args;
   if (!text(sessionId) || sessionId.startsWith("--") || !text(directory) || directory.startsWith("--")) {
     throw new Error("result requires <sessionId> <projectDir>");
   }
-  const f = flags(rest, ["--task", "--difficulty", "--worker", "--outcome", "--reason", "--step", "--title", "--agent", "--codex-job", "--codex-thread"]);
+  const f = flags(rest, ["--task", "--difficulty", "--worker", "--outcome", "--reason", "--step", "--title", "--agent", "--codex-job", "--codex-thread", "--review", "--findings"]);
   if (!f["--task"]) throw new Error("result requires --task <id>");
   if (!difficulties.includes(f["--difficulty"])) throw new Error(`Invalid difficulty. Valid values: ${difficulties.join(", ")}`);
   const orchestrator = f["--worker"] === "orchestrator";
@@ -77,6 +93,7 @@ export function resultRecord(args, normalizeProject, namespace = "router") {
   return {
     type: "result", time: new Date().toISOString(), sessionId, project: normalizeProject(directory),
     task: f["--task"], difficulty: f["--difficulty"], worker: f["--worker"], outcome: f["--outcome"],
+    review: choice(f, "--review", ["none", "minor", "serious"]), findings: integer(f, "--findings", 0, 99),
     reason: f["--reason"] ?? null, step: f["--step"] ?? null, title: f["--title"] ?? null,
     agentId: f["--agent"] ?? null, codexJobId: f["--codex-job"] ?? null, codexThreadId: f["--codex-thread"] ?? null
   };
@@ -85,12 +102,15 @@ export function resultRecord(args, normalizeProject, namespace = "router") {
 export function planRecord(args, normalizeProject) {
   const [sessionId, directory, ...rest] = args;
   if (!text(sessionId) || sessionId.startsWith("--") || !text(directory) || directory.startsWith("--")) throw new Error("plan requires <sessionId> <projectDir>");
-  const f = flags(rest, ["--task", "--kind", "--difficulty", "--title", "--codex"]);
+  const f = flags(rest, ["--task", "--kind", "--difficulty", "--title", "--codex", "--files", "--cross-module", "--check", "--repro", "--confidence"]);
   if (!/^[\w.-]{1,40}$/.test(f["--task"] ?? "")) throw new Error("Invalid task id. Use 1–40 letters, digits, underscores, dots or hyphens");
   if (!kinds.includes(f["--kind"])) throw new Error(`Invalid kind. Valid values: ${kinds.join(", ")}`);
   if (!difficulties.includes(f["--difficulty"])) throw new Error(`Invalid difficulty. Valid values: ${difficulties.join(", ")}`);
   if (f["--title"] && [...f["--title"]].length > 120) throw new Error("Title must be at most 120 characters");
   return { type: "plan", time: new Date().toISOString(), sessionId, project: normalizeProject(directory),
+    files: integer(f, "--files", 1, 999), crossModule: yesNo(f, "--cross-module"),
+    check: choice(f, "--check", ["test", "build", "review", "none"]), repro: yesNo(f, "--repro"),
+    confidence: choice(f, "--confidence", ["high", "medium", "low"]),
     task: f["--task"], kind: f["--kind"], difficulty: f["--difficulty"], title: f["--title"] ?? null, codex: f["--codex"] ?? null };
 }
 export function taskState(records, sessionId, task) {
@@ -98,14 +118,52 @@ export function taskState(records, sessionId, task) {
   const results = matching.filter((r) => r.type === "result" && r.worker !== "orchestrator");
   const failed = results.filter((r) => r.outcome === "fail"), workers = new Map();
   for (const r of failed) {
-    if (r.reason != null && !workerFailures.includes(r.reason)) continue;
+    if (r.sample !== true && r.reason != null && !workerFailures.includes(r.reason)) continue;
     const reasons = workers.get(r.worker) ?? [];
     if (!reasons.includes(r.reason ?? "other")) reasons.push(r.reason ?? "other");
     workers.set(r.worker, reasons);
   }
-  return { plan: matching.filter((r) => r.type === "plan").at(-1) ?? null, results, failures: failed.length,
+  return { hasResults: matching.some((r) => r.type === "result"), plan: matching.filter((r) => r.type === "plan").at(-1) ?? null, results, failures: failed.length,
     done: results.some((r) => ["pass", "unverified"].includes(r.outcome)),
-    failedWorkers: [...workers].map(([worker, reasons]) => ({ worker, reasons })), last: results.at(-1) ?? null };
+    failedWorkers: [...workers].map(([worker, reasons]) => ({ worker, reasons,
+      sample: failed.filter((r) => r.worker === worker && (r.sample === true || r.reason == null || workerFailures.includes(r.reason))).every((r) => r.sample === true) })), last: results.at(-1) ?? null };
+}
+
+export function closeRecord(args, normalizeProject, records) {
+  const [sessionId, directory, ...rest] = args;
+  if (!text(sessionId) || sessionId.startsWith("--") || !text(directory) || directory.startsWith("--")) throw new Error("close requires <sessionId> <projectDir>");
+  const f = flags(rest, ["--task", "--actual", "--orchestrator-fix", "--note"]);
+  if (!f["--task"]) throw new Error("close requires --task <id>");
+  const actual = choice(f, "--actual", difficulties), orchestratorFix = yesNo(f, "--orchestrator-fix");
+  if (actual === null || orchestratorFix === null) throw new Error("close requires --actual <difficulty> --orchestrator-fix yes|no");
+  if (f["--note"] && [...f["--note"]].length > 120) throw new Error("Note must be at most 120 characters");
+  const state = taskState(records, sessionId, f["--task"]);
+  if (!state.plan) throw new Error("Run router plan for task " + f["--task"] + " first.");
+  return { type: "close", time: new Date().toISOString(), sessionId, project: normalizeProject(directory), task: f["--task"],
+    planned: state.plan.difficulty, actual, orchestratorFix, attempts: state.results.length, passed: state.done, note: f["--note"] ?? null };
+}
+
+export function parseSelfReport(text) {
+  if (typeof text !== "string") return null;
+  const line = text.split(/\r?\n/).filter((line) => line.startsWith("RESULT:")).at(-1);
+  if (line === undefined) return null;
+  const parts = line.slice(7).split(/[·|;,]/).map((part) => part.trim());
+  const fields = Object.fromEntries(parts.filter((part) => part.includes(":")).map((part) => {
+    const at = part.indexOf(":"); return [part.slice(0, at).trim(), part.slice(at + 1).trim()];
+  }));
+  return { status: ["done", "partial", "stopped"].includes(parts[0]) ? parts[0] : null,
+    confidence: ["high", "medium", "low"].includes(fields.confidence) ? fields.confidence : null,
+    felt: difficulties.includes(fields.felt) ? fields.felt : null,
+    verifyFails: /^\d+$/.test(fields["verify-fails"] ?? "") && Number.isSafeInteger(Number(fields["verify-fails"])) ? Number(fields["verify-fails"]) : null };
+}
+
+export function transcriptText(file) {
+  try {
+    const entries = fs.readFileSync(file, "utf8").split(/\r?\n/).map((line) => { try { return object(JSON.parse(line)); } catch { return {}; } });
+    const message = object(entries.filter((entry) => entry.type === "assistant").at(-1)?.message);
+    return typeof message.content === "string" ? message.content : Array.isArray(message.content)
+      ? message.content.filter((block) => block?.type === "text" && typeof block.text === "string").map((block) => block.text).join("\n") : "";
+  } catch { return ""; }
 }
 
 function usageTokens(value) {

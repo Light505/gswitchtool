@@ -15,7 +15,7 @@ const codexAllowed = { "gpt-6.1-sol": ["low", "medium", "high"], "gpt-6-luna": [
 function fixture(t, mode = "mixed") {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "router-policy-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const env = { ...process.env, HOME: home, USERPROFILE: home }, project = path.join(home, "project with spaces");
+  const env = { ...process.env, HOME: home, USERPROFILE: home, GSWITCH_ROUTER_SAMPLE_ROLL: "1" }, project = path.join(home, "project with spaces");
   const data = path.join(home, ".gswitchtool-router"), file = path.join(data, "results.jsonl");
   fs.mkdirSync(project);
   function write(name, value) {

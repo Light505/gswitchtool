@@ -113,7 +113,7 @@ test("Codex speed defaults leniently without resetting the rest of the setup", (
     if (speed !== undefined) value.codexSpeed = speed;
     f.write(value);
     const result = readClaudeSetup(f.env);
-    assert.deepEqual(result.router, value.router);
+    assert.deepEqual(result.router, { ...value.router, sampling: "on" });
     assert.equal(result.setup, "router");
     return result.codexSpeed;
   };
@@ -138,5 +138,16 @@ test("invoke-status explains speed modes, cutoff, and orchestrator flags from sh
     assert.ok(text.includes("Codex speed: " + label + (mode === "normal" ? "\n" : " (Fast falls back to Normal below 35% usage left)\n")));
     if (mode === "orchestrator") assert.match(text, /--speed fast --speed-reason "<why>".*owner is waiting/);
     else assert.doesNotMatch(text, /Request Fast with/);
+  }
+});
+
+test("sampling defaults on without resetting setup and preserves off", (t) => {
+  const f = fixture(t);
+  for (const sampling of [undefined, "invalid", null, 42, false, [], {}, "on", "off"]) {
+    const value = setup("router", "codex");
+    value.router.prefer = "claude";
+    if (sampling !== undefined) value.router.sampling = sampling;
+    f.write(value);
+    assert.deepEqual(readClaudeSetup(f.env).router, { ...value.router, sampling: sampling === "off" ? "off" : "on" });
   }
 });

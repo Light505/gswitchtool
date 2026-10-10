@@ -62,6 +62,7 @@ let invokeSettings: InvokeSettings = {
       },
       claudeOnlyReview: "on",
       prefer: "codex",
+      sampling: "on",
     },
   },
   allowed_invocation_profiles: [{ model: "gpt-6-sol", reasoning_efforts: ["low", "medium", "high"] }],

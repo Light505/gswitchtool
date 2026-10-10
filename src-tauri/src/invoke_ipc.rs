@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWrite
 use uuid::Uuid;
 
 use crate::{
-    failover::{Coordinator, FailoverCode, LeaseRequest, TaskMetrics},
+    failover::{Coordinator, FailoverCode, LeaseRequest, SelfReport, TaskMetrics, TokenBreakdown},
     invoke::InvokeState,
     storage,
 };
@@ -341,6 +341,25 @@ async fn dispatch(
                         codex_ms: params.get("codex_ms").and_then(Value::as_u64),
                         total_ms: params.get("total_ms").and_then(Value::as_u64),
                         tokens: params.get("tokens").and_then(Value::as_u64),
+                        self_report: self_report(params.get("self_report")),
+                        files_changed: params.get("files_changed").and_then(Value::as_u64),
+                        lines_added: params.get("lines_added").and_then(Value::as_u64),
+                        lines_deleted: params.get("lines_deleted").and_then(Value::as_u64),
+                        verify: allowed(
+                            params.get("verify"),
+                            &["passed", "failed", "skipped", "none"],
+                        ),
+                        verify_retries: params
+                            .get("verify_retries")
+                            .and_then(Value::as_u64)
+                            .filter(|retries| *retries <= 1)
+                            .map(|retries| retries as u8),
+                        scope_requests: params
+                            .get("scope_requests")
+                            .and_then(Value::as_u64)
+                            .and_then(|count| u32::try_from(count).ok()),
+                        token_breakdown: token_breakdown(params.get("token_breakdown")),
+                        long_prompt_tokens: token_breakdown(params.get("long_prompt_tokens")),
                     },
                 )
                 .map_err(code)?;
@@ -379,6 +398,41 @@ fn validate(endpoint: &Endpoint, model: &str, reasoning_effort: &str) -> Result<
         return Err(paused(&endpoint.coordinator, FailoverCode::InvokePaused));
     }
     Ok(())
+}
+
+/// One of `values`, or None; text from the plugin never reaches the run log.
+fn allowed(value: Option<&Value>, values: &[&'static str]) -> Option<&'static str> {
+    let text = value?.as_str()?;
+    values.iter().copied().find(|allowed| *allowed == text)
+}
+
+/// The worker's RESULT line as the plugin parsed it; invalid parts become None.
+fn self_report(value: Option<&Value>) -> Option<SelfReport> {
+    let report = value?.as_object()?;
+    let report = SelfReport {
+        status: allowed(report.get("status"), &["done", "partial", "stopped"]),
+        confidence: allowed(report.get("confidence"), &["high", "medium", "low"]),
+        felt: allowed(
+            report.get("felt"),
+            &["trivial", "small", "moderate", "hard", "high-risk"],
+        ),
+        verify_fails: report
+            .get("verify_fails")
+            .and_then(Value::as_u64)
+            .and_then(|fails| u32::try_from(fails).ok()),
+    };
+    (report != SelfReport::default()).then_some(report)
+}
+
+fn token_breakdown(value: Option<&Value>) -> Option<TokenBreakdown> {
+    let tokens = value?.as_object()?;
+    let count = |key: &str| tokens.get(key).and_then(Value::as_u64);
+    Some(TokenBreakdown {
+        input: count("input")?,
+        cached_input: count("cached_input")?,
+        output: count("output")?,
+        reasoning_output: count("reasoning_output")?,
+    })
 }
 
 /// A code about the pause carries its reset time, in Unix seconds, when known.
@@ -835,7 +889,12 @@ mod tests {
             "task_result",
             json!({
                 "lease_id": lease, "status": "completed", "job_id": "task-1", "thread_id": "thread-1",
-                "codex_ms": 100, "total_ms": 200, "tokens": 300
+                "codex_ms": 100, "total_ms": 200, "tokens": 300,
+                "self_report": { "status": "done", "confidence": "high", "felt": "small", "verify_fails": 1 },
+                "files_changed": 2, "lines_added": 10, "lines_deleted": 3,
+                "verify": "passed", "verify_retries": 1, "scope_requests": 0,
+                "token_breakdown": { "input": 250, "cached_input": 200, "output": 50, "reasoning_output": 20 },
+                "long_prompt_tokens": { "input": 0, "cached_input": 0, "output": 0, "reasoning_output": 0 }
             }),
         );
         assert_eq!(call(&result, &endpoint)["result"], json!({}));
@@ -850,9 +909,117 @@ mod tests {
         assert_eq!(run["codexMs"], 100);
         assert_eq!(run["totalMs"], 200);
         assert_eq!(run["tokens"], 300);
+        assert_eq!(
+            run["selfReport"],
+            json!({ "status": "done", "confidence": "high", "felt": "small", "verifyFails": 1 })
+        );
+        assert_eq!(run["filesChanged"], 2);
+        assert_eq!(run["linesAdded"], 10);
+        assert_eq!(run["linesDeleted"], 3);
+        assert_eq!(run["verify"], "passed");
+        assert_eq!(run["verifyRetries"], 1);
+        assert_eq!(run["scopeRequests"], 0);
+        assert_eq!(
+            run["tokenBreakdown"],
+            json!({ "input": 250, "cachedInput": 200, "output": 50, "reasoningOutput": 20 })
+        );
+        assert_eq!(
+            run["longPromptTokens"],
+            json!({ "input": 0, "cachedInput": 0, "output": 0, "reasoningOutput": 0 })
+        );
         assert!(!content.contains("/private/folder"));
         assert!(!content.contains("active"));
         assert!(!content.contains(lease));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    const RUN_DETAIL_KEYS: [&str; 9] = [
+        "selfReport",
+        "filesChanged",
+        "linesAdded",
+        "linesDeleted",
+        "verify",
+        "verifyRetries",
+        "scopeRequests",
+        "tokenBreakdown",
+        "longPromptTokens",
+    ];
+
+    fn logged_run(dir: &Path, endpoint: &Endpoint, extra: Value) -> Value {
+        let opened = call(
+            &request(
+                "lease_open",
+                json!({ "model": "model-a", "reasoning_effort": "high" }),
+            ),
+            endpoint,
+        );
+        let mut params = json!({
+            "lease_id": opened["result"]["lease_id"], "status": "completed", "code": null,
+            "job_id": "task-1", "thread_id": "thread-1", "codex_ms": 100, "total_ms": 200, "tokens": 300
+        });
+        params
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        assert_eq!(
+            call(&request("task_result", params), endpoint)["result"],
+            json!({})
+        );
+        let content = std::fs::read_to_string(dir.join("codex-runs.jsonl")).unwrap();
+        serde_json::from_str(content.lines().last().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn invoke_task_result_drops_invalid_run_details() {
+        let dir = temp_dir("run-details-invalid");
+        let endpoint = endpoint(&dir, true);
+        for extra in [
+            json!({
+                "self_report": { "status": "SECRET_TEXT", "confidence": "sure", "felt": 3, "verify_fails": -1 },
+                "files_changed": -1, "lines_added": "10", "lines_deleted": 1.5,
+                "verify": "SECRET_VERIFY", "verify_retries": 2, "scope_requests": 4294967296u64,
+                "token_breakdown": { "input": 1, "cached_input": 1, "output": 1 },
+                "long_prompt_tokens": "lots"
+            }),
+            json!({
+                "self_report": "done", "files_changed": null, "verify": true, "verify_retries": "1",
+                "scope_requests": [], "token_breakdown": [1, 2, 3, 4],
+                "long_prompt_tokens": { "input": -1, "cached_input": 0, "output": 0, "reasoning_output": 0 }
+            }),
+        ] {
+            let run = logged_run(&dir, &endpoint, extra);
+            assert_eq!(run["status"], "completed");
+            assert_eq!(run["tokens"], 300);
+            for key in RUN_DETAIL_KEYS {
+                assert_eq!(run[key], Value::Null, "{key}");
+            }
+        }
+        let partial = logged_run(
+            &dir,
+            &endpoint,
+            json!({ "self_report": { "status": "partial", "confidence": "unsure", "felt": "high-risk" } }),
+        );
+        assert_eq!(
+            partial["selfReport"],
+            json!({ "status": "partial", "confidence": null, "felt": "high-risk", "verifyFails": null })
+        );
+        let content = std::fs::read_to_string(dir.join("codex-runs.jsonl")).unwrap();
+        assert!(!content.contains("SECRET"));
+        assert!(!content.contains("unsure"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn invoke_task_result_accepts_the_old_payload() {
+        let dir = temp_dir("run-details-old");
+        let endpoint = endpoint(&dir, true);
+        let run = logged_run(&dir, &endpoint, json!({}));
+        assert_eq!(run["jobId"], "task-1");
+        assert_eq!(run["codexMs"], 100);
+        assert_eq!(run["tokens"], 300);
+        for key in RUN_DETAIL_KEYS {
+            assert_eq!(run[key], Value::Null, "{key}");
+        }
         std::fs::remove_dir_all(dir).unwrap();
     }
 

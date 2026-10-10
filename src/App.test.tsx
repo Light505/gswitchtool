@@ -163,6 +163,7 @@ function claudeSetup(enabled = false): ClaudeSetup {
       },
       claudeOnlyReview: "on",
       prefer: "codex",
+      sampling: "on",
     },
   };
 }
@@ -2545,7 +2546,8 @@ describe("Invoke Mode", () => {
       } else {
         expect(reviewControl).not.toBeInTheDocument();
       }
-      expect(within(panel).getAllByRole("checkbox")).toHaveLength(15);
+      expect(within(panel).getAllByRole("checkbox")).toHaveLength(16);
+      expect(within(panel).getByRole("checkbox", { name: "Try cheaper models on easy tasks" })).toBeChecked();
       await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
     }
     const expected: ClaudeSetup = {
@@ -2674,6 +2676,22 @@ describe("Invoke Mode", () => {
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({
       ...claudeSetup(true), codexSpeed: { mode: "fast", fastMinRemaining: Number(value) },
     }));
+  });
+
+  it.each(["mixed", "claude", "codex"] as const)("saves sampling in %s mode", async (mode) => {
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Claude Code:/ }));
+    const panel = await screen.findByRole("dialog", { name: "Claude Code" });
+    expect(within(panel).queryByRole("checkbox", { name: "Try cheaper models on easy tasks" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
+    const control = within(panel).getByRole("checkbox", { name: "Try cheaper models on easy tasks" });
+    expect(control).toBeChecked();
+    await userEvent.click(control);
+    expect(control).not.toBeChecked();
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    const initial = claudeSetup(false);
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "router", router: { ...initial.router, mode, sampling: "off" } }));
   });
 
   it("cancels draft changes without saving", async () => {

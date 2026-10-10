@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
+import { parseSelfReport } from "../plugins/codex/scripts/lib/self-report.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "codex-companion.mjs");
@@ -22,7 +23,12 @@ const PROFILES = [
 ];
 const FAILOVER_RESUME_PROMPT =
   "Authentication changed because the previous Codex account reached its usage limit. Resume this existing thread and continue the task from where it stopped. Inspect the current working-tree state before continuing and do not redo completed work.";
-const REPLY_FORMAT = "\nWork rules: understand the code you change and the code that calls it before editing; match the surrounding style; keep the change small but complete. Keep the output of passing commands short, but read the full error when a command fails. Do not weaken, skip or delete tests.\nReply format (end with at most 15 lines):\nChanged: one line per file (path from the repository root), what changed\nTests: commands run + pass/fail\nOpen questions: none, or list them";
+const REPLY_FORMAT = "\nWork rules: understand the code you change and the code that calls it before editing; match the surrounding style; keep the change small but complete. Keep the output of passing commands short, but read the full error when a command fails. Do not weaken, skip or delete tests.\nReply format (end with at most 16 lines):\nChanged: one line per file (path from the repository root), what changed\nTests: commands run + pass/fail\nOpen questions: none, or list them\nThe very last line is exactly: RESULT: <done|partial|stopped> · confidence: <high|medium|low> · felt: <trivial|small|moderate|hard|high-risk> · verify-fails: <n> (felt = how hard the task turned out; verify-fails = failed test runs before the final one, 0 if none)";
+// task_result's run-log fields for a run in a repository that changed nothing and reported nothing.
+const NO_RUN_DETAILS = {
+  self_report: null, files_changed: 0, lines_added: 0, lines_deleted: 0, verify: "none",
+  verify_retries: 0, scope_requests: 0, token_breakdown: null, long_prompt_tokens: null
+};
 
 // Answers like GSwitch's Invoke endpoint from an in-memory policy. A failover
 // "succeeds" unless failoverError is set; the fake does not switch accounts.
@@ -347,6 +353,7 @@ test("a read-only invoke shows a short answer whole and adds no reply format", (
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /^Handled the requested task\.\nTask prompt accepted\.\n/);
     assert.doesNotMatch(result.stdout, /Full answer:/, "a short answer is not cut");
+    assert.doesNotMatch(result.stdout, /Self-report:/, "no RESULT line, no self-report");
     assert.match(result.stdout, /\[codex invoke\] completed · thread \S+ · job task-\S+ · model-b\/medium/);
     assert.doesNotMatch(readFakeState(ctx.statePath).lastTurnStart.prompt, /Reply format/);
     assert.equal(readFakeState(ctx.statePath).lastThreadRequest.sandbox, "read-only");
@@ -722,7 +729,7 @@ test("a task the user stops in GSwitch is reported as stopped, not retried", () 
     assert.deepEqual(reported.params, {
       lease_id: "lease-1", status: "failed", code: "STOPPED_BY_USER",
       job_id: payload.jobId, thread_id: payload.threadId, codex_ms: payload.codexMs,
-      total_ms: payload.totalMs, tokens: null
+      total_ms: payload.totalMs, tokens: null, ...NO_RUN_DETAILS
     });
   }));
 
@@ -747,7 +754,7 @@ test("a finished task reports its result to GSwitch", () =>
     assert.deepEqual(reported.params, {
       lease_id: "lease-1", status: "completed", code: null,
       job_id: payload.jobId, thread_id: payload.threadId, codex_ms: payload.codexMs,
-      total_ms: payload.totalMs, tokens: null
+      total_ms: payload.totalMs, tokens: null, ...NO_RUN_DETAILS
     });
   }));
 
@@ -864,7 +871,9 @@ test("invoke forwards Fast as a turn override on every verification retry and to
     assert.equal(reports.length, 1);
     assert.deepEqual(reports[0].params, {
       lease_id: "lease-1", status: "completed", code: null, job_id: payload.jobId,
-      thread_id: payload.threadId, codex_ms: payload.codexMs, total_ms: reports[0].params.total_ms, tokens: 24
+      thread_id: payload.threadId, codex_ms: payload.codexMs, total_ms: reports[0].params.total_ms, tokens: 24,
+      // The verify script's counter file is the one change.
+      ...NO_RUN_DETAILS, files_changed: 1, lines_added: 1, verify: "passed", verify_retries: 1
     });
     assert.ok(reports[0].params.total_ms <= payload.totalMs);
   }));
@@ -900,3 +909,68 @@ test("invoke text shows Fast reason and Normal fallback note, with null tokens w
     });
   }
 });
+
+test("parseSelfReport reads the last RESULT line with any separator and nulls invalid parts", () => {
+  assert.equal(parseSelfReport("Changed: none\nTests: none"), null);
+  assert.equal(parseSelfReport(""), null);
+  assert.deepEqual(
+    parseSelfReport("RESULT: stopped\nChanged: a.ts\n  RESULT: done · confidence: high · felt: high-risk · verify-fails: 2"),
+    { status: "done", confidence: "high", felt: "high-risk", verifyFails: 2 }
+  );
+  assert.deepEqual(
+    parseSelfReport("RESULT: partial | verify-fails: 0; felt: small, confidence: low"),
+    { status: "partial", confidence: "low", felt: "small", verifyFails: 0 }
+  );
+  assert.deepEqual(
+    parseSelfReport("RESULT: finished · confidence: sure · felt · verify-fails: -1"),
+    { status: null, confidence: null, felt: null, verifyFails: null }
+  );
+  assert.deepEqual(parseSelfReport("RESULT:"), { status: null, confidence: null, felt: null, verifyFails: null });
+});
+
+test("invoke prints the self-report and sends run details and the token breakdown to GSwitch", () =>
+  withGSwitch({}, "invoke-write", async (ctx, gswitch) => {
+    const scripts = makeTempDir();
+    const counter = path.join(scripts, "count");
+    const script = path.join(scripts, "verify.mjs");
+    fs.writeFileSync(script, `import fs from "node:fs";\nconst file = ${JSON.stringify(counter)};\nconst n = Number(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : 0) + 1;\nfs.writeFileSync(file, String(n));\nprocess.exit(n === 1 ? 1 : 0);\n`);
+    const short = { totalTokens: 15, inputTokens: 8, cachedInputTokens: 4, outputTokens: 2, reasoningOutputTokens: 1 };
+    const long = { totalTokens: 300015, inputTokens: 300000, cachedInputTokens: 0, outputTokens: 10, reasoningOutputTokens: 5 };
+    ctx.env = {
+      GSWITCH_TEST_RESULT_LINE: "RESULT: done | felt: small; confidence: high, verify-fails: 0",
+      GSWITCH_TEST_TOKEN_USAGE: JSON.stringify([short, long]),
+      GSWITCH_TEST_DUPLICATE_USAGE: "1"
+    };
+    const result = await companion(["invoke", "--model", "model-a", "--effort", "high", "--write",
+      "--verify", `node ${JSON.stringify(script)}`, "change a file"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    assert.ok(result.stdout.includes("Self-report: done · confidence high · felt small · verify-fails 0\n"), result.stdout);
+    assert.ok(result.stdout.includes("RESULT: done | felt: small; confidence: high, verify-fails: 0"), "the answer is shown as it is");
+    assert.equal(readFakeState(ctx.statePath).turns.length, 2);
+    const reports = gswitch.requests.filter((request) => request.method === "task_result");
+    assert.equal(reports.length, 1);
+    const { lease_id, status, code, job_id, thread_id, codex_ms, total_ms, ...details } = reports[0].params;
+    assert.deepEqual([lease_id, status, code], ["lease-1", "completed", null]);
+    assert.deepEqual(details, {
+      tokens: 600060,
+      self_report: { status: "done", confidence: "high", felt: "small", verify_fails: 0 },
+      files_changed: 1, lines_added: 2, lines_deleted: 0, verify: "passed", verify_retries: 1, scope_requests: 0,
+      token_breakdown: { input: 600016, cached_input: 8, output: 24, reasoning_output: 12 },
+      long_prompt_tokens: { input: 600000, cached_input: 0, output: 20, reasoning_output: 10 }
+    });
+    assert.doesNotMatch(JSON.stringify(reports[0].params), /outside\.ts|RESULT|felt:/);
+  }));
+
+test("a token breakdown without long prompts reports an empty long-prompt bucket", () =>
+  withGSwitch({}, undefined, async (ctx, gswitch) => {
+    ctx.env = { GSWITCH_TEST_TOKEN_USAGE: JSON.stringify([{ totalTokens: 9, inputTokens: 7, outputTokens: 2 }, 5]) };
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 0, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.tokens, 14);
+    assert.deepEqual(payload.tokenBreakdown, { input: 7, cachedInput: 0, output: 2, reasoningOutput: 0 });
+    assert.deepEqual(payload.longPromptTokens, { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 });
+    const reported = gswitch.requests.find((request) => request.method === "task_result").params;
+    assert.deepEqual(reported.token_breakdown, { input: 7, cached_input: 0, output: 2, reasoning_output: 0 });
+    assert.equal(reported.self_report, null);
+  }));

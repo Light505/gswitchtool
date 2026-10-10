@@ -16,7 +16,7 @@ const calculator = path.resolve(plugin, "../../scripts/router-ladder-calc.mjs");
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "router-results-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, GSWITCH_ROUTER_SAMPLE_ROLL: "1" };
   const project = path.join(home, "project with spaces");
   fs.mkdirSync(project);
   const data = path.join(home, ".gswitchtool-router"), file = path.join(data, "results.jsonl");
@@ -68,7 +68,7 @@ test("result records required and optional fields, Unicode title limit and appen
   const original = fs.readFileSync(f.file, "utf8");
   const r = readResults(f.file)[0];
   assert.deepEqual(r, { type: "result", time: r.time, sessionId: "s1", project: projectKey(f.project), task: "t1", difficulty: "small",
-    worker: "router:haiku-low", outcome: "pass", reason: null, step: null, title: null, agentId: null, codexJobId: null, codexThreadId: null });
+    worker: "router:haiku-low", outcome: "pass", review: null, findings: null, sample: false, reason: null, step: null, title: null, agentId: null, codexJobId: null, codexThreadId: null });
   assert.ok(Number.isFinite(Date.parse(r.time)));
   const args = ["result", "s2", f.project, "--task", "t2", "--difficulty", "high-risk", "--worker", "codex:gpt-6.1-sol/low",
     "--outcome", "fail", "--reason", "review", "--step", "escalation", "--title", "😀".repeat(120), "--agent", "child", "--codex-job", "job-1", "--codex-thread", "thread-1"];
@@ -113,7 +113,7 @@ test("SubagentStop records only bound router workers, nullable metrics and key-o
   } });
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1", agent_type: "router:haiku-low", usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 30, cache_creation_input_tokens: 5 }, duration_ms: 42, last_assistant_message: "SECRET_VALUE" }), {});
   const r = readResults(f.file)[0];
-  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], task: null, durationMs: null, tokens: 65,
+  assert.deepEqual(r, { type: "attempt", time: r.time, sessionId: "s1", project: projectKey(f.project), agentId: "a1", worker: "router:haiku-low", scope: ["src/*"], task: null, durationMs: null, tokens: 65, self: null,
     raw: { input: ["session_id", "cwd", "agent_id", "agent_type", "usage", "duration_ms", "last_assistant_message"], tool_response: [] } });
   assert.doesNotMatch(fs.readFileSync(f.file, "utf8"), /SECRET_VALUE|input_tokens|output_tokens/);
   assert.deepEqual(f.hook("SubagentStop", { agent_id: "a1" }), {});
@@ -474,7 +474,12 @@ test("stats reads last Codex job telemetry, groups speeds and compares timed run
   const runs = [
     { jobId: "fast1", speed: "normal", codexMs: 999999, tokens: 999999 },
     { jobId: "fast1", speed: "fast", codexMs: 1000, tokens: 10 },
-    { jobId: "fast2", speed: "fast", codexMs: 3000, tokens: 30 },
+    // Run details added later do not change the stats.
+    { jobId: "fast2", speed: "fast", codexMs: 3000, tokens: 30,
+      selfReport: { status: "done", confidence: "high", felt: "hard", verifyFails: 2 },
+      filesChanged: 4, linesAdded: 90, linesDeleted: 12, verify: "failed", verifyRetries: 1, scopeRequests: 2,
+      tokenBreakdown: { input: 20, cachedInput: 5, output: 10, reasoningOutput: 4 },
+      longPromptTokens: { input: 0, cachedInput: 0, output: 0, reasoningOutput: 0 } },
     { jobId: "normal", speed: "normal", codexMs: 6000, tokens: 60 },
     { jobId: "mixed", speed: "mixed", codexMs: null, tokens: null },
     { jobId: "bad", speed: "fast", codexMs: "123", tokens: -1 }, {}

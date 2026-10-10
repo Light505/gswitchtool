@@ -285,6 +285,17 @@ project), so routing can be compared with your own results:
 - `router plan` records the task id, kind, difficulty and title. Task state
   uses these plans and outcomes to track failures, failed workers and whether
   the task passed or is unverified.
+  It also stores expected `files` (1–999), `crossModule`, `check`
+  (test/build/review/none), `repro` and rating `confidence` (high/medium/low).
+  Optional fields are null when omitted.
+
+- `router.sampling` in the Claude Code panel defaults to `on` (missing or
+  invalid values also mean on). About one in ten trivial/small first plans
+  tries a cheaper or untested allowed worker. Debug and architecture tasks
+  are excluded. Plans store the selected `sample` worker or null; re-planning
+  keeps the decision. The sample's first result has `sample: true`; a failure
+  counts toward the owner check and excludes the worker without raising the
+  floor. The usual candidate list stays the same.
 
 - When a Claude worker stops, a hook reads its transcript and records the
   worker's total so far: duration and tokens of all its runs (idle time between
@@ -294,6 +305,16 @@ project), so routing can be compared with your own results:
   id and short title, difficulty, worker, step (start, escalation, repair or retry), outcome
   (pass, fail, unverified or blocked), and a required reason on fail, and for Codex the GSwitch job and thread, which link to GSwitch's
   Activity numbers.
+  Optional `review` (none/minor/serious) and `findings` (0–99) capture a review.
+- Claude stop attempts include `self`, parsed from the worker's last RESULT
+  line: status, confidence, felt difficulty and `verifyFails`. Missing or
+  invalid parts are null; this is a claim, not verification evidence.
+- Each `router finish` that reaches the check records files, added/deleted
+  lines, verify (passed/failed/none), scopeWarnings and whether it applied.
+  `router close` records planned/actual difficulty, `orchestratorFix`, attempt
+  count, passed state and an optional note (120 characters). Repeated closes
+  append; use the last one. Finish and close records do not affect stats.
+  Old log records still load with the new fields absent.
 - When the orchestrator edits the code itself (a "Yourself" case or an
   owner-requested direct edit), it records `--worker orchestrator` with no
   agent or Codex fields. These records are not worker attempts: they are left

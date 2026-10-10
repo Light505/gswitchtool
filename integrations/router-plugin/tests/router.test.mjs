@@ -15,7 +15,7 @@ const script = path.join(plugin, "scripts", "router.mjs");
 function fixture(t) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "router-test-"));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  const env = { ...process.env, HOME: home, USERPROFILE: home };
+  const env = { ...process.env, HOME: home, USERPROFILE: home, GSWITCH_ROUTER_SAMPLE_ROLL: "1" };
   const data = path.join(home, ".gswitchtool-router");
   const project = path.join(home, "project");
   fs.mkdirSync(project);

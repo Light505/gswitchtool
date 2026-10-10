@@ -208,8 +208,13 @@ subscription limits at about 2.5× the Normal rate.
 Invoke results show the actual speed and fallback notes. Rust keeps timing,
 token totals when reported, and speed decisions in `codex-runs.jsonl` beside
 `claude-setup.json` (`~/.gswitchtool`, or Dev's `~/.gswitchtool-dev`), retaining
-the newest 5,000 finished tasks. The log contains no credentials or account
-identifiers.
+the newest 5,000 finished tasks. Each entry also records Codex's `RESULT`
+self-report, the size of the change (files, lines added and removed), the
+verify outcome and retry, the number of scope requests, and tokens split into
+input, cached input, output and reasoning output, with a separate bucket for
+prompts above 272K input tokens (OpenAI's long-prompt price). The log contains
+no credentials, account identifiers, prompts, answers, file paths or folders;
+values outside the fixed choices are dropped.
 
 ## 4. Install the Claude Code plugin
 
@@ -265,6 +270,7 @@ the tool rather than from Codex:
 | `Verify: passed` / `Verify: FAILED` | The test command Claude named, run by the tool after Codex finished. On a failure Codex gets one automatic retry in the same thread; after that, Claude takes over. |
 | `SCOPE REQUEST: …` / `Scope: n change(s) declined` | Files Codex was stopped from changing, with its reason when given, and how many paths were declined. Claude decides whether to resume the same thread with a wider scope. |
 | `WARNING: …` | Something does not add up, such as a file Codex says it changed that git shows unchanged. With `--write` and `--scope`, the run stops at the first edit outside `--scope`, before it happens, and reports it as a `SCOPE REQUEST` (verify is skipped); shell edits are still caught afterwards by `WARNING: changed outside --scope`. Claude then reads those files. `WARNING: protected text changed` means Codex altered rules marked as protected (between `gswitch-protected:start` and `gswitch-protected:end`); the run does not pass and Claude puts the original text back. |
+| `Self-report: …` | The one line that comes from Codex itself. Editing tasks ask Codex to end its answer with `RESULT: <done\|partial\|stopped> · confidence: <high\|medium\|low> · felt: <trivial\|small\|moderate\|hard\|high-risk> · verify-fails: <n>`; the tool shows the parsed values (`-` for a missing or invalid one) and leaves the answer as written. No `RESULT` line, no `Self-report` line. |
 | `Full answer: …` | A long answer was shortened; the whole answer is in that file. |
 | `Worktree: applied …` / `Worktree kept: …` | When Claude runs two editing tasks at once, each works in its own copy of the repository, and the result is copied back into your working tree. A kept copy (a conflict that could not be resolved, or a failed test) is left for you with its reason; nothing in your working tree changes. The copies share your real `node_modules` and Rust build folder (so nothing is reinstalled), which means an install inside a copy changes those shared folders, just as it would in your working tree. |
 
