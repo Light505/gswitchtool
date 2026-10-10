@@ -68,6 +68,7 @@ const mocks = vi.hoisted(() => ({
   pausedThreads: vi.fn(),
   activity: vi.fn(),
   resultsSummary: vi.fn(),
+  claudePlugins: vi.fn(),
   onInvokeActivity: vi.fn(),
   onInvokeResumed: vi.fn(),
   setInvokeWeeklyReserve: vi.fn(),
@@ -281,6 +282,7 @@ function prepareDefaults() {
   mocks.readTaskLog.mockImplementation(async (_threadId: string, offset: number) => ({ found: true, items: [], offset }));
   mocks.activity.mockResolvedValue([]);
   mocks.resultsSummary.mockResolvedValue({ since: "", tasks: 0, rows: [] });
+  mocks.claudePlugins.mockResolvedValue({ codex: { installed: false, version: null }, router: { installed: false, version: null } });
   mocks.onInvokeActivity.mockResolvedValue(() => undefined);
   mocks.onInvokeResumed.mockResolvedValue(() => undefined);
   mocks.setInvokeWeeklyReserve.mockImplementation(async (reserve: Record<string, number>) => ({
@@ -412,6 +414,15 @@ describe("GSwitch account workspace", () => {
       await waitFor(() => expect(mocks.resultsSummary).toHaveBeenLastCalledWith(7));
     });
 
+    it("says so when a difficulty filter leaves no rows", async () => {
+      mocks.resultsSummary.mockResolvedValue({ since: "", tasks: 12, rows: [resultsRow({})] });
+      window.localStorage.setItem("gswitch.section", "results");
+      render(<App />);
+      expect(await screen.findByText("Codex Sol 6.1, medium")).toBeInTheDocument();
+      await userEvent.selectOptions(screen.getByLabelText("Difficulty"), "hard");
+      expect(screen.getByText("No tasks at this difficulty in this period.")).toBeInTheDocument();
+    });
+
     it("shows the empty state and an error with Retry", async () => {
       window.localStorage.setItem("gswitch.section", "results");
       mocks.resultsSummary.mockRejectedValueOnce(new Error("boom"));
@@ -419,6 +430,78 @@ describe("GSwitch account workspace", () => {
       expect(await screen.findByText("Could not read the results.")).toBeInTheDocument();
       await userEvent.click(screen.getByRole("button", { name: "Retry" }));
       expect(await screen.findByText(/No routed tasks yet/)).toBeInTheDocument();
+    });
+  });
+
+  describe("Get started", () => {
+    const installed = (version: string) => ({ installed: true, version });
+    const routerSetup = () => ({
+      invoke_mode: true,
+      claude_setup: { ...claudeSetup(true), setup: "router" as const },
+      allowed_invocation_profiles: [],
+    });
+
+    it("shows the steps with marks and the plugin commands", async () => {
+      window.localStorage.setItem("gswitch.section", "home");
+      render(<App />);
+      const card = await screen.findByRole("region", { name: "Get started" });
+      expect(within(card).getAllByRole("img", { name: "Not done yet" })).toHaveLength(3);
+      expect(within(card).getByRole("button", { name: "Add account" })).toBeInTheDocument();
+      expect(within(card).getByText("/plugin marketplace add Light505/gswitchtool")).toBeInTheDocument();
+      expect(within(card).getByText("/plugin install codex@gswitchtool")).toBeInTheDocument();
+      expect(within(card).queryByText("/plugin install router@gswitchtool")).not.toBeInTheDocument();
+      expect(within(card).getByText("Then restart Claude Code.")).toBeInTheDocument();
+    });
+
+    it("lists the router command for the Automatic team setup", async () => {
+      window.localStorage.setItem("gswitch.section", "home");
+      mocks.invokeSettings.mockResolvedValue(routerSetup());
+      render(<App />);
+      const card = await screen.findByRole("region", { name: "Get started" });
+      expect(await within(card).findByText("/plugin install router@gswitchtool")).toBeInTheDocument();
+    });
+
+    it("marks finished steps, shows versions, and disappears when all are done", async () => {
+      window.localStorage.setItem("gswitch.section", "home");
+      mocks.listAccounts.mockResolvedValue([chatAccount]);
+      mocks.invokeSettings.mockResolvedValue(routerSetup());
+      mocks.claudePlugins.mockResolvedValue({ codex: installed("1.0.6"), router: { installed: false, version: null } });
+      render(<App />);
+      const card = await screen.findByRole("region", { name: "Get started" });
+      expect(within(card).getAllByRole("img", { name: "Done" })).toHaveLength(2);
+      expect(within(card).getByText("/plugin install router@gswitchtool")).toBeInTheDocument();
+    });
+
+    it("is gone once everything is done", async () => {
+      window.localStorage.setItem("gswitch.section", "home");
+      mocks.listAccounts.mockResolvedValue([chatAccount]);
+      mocks.invokeSettings.mockResolvedValue(routerSetup());
+      mocks.claudePlugins.mockResolvedValue({ codex: installed("1.0.6"), router: installed("0.5.0") });
+      render(<App />);
+      await screen.findByRole("heading", { name: "Running now" });
+      await waitFor(() => expect(mocks.claudePlugins).toHaveBeenCalled());
+      expect(screen.queryByRole("region", { name: "Get started" })).not.toBeInTheDocument();
+    });
+
+    it("stays hidden after Hide", async () => {
+      window.localStorage.setItem("gswitch.section", "home");
+      const first = render(<App />);
+      await userEvent.click(await within(await screen.findByRole("region", { name: "Get started" })).findByRole("button", { name: "Hide" }));
+      expect(screen.queryByRole("region", { name: "Get started" })).not.toBeInTheDocument();
+      first.unmount();
+      render(<App />);
+      await screen.findByRole("heading", { name: "Running now" });
+      expect(screen.queryByRole("region", { name: "Get started" })).not.toBeInTheDocument();
+    });
+
+    it("shows plugin status and commands in Settings", async () => {
+      window.localStorage.setItem("gswitch.section", "settings");
+      mocks.claudePlugins.mockResolvedValue({ codex: installed("1.0.6"), router: { installed: false, version: null } });
+      render(<App />);
+      const panel = await screen.findByRole("region", { name: "Claude Code plugins" });
+      expect(await within(panel).findByText("Codex plugin 1.0.6")).toBeInTheDocument();
+      expect(within(panel).getByText("Router plugin: Not installed")).toBeInTheDocument();
+      expect(within(panel).getByText("/plugin install router@gswitchtool")).toBeInTheDocument();
     });
   });
 

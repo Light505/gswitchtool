@@ -35,7 +35,14 @@ current task or a log from the Activity history it was opened from. Watch and
 Activity show uncached input, cached input with hit rate, and output when known.
 Codex's input total includes cached input; the hit rate uses that full total.
 
-Home says in one sentence how the saved setup shares the work
+Home starts with a **Get started** card of three steps, each marked done or not:
+add Codex accounts (button **Add account**), choose how Claude and Codex share
+work (done once the Claude Code section was opened or a non-default setup is
+saved; button **Choose**), and add the plugins to Claude Code (done when
+`claude_plugins` finds the Codex plugin, and the router plugin for Automatic
+team; otherwise the `/plugin` commands with Copy buttons and "Then restart Claude
+Code."). The card disappears when all three are done; **Hide** hides it for good
+(browser storage). Home then says in one sentence how the saved setup shares the work
 (`src/setupSummary.ts`), with a **Change** button that opens Claude Code; lists
 running Codex tasks with Watch and Stop (or "Nothing is running."); and shows
 the five newest Activity events with a link to Results. The Claude Code section
@@ -61,7 +68,9 @@ and effort with tasks, passed first time, typical time and cost, a *trial* tag f
 models tried on easy tasks, and "Too few to judge" under 10 first tries), then
 **Activity** with the history and its seven-day summary. Settings holds Appearance (palette
 and mode), Updates (version, Check for updates, Roll back to previous version),
-and the Codex CLI status and update.
+a Claude Code plugins card (installed versions or "Not installed", with the same
+commands), and the Codex CLI status and update. When a difficulty filter leaves
+no rows, Results says "No tasks at this difficulty in this period."
 Unknown, setup, and recovery states use the existing actionable notice. With
 saved accounts, a signed-out Codex uses one quiet text notice without another
 button; without saved accounts, the empty state provides the next step.

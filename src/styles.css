@@ -526,6 +526,82 @@ summary:focus-visible {
   flex: 0 0 auto;
 }
 
+.get-started {
+  display: grid;
+  gap: 12px;
+}
+
+.get-started-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.get-started-steps {
+  display: grid;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.get-started-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.get-started-steps li > div {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.get-started-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+
+.get-started-done {
+  border-color: var(--accent, currentColor);
+  color: var(--accent, currentColor);
+}
+
+.plugin-commands {
+  display: grid;
+  gap: 6px;
+}
+
+.plugin-command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plugin-command code {
+  padding: 4px 8px;
+  border: 1px solid var(--border, currentColor);
+  border-radius: 6px;
+  font-size: 12.5px;
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.plugin-status {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 13.5px;
+}
+
 .home-empty {
   margin: 0;
   color: var(--muted);

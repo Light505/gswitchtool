@@ -245,6 +245,18 @@ pub fn get_activity(
     activity.recent(limit.unwrap_or(200).min(1000))
 }
 
+/// Which GSwitch plugins Claude Code has installed. Read-only.
+#[tauri::command]
+pub async fn claude_plugins(app: AppHandle) -> Result<crate::plugins::ClaudePlugins, String> {
+    use tauri::Manager;
+    let home = app
+        .path()
+        .home_dir()
+        .map_err(|_| "Your home folder is unavailable".to_string())?;
+    let dev = crate::build_identity::is_dev_identifier(&app.config().identifier);
+    run_blocking(move || Ok(crate::plugins::read(&home, dev))).await
+}
+
 /// How each model did on routed coding tasks in the last `days` days. Reads
 /// the router's results log and the Codex run log; never writes.
 #[tauri::command]

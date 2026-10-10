@@ -126,6 +126,10 @@ const displayOnly = {
     { at: Date.now() - 31 * 60_000, kind: "woke", accounts: ["demo-4"] },
     { at: Date.now() - 52 * 60_000, kind: "task_ended", task: "demo-task-0", model: "gpt-6-luna", thread_id: "01a1e9b8-demo", status: "completed", usage: { input_tokens: 30000, cached_input_tokens: 25000, output_tokens: 11200, reasoning_output_tokens: 400, total_tokens: 41200 } },
   ],
+  claudePlugins: async () => ({
+    codex: { installed: true, version: "1.0.6-gswitchtool.22" },
+    router: { installed: false, version: null },
+  }),
   resultsSummary: async (days: number) => ({
     since: new Date(Date.now() - Math.min(Math.max(days, 1), 365) * 86_400_000).toISOString(),
     tasks: 41,

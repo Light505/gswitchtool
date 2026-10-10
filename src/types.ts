@@ -106,6 +106,16 @@ export interface ResultsRow {
   medianUsd: number | null;
 }
 
+export interface PluginStatus {
+  installed: boolean;
+  version: string | null;
+}
+
+export interface ClaudePlugins {
+  codex: PluginStatus;
+  router: PluginStatus;
+}
+
 export interface ResultsSummary {
   since: string;
   tasks: number;

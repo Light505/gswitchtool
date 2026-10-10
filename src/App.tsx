@@ -79,6 +79,7 @@ import type {
   InvokeTaskKind,
   ActivityEntry,
   ResultsSummary,
+  ClaudePlugins,
   AppVersion,
   InvokePause,
   InvokeTask,
@@ -145,6 +146,60 @@ function saveSection(section: Section) {
   } catch {
     // Without storage the choice lasts until the window closes.
   }
+}
+
+// Added by Light505: the Home "Get started" card remembers two things per
+// computer: that the Claude Code section was opened, and that the card is hidden.
+const CLAUDE_VISITED_KEY = "gswitch.claudeCodeVisited";
+const GET_STARTED_HIDDEN_KEY = "gswitch.getStartedHidden";
+
+function readFlag(key: string): boolean {
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveFlag(key: string) {
+  try {
+    window.localStorage.setItem(key, "1");
+  } catch {
+    // Without storage the flag lasts until the window closes.
+  }
+}
+
+/** The commands to type in Claude Code, each with a Copy button. */
+function PluginCommands({ router, t }: { router: boolean; t: Translator }) {
+  const commands = [
+    "/plugin marketplace add Light505/gswitchtool",
+    "/plugin install codex@gswitchtool",
+    ...(router ? ["/plugin install router@gswitchtool"] : []),
+  ];
+  const copy = async (command: string, box: HTMLElement | null) => {
+    try {
+      await navigator.clipboard.writeText(command);
+    } catch {
+      if (box) window.getSelection()?.selectAllChildren(box);
+    }
+  };
+  return (
+    <div className="plugin-commands">
+      {commands.map((command) => (
+        <div className="plugin-command" key={command}>
+          <code>{command}</code>
+          <button
+            className="button button-secondary"
+            onClick={(event) => void copy(command, event.currentTarget.previousElementSibling as HTMLElement | null)}
+            type="button"
+          >
+            {t("plugins.copy")}
+          </button>
+        </div>
+      ))}
+      <p className="home-empty">{t("plugins.restart")}</p>
+    </div>
+  );
 }
 
 interface WatchedLog {
@@ -1572,6 +1627,8 @@ function ModelResults({ t }: { t: Translator }) {
         <div className="loading-state"><LoaderCircle className="spin" size={24} />{t("results.loading")}</div>
       ) : summary.tasks === 0 && summary.rows.length === 0 ? (
         <p>{t("results.empty")}</p>
+      ) : rows.length === 0 ? (
+        <p>{t("results.emptyDifficulty")}</p>
       ) : (
         <>
           <div className="results-table-wrap">
@@ -2271,6 +2328,20 @@ export default function App() {
   const [claudeCodeOpened, setClaudeCodeOpened] = useState(false);
   useEffect(() => {
     if (section === "claude-code") setClaudeCodeOpened(true);
+  }, [section]);
+  const [claudeVisited, setClaudeVisited] = useState(() => readFlag(CLAUDE_VISITED_KEY));
+  useEffect(() => {
+    if (section !== "claude-code") return;
+    setClaudeVisited(true);
+    saveFlag(CLAUDE_VISITED_KEY);
+  }, [section]);
+  const [getStartedHidden, setGetStartedHidden] = useState(() => readFlag(GET_STARTED_HIDDEN_KEY));
+  const [claudePlugins, setClaudePlugins] = useState<ClaudePlugins | null>(null);
+  const refreshClaudePlugins = () => {
+    void api.claudePlugins().then(setClaudePlugins, () => setClaudePlugins(null));
+  };
+  useEffect(() => {
+    if (section === "home" || section === "settings") refreshClaudePlugins();
   }, [section]);
   // The "Order Claude uses" draft lives here so it survives navigation; null
   // means "as saved".
@@ -3656,6 +3727,12 @@ export default function App() {
   }, [live, pendingResetCredit, runTask, storage, t]);
 
   const setupSentence = describeSetup(invokeSettings, accounts);
+  const pluginVersions = claudePlugins
+    ? [
+      claudePlugins.codex.installed ? t("plugins.codexVersion", { version: claudePlugins.codex.version ?? "?" }) : null,
+      claudePlugins.router.installed ? t("plugins.routerVersion", { version: claudePlugins.router.version ?? "?" }) : null,
+    ].filter(Boolean).join(" · ")
+    : "";
   const showHistoryLog = (threadId: string, threads: string[]) => {
     setHistoryThreads([...new Set(threads)]);
     watchLog({ id: threadId, threadId, title: t("log.historyTitle", { thread: shortThread(threadId) }) });
@@ -3794,6 +3871,64 @@ export default function App() {
         {section === "home" ? (
           <div className="page">
             <h2 className="page-title" tabIndex={-1}>{t("nav.home")}</h2>
+            {(() => {
+              if (getStartedHidden || !invokeSettings) return null;
+              const needsRouter = invokeSettings.claude_setup.setup === "router";
+              const stepDone = [
+                chatGptAccounts.length > 0,
+                claudeVisited || invokeSettings.claude_setup.setup !== "claude-only",
+                Boolean(claudePlugins?.codex.installed && (!needsRouter || claudePlugins.router.installed)),
+              ];
+              if (stepDone.every(Boolean)) return null;
+              const mark = (done: boolean) => (
+                <span aria-label={t(done ? "getStarted.done" : "getStarted.todo")} className={"get-started-mark" + (done ? " get-started-done" : "")} role="img">
+                  {done ? <Check size={14} /> : null}
+                </span>
+              );
+              return (
+                <section aria-labelledby="home-start-heading" className="page-card get-started">
+                  <div className="get-started-head">
+                    <h3 id="home-start-heading">{t("getStarted.title")}</h3>
+                    <button className="back-link" onClick={() => { saveFlag(GET_STARTED_HIDDEN_KEY); setGetStartedHidden(true); }} type="button">
+                      {t("getStarted.hide")}
+                    </button>
+                  </div>
+                  <ol className="get-started-steps">
+                    <li>
+                      {mark(stepDone[0])}
+                      <div>
+                        <strong>{t("getStarted.accounts")}</strong>
+                        {stepDone[0] ? null : (
+                          <button className="button button-secondary" onClick={() => { selectSection("accounts"); openAddDialog(); }} type="button">
+                            {t("getStarted.addAccount")}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                    <li>
+                      {mark(stepDone[1])}
+                      <div>
+                        <strong>{t("getStarted.setup")}</strong>
+                        {stepDone[1] ? null : (
+                          <button className="button button-secondary" onClick={() => selectSection("claude-code")} type="button">
+                            {t("getStarted.choose")}
+                          </button>
+                        )}
+                      </div>
+                    </li>
+                    <li>
+                      {mark(stepDone[2])}
+                      <div>
+                        <strong>{t("getStarted.plugins")}</strong>
+                        {stepDone[2]
+                          ? <p className="home-empty">{pluginVersions}</p>
+                          : <PluginCommands router={needsRouter} t={t} />}
+                      </div>
+                    </li>
+                  </ol>
+                </section>
+              );
+            })()}
             {setupSentence ? (
               <section aria-labelledby="home-setup-heading" className="page-card home-setup">
                 <div>
@@ -3978,6 +4113,18 @@ export default function App() {
                   {t("rollback.check")}
                 </button>
               </div>
+            </section>
+            <section aria-labelledby="settings-plugins-heading" className="page-card settings-card">
+              <h3 className="page-card-title" id="settings-plugins-heading">{t("plugins.title")}</h3>
+              <ul className="plugin-status">
+                <li>{claudePlugins?.codex.installed
+                  ? t("plugins.codexVersion", { version: claudePlugins.codex.version ?? "?" })
+                  : `${t("plugins.codexName")}: ${t("plugins.notInstalled")}`}</li>
+                <li>{claudePlugins?.router.installed
+                  ? t("plugins.routerVersion", { version: claudePlugins.router.version ?? "?" })
+                  : `${t("plugins.routerName")}: ${t("plugins.notInstalled")}`}</li>
+              </ul>
+              <PluginCommands router t={t} />
             </section>
             <section aria-labelledby="settings-cli-heading" className="page-card settings-card">
               <h3 className="page-card-title" id="settings-cli-heading">{t("toolbar.codexCli")}</h3>

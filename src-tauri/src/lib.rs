@@ -15,6 +15,7 @@ mod invoke;
 mod invoke_ipc;
 mod migration;
 mod model_access;
+mod plugins;
 mod quota;
 mod results;
 mod runtime;
@@ -343,6 +344,7 @@ pub fn run() {
             commands::get_paused_threads,
             commands::get_activity,
             commands::results_summary,
+            commands::claude_plugins,
             commands::read_task_log,
             commands::get_invoke_pause,
             commands::resume_invoke
