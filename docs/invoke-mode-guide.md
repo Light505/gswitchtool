@@ -130,7 +130,7 @@ Credentials stay encrypted on your computer. Claude never sees them.
 3. On each account card, turn on **Allow in Invoke Mode** for the accounts GSwitch
    may switch to automatically. An account you leave off is never used
    automatically, whatever its quota.
-4. Under **Accounts** in Codex helper, put the accounts in the order you want
+4. In **Order Claude uses** at the top of the Accounts page, put the accounts in the order you want
    them used, for example your larger plan first. GSwitch uses the first account
    that still has **Enough usage left** (20% of each usage window by default):
    before a task starts while nothing else runs, it switches to that account, and
@@ -138,7 +138,7 @@ Credentials stay encrypted on your computer. Claude never sees them.
    enough, it takes the one with the most usage left.
 5. **Codex tasks at once** (default 2) caps how many delegated tasks Claude can
    run in parallel; more wait their turn.
-6. **Weekly reserve** (next to each account in the order): the share of that
+6. **Weekly reserve** (next to each account in **Order Claude uses**, saved with it): the share of that
    account's weekly limit automatic switching leaves unused, for example 30% to
    keep part of your main account's week for yourself. Below it, GSwitch moves
    tasks to other accounts and never fails over to it; if no other account has

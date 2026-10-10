@@ -555,7 +555,7 @@ describe("GSwitch account workspace", () => {
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText("person@example.com");
+    await screen.findAllByText("person@example.com");
     await user.click(screen.getByRole("button", { name: "Select accounts" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Export" }));
@@ -576,7 +576,7 @@ describe("GSwitch account workspace", () => {
     mocks.listAccounts.mockResolvedValue([chatAccount]);
     const user = userEvent.setup();
     render(<App />);
-    await screen.findByText("person@example.com");
+    await screen.findAllByText("person@example.com");
     await user.click(screen.getByRole("button", { name: "Select accounts" }));
     await user.click(screen.getByRole("button", { name: "Select all" }));
     await user.click(screen.getByRole("button", { name: "Export" }));
@@ -1199,7 +1199,7 @@ describe("GSwitch account workspace", () => {
     render(<App />);
 
     expect(await screen.findByRole("button", { name: "Switch to person@example.com" })).toBeEnabled();
-    expect(screen.getByText("Team")).toBeInTheDocument();
+    expect(screen.getAllByText("Team").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
   });
 
@@ -2494,7 +2494,7 @@ describe("Invoke Mode", () => {
     expect(await screen.findByRole("region", { name: "How your setup works" }))
       .toHaveTextContent("Claude Code does all the work. Codex is not used.");
     await goTo("Accounts");
-    expect(await screen.findByText("person@example.com")).toBeInTheDocument();
+    expect((await screen.findAllByText("person@example.com")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Account mode" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Invoke settings/ })).not.toBeInTheDocument();
@@ -2841,10 +2841,30 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
+    await goTo("Accounts");
+    const card = await screen.findByRole("region", { name: "Order Claude uses" });
+    expect(within(card).getByText("Not allowed")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Move person@example.com up" })).toBeDisabled();
+    await userEvent.click(within(card).getByRole("button", { name: "Move second@example.com up" }));
+    // The draft survives leaving the page.
+    await goTo("Home");
+    await goTo("Accounts");
+    const again = await screen.findByRole("region", { name: "Order Claude uses" });
+    expect(within(again).getByRole("button", { name: "Move second@example.com up" })).toBeDisabled();
+    // The real backend returns the whole saved settings.
+    mocks.setInvokeWeeklyReserve.mockImplementation(async (reserve: Record<string, number>) => ({
+      invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [],
+      account_priority: ["account-2", "account-1"], preferred_min_remaining: 20, max_concurrent_tasks: 2, weekly_reserve: reserve,
+    }));
+    await userEvent.click(within(again).getByRole("button", { name: "Save" }));
+    // Values this card does not own are the saved ones.
+    await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 20, 2, false));
+    expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({});
+    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    mocks.setInvokePreferences.mockClear();
+    mocks.setInvokeWeeklyReserve.mockClear();
+
     const dialog = await openInvokeSettings();
-    expect(within(dialog).getByText("Not allowed")).toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: "Move person@example.com up" })).toBeDisabled();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Move second@example.com up" }));
     const threshold = within(dialog).getByRole("spinbutton", { name: /Enough usage left/ });
     await userEvent.clear(threshold);
     await userEvent.type(threshold, "35");
@@ -2856,9 +2876,32 @@ describe("Invoke Mode", () => {
     await userEvent.click(autoWake);
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
 
-    // Out-of-range values are kept within limits.
+    // Out-of-range values are kept within limits; the saved order is kept and
+    // the reserve is not touched.
     await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6, true));
+    expect(mocks.setInvokeWeeklyReserve).not.toHaveBeenCalled();
     expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+  });
+
+  it("sends the saved limits when the order card is saved", async () => {
+    mocks.listAccounts.mockResolvedValue([{ ...chatAccount, invoke_allowed: true }]);
+    mocks.invokeSettings.mockResolvedValue({
+      invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [],
+      account_priority: ["account-1"], preferred_min_remaining: 35, max_concurrent_tasks: 4, auto_wake: true,
+    });
+    render(<App />);
+    await goTo("Accounts");
+    const card = await screen.findByRole("region", { name: "Order Claude uses" });
+    await userEvent.click(within(card).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-1"], 35, 4, true));
+  });
+
+  it("opens Accounts from the Codex helper pointer", async () => {
+    mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
+    render(<App />);
+    const panel = await openInvokeSettings();
+    await userEvent.click(within(panel).getByRole("button", { name: "Open Accounts" }));
+    expect(await screen.findByRole("region", { name: "Order Claude uses" })).toBeInTheDocument();
   });
 
   it("marks a model that only some accounts offer", async () => {
@@ -3118,7 +3161,8 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
 
-    const dialog = await openInvokeSettings();
+    await goTo("Accounts");
+    const dialog = await screen.findByRole("region", { name: "Order Claude uses" });
     const reserve = within(dialog).getByRole("spinbutton", { name: "Weekly reserve for person@example.com" });
     await userEvent.type(reserve, "30");
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
@@ -3190,7 +3234,7 @@ describe("Invoke Mode", () => {
     });
     render(<App />);
     await goTo("Accounts");
-    expect(await screen.findByText("second@example.com")).toBeInTheDocument();
+    expect((await screen.findAllByText("second@example.com")).length).toBeGreaterThan(0);
     await waitFor(() => expect(notify).toBeDefined());
     const snapshots = mocks.appSnapshot.mock.calls.length;
 
@@ -3231,7 +3275,7 @@ describe("Invoke Mode", () => {
     });
     render(<App />);
     await goTo("Accounts");
-    await screen.findByText("person@example.com");
+    await screen.findAllByText("person@example.com");
     expect(screen.queryByRole("heading", { name: "Close Codex to continue" })).not.toBeInTheDocument();
 
     await waitFor(() => expect(update).toBeDefined());

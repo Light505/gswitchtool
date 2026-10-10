@@ -44,7 +44,10 @@ Router cards, Save and Cancel (Cancel discards unsaved edits), and a
 next-message scope note. Router exposes its mode, a three-model by five-effort
 worker grid, and Codex review on/off only in Claude mode. Below it, **Codex
 helper** holds the Invoke settings with their own Save; saving either part
-keeps the other's unsaved edits. Invoke Mode is derived from the saved setup
+keeps the other's unsaved edits. The account order and each account's weekly
+reserve live on the Accounts page in an **Order Claude uses** card with its own
+Save (the draft is kept in App state while you navigate); Codex helper points
+there with a button. Invoke Mode is derived from the saved setup
 and has no direct frontend toggle. When it is on, each ChatGPT card retains its
 **Allow in Invoke Mode** row. The Claude Code section remains available during
 an Invoke pause. When an Invoke Mode switch is waiting for the user to quit

@@ -1746,32 +1746,86 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
   );
 }
 
-function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
+function clampPercent(value: string, min: number, max: number, fallback: number) {
+  const number = Math.round(Number(value));
+  return Number.isFinite(number) && value.trim() !== "" ? Math.min(max, Math.max(min, number)) : fallback;
+}
+
+function AccountOrderCard({ order, reserve, saving, error, onMove, onReserve, onSave, t }: {
+  order: AccountView[];
+  reserve: Record<string, string>;
+  saving: boolean;
+  error: string | null;
+  onMove: (index: number, offset: number) => void;
+  onReserve: (id: string, value: string) => void;
+  onSave: () => void;
+  t: Translator;
+}) {
+  return (
+    <section aria-labelledby="order-card-heading" className="page-card">
+      <h3 className="page-card-title" id="order-card-heading">{t("invoke.orderCardTitle")}</h3>
+      <div className="invoke-panel">
+        <p>{t("invoke.orderIntro")}</p>
+        {order.length ? (
+          <ol className="invoke-order">
+            {order.map((account, index) => {
+              const name = accountPrimaryName(account);
+              return (
+                <li key={account.id}>
+                  <span className="invoke-order-rank">{index + 1}</span>
+                  <span className="invoke-order-name" title={name}>{name}</span>
+                  <span className="badge">{accountPlan(account, t)}</span>
+                  {account.invoke_allowed ? null : <span className="badge badge-muted">{t("invoke.notAllowed")}</span>}
+                  <label className="invoke-reserve" title={t("invoke.weeklyReserveHint")}>
+                    <input
+                      aria-label={t("invoke.weeklyReserveFor", { name })}
+                      disabled={saving}
+                      inputMode="numeric"
+                      max={90}
+                      min={0}
+                      onChange={(event) => onReserve(account.id, event.target.value)}
+                      placeholder="0"
+                      step={5}
+                      type="number"
+                      value={reserve[account.id] ?? ""}
+                    />
+                    <small>{t("invoke.weeklyReserve")} %</small>
+                  </label>
+                  <span className="invoke-order-actions">
+                    <button aria-label={t("invoke.moveUp", { name })} className="icon-button" disabled={saving || index === 0} onClick={() => onMove(index, -1)} type="button"><ChevronUp size={15} /></button>
+                    <button aria-label={t("invoke.moveDown", { name })} className="icon-button" disabled={saving || index === order.length - 1} onClick={() => onMove(index, 1)} type="button"><ChevronDown size={15} /></button>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        ) : <p>{t("invoke.orderEmpty")}</p>}
+        {error ? <p className="remove-error" role="alert">{error}</p> : null}
+        {order.length ? (
+          <div className="modal-actions">
+            <button className="button button-primary" disabled={saving} onClick={onSave} type="button">
+              {saving ? <LoaderCircle className="spin" size={15} /> : null}
+              {t("common.save")}
+            </button>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, onOpenAccounts, t }: {
   settings: InvokeSettings;
   accounts: AccountView[];
   onSaved: (settings: InvokeSettings) => void;
   onSaveFailed: (message: string) => void;
+  onOpenAccounts: () => void;
   t: Translator;
 }) {
-  const [order, setOrder] = useState<AccountView[]>(() => orderedAccounts(accounts, settings.account_priority ?? []));
   const [minRemaining, setMinRemaining] = useState(String(settings.preferred_min_remaining ?? 20));
   const [maxTasks, setMaxTasks] = useState(String(settings.max_concurrent_tasks ?? 2));
   const [autoWake, setAutoWake] = useState(settings.auto_wake ?? false);
-  const [reserve, setReserve] = useState<Record<string, string>>(() =>
-    Object.fromEntries(Object.entries(settings.weekly_reserve ?? {}).map(([id, percent]) => [id, String(percent)])),
-  );
-  const move = (index: number, offset: number) => {
-    setOrder((current) => {
-      const next = [...current];
-      const [account] = next.splice(index, 1);
-      next.splice(index + offset, 0, account);
-      return next;
-    });
-  };
-  const clamp = (value: string, min: number, max: number, fallback: number) => {
-    const number = Math.round(Number(value));
-    return Number.isFinite(number) && value.trim() !== "" ? Math.min(max, Math.max(min, number)) : fallback;
-  };
+  const clamp = clampPercent;
   const [catalog, setCatalog] = useState<CatalogModel[] | null>(null);
   const [loadingModels, setLoadingModels] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -1819,16 +1873,11 @@ function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
     try {
       await api.setInvokeProfiles(profiles);
       await api.setInvokePreferences(
-        order.map((account) => account.id),
+        settings.account_priority ?? [],
         clamp(minRemaining, 0, 90, 20),
         clamp(maxTasks, 1, 6, 2),
         autoWake,
       );
-      await api.setInvokeWeeklyReserve(Object.fromEntries(
-        Object.entries(reserve)
-          .map(([id, percent]) => [id, clamp(percent, 0, 90, 0)] as const)
-          .filter(([, percent]) => percent > 0),
-      ));
       const allowedDefaults = Object.fromEntries(taskKinds.flatMap((kind) => {
         const selected = taskDefaults[kind];
         return selected && draft[selected.model]?.includes(selected.effort) ? [[kind, selected]] : [];
@@ -1932,42 +1981,10 @@ function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
             );
           })}
         </ul>
-        <h4>{t("invoke.accountsTitle")}</h4>
-        <p>{t("invoke.orderIntro")}</p>
-        {order.length ? (
-          <ol className="invoke-order">
-            {order.map((account, index) => {
-              const name = accountPrimaryName(account);
-              return (
-                <li key={account.id}>
-                  <span className="invoke-order-rank">{index + 1}</span>
-                  <span className="invoke-order-name" title={name}>{name}</span>
-                  <span className="badge">{accountPlan(account, t)}</span>
-                  {account.invoke_allowed ? null : <span className="badge badge-muted">{t("invoke.notAllowed")}</span>}
-                  <label className="invoke-reserve" title={t("invoke.weeklyReserveHint")}>
-                    <input
-                      aria-label={t("invoke.weeklyReserveFor", { name })}
-                      disabled={saving}
-                      inputMode="numeric"
-                      max={90}
-                      min={0}
-                      onChange={(event) => setReserve((current) => ({ ...current, [account.id]: event.target.value }))}
-                      placeholder="0"
-                      step={5}
-                      type="number"
-                      value={reserve[account.id] ?? ""}
-                    />
-                    <small>{t("invoke.weeklyReserve")} %</small>
-                  </label>
-                  <span className="invoke-order-actions">
-                    <button aria-label={t("invoke.moveUp", { name })} className="icon-button" disabled={saving || index === 0} onClick={() => move(index, -1)} type="button"><ChevronUp size={15} /></button>
-                    <button aria-label={t("invoke.moveDown", { name })} className="icon-button" disabled={saving || index === order.length - 1} onClick={() => move(index, 1)} type="button"><ChevronDown size={15} /></button>
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-        ) : <p>{t("invoke.orderEmpty")}</p>}
+        <p>
+          {t("invoke.accountsPointer")}{" "}
+          <button className="text-button" onClick={onOpenAccounts} type="button">{t("invoke.openAccounts")}</button>
+        </p>
         <div className="invoke-limits">
           <label>
             <span>{t("invoke.minRemaining")}</span>
@@ -2118,6 +2135,12 @@ export default function App() {
   useEffect(() => {
     if (section === "claude-code") setClaudeCodeOpened(true);
   }, [section]);
+  // The "Order Claude uses" draft lives here so it survives navigation; null
+  // means "as saved".
+  const [orderDraft, setOrderDraft] = useState<string[] | null>(null);
+  const [reserveDraft, setReserveDraft] = useState<Record<string, string> | null>(null);
+  const [orderSaving, setOrderSaving] = useState(false);
+  const [orderError, setOrderError] = useState<string | null>(null);
   const reportSaveFailure = (text: string) => {
     if (sectionRef.current !== "claude-code") setNotice({ kind: "error", text });
   };
@@ -3372,6 +3395,41 @@ export default function App() {
   const currentActiveId = live?.account?.id;
   refreshInputs.current = { accounts, quotas, quotaFailures, activeId: currentActiveId };
   const chatGptAccounts = accounts.filter((account) => account.kind === "chat_gpt");
+  const orderList = orderedAccounts(chatGptAccounts, orderDraft ?? invokeSettings?.account_priority ?? []);
+  const reserveValues = reserveDraft
+    ?? Object.fromEntries(Object.entries(invokeSettings?.weekly_reserve ?? {}).map(([id, percent]) => [id, String(percent)]));
+  const moveInOrder = (index: number, offset: number) => {
+    const next = orderList.map((account) => account.id);
+    const [id] = next.splice(index, 1);
+    next.splice(index + offset, 0, id);
+    setOrderDraft(next);
+  };
+  const saveOrder = async () => {
+    if (!invokeSettings) return;
+    setOrderSaving(true);
+    setOrderError(null);
+    try {
+      await api.setInvokePreferences(
+        orderList.map((account) => account.id),
+        invokeSettings.preferred_min_remaining ?? 20,
+        invokeSettings.max_concurrent_tasks ?? 2,
+        invokeSettings.auto_wake ?? false,
+      );
+      const saved = await api.setInvokeWeeklyReserve(Object.fromEntries(
+        Object.entries(reserveValues)
+          .map(([id, percent]) => [id, clampPercent(percent, 0, 90, 0)] as const)
+          .filter(([, percent]) => percent > 0),
+      ));
+      setInvokeSettings(saved);
+      setOrderDraft(null);
+      setReserveDraft(null);
+      setNotice({ kind: "success", text: t("invoke.saved") });
+    } catch {
+      setOrderError(t("error.invokeSave"));
+    } finally {
+      setOrderSaving(false);
+    }
+  };
   const selectedChatGptCount = accounts.filter(
     (account) => account.kind === "chat_gpt" && selectedAccountIds.includes(account.id),
   ).length;
@@ -3685,6 +3743,7 @@ export default function App() {
                       setNotice({ kind: "success", text: t("invoke.saved") });
                     }}
                     onSaveFailed={reportSaveFailure}
+                    onOpenAccounts={() => selectSection("accounts")}
                     settings={invokeSettings}
                     t={t}
                   />
@@ -3916,6 +3975,19 @@ export default function App() {
                 </button>
               </div>
             </div>
+          ) : null}
+
+          {invokeSettings && !loading && !storageRecovery ? (
+            <AccountOrderCard
+              error={orderError}
+              onMove={moveInOrder}
+              onReserve={(id, value) => setReserveDraft({ ...reserveValues, [id]: value })}
+              onSave={() => void saveOrder()}
+              order={orderList}
+              reserve={reserveValues}
+              saving={orderSaving}
+              t={t}
+            />
           ) : null}
 
           {loading ? (
