@@ -115,10 +115,11 @@ function resolved() {
     review: { value: cfg.claudeOnlyReview, source: "GSwitch setup" }, prefer: cfg.prefer, codexSpeed: cfg.codexSpeed };
 }
 function routerLine(state) {
-  const label = { off: "Off", mixed: "Mixed", codex: "Codex only", claude: "Claude only" }[state.mode.value];
-  const prefer = { codex: "Codex", claude: "Claude", price: "Lowest API price" }[state.prefer];
-  const speed = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[state.codexSpeed.mode];
-  return `Router: ${label} (${state.mode.source}) · Codex review: ${state.review.value} (${state.review.source})${state.mode.value === "mixed" ? ` · Use first: ${prefer} (${state.mode.source})` : ""}${["mixed", "codex"].includes(state.mode.value) ? ` · Speed: ${speed} (GSwitch setup)` : ""}`;
+  if (state.mode.value === "off") return "Automatic team is off";
+  const label = { mixed: "Claude and Codex", codex: "Codex only", claude: "Claude models only" }[state.mode.value];
+  const prefer = { codex: "Codex", claude: "Claude", price: "Cheapest" }[state.prefer];
+  const speed = { normal: "Normal", fast: "Fast", orchestrator: "Claude decides" }[state.codexSpeed.mode];
+  return `Automatic team · ${label}${state.mode.value === "mixed" ? ` · Try first: ${prefer}` : ""}${["mixed", "codex"].includes(state.mode.value) ? ` · Codex speed: ${speed}` : ""} · Codex reviews: ${state.review.value}`;
 }
 function resetMilliseconds(value) {
   return typeof value === "number" ? value * 1000 : Date.parse(value);
@@ -805,9 +806,10 @@ function command(args, raw) {
     if (words.length) return "Change the setup in GSwitch: Claude Code button.";
     const folder = projectKey(directory);
     const state = resolved();
-    const lines = [routerLine(state), `Claude workers allowed: ${allowedList()}`];
+    const lines = [routerLine(state), `Claude models it may use: ${allowedList()}`];
     if (!isRepository(folder)) lines.push(`Router warning: ${folder} is not a git repository; start the session in the repository folder.`);
     if (state.mode.value !== "off" && worktreeBaseRef(folder) !== "head") lines.push(baseRefWarning);
+    lines.push("Change it in GSwitch → Claude Code.");
     return lines.join("\n");
   }
   if (name === "scope") {

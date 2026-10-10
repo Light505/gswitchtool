@@ -80,7 +80,7 @@ test("missing, corrupt or invalid app setup is off; other setups ignore old rout
   f.write("config.json", { default: "codex", claudeOnlyReview: "off", claudeAllowed: {}, projects: { [f.project]: { mode: "mixed" } } });
   f.write("sessions/s1.json", { mode: "claude", claudeOnlyReview: "off" });
   const off = () => {
-    assert.match(f.run(["mode", "s1", f.project]), /^Router: Off \(GSwitch setup\)/);
+    assert.match(f.run(["mode", "s1", f.project]), /^Automatic team is off/);
     assert.deepEqual(f.hook("UserPromptSubmit"), {});
   };
   off();
@@ -119,8 +119,9 @@ test("mode arguments change no setup, config or worker state", (t) => {
     files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
   }
   const status = f.run(["mode", "s1", f.project]);
-  assert.match(status, /Mixed \(GSwitch setup\).*on \(GSwitch setup\)/);
-  assert.match(status, /Claude workers allowed: haiku low, medium/);
+  assert.match(status, /^Automatic team · Claude and Codex · Try first: .* · Codex speed: Normal · Codex reviews: on/);
+  assert.match(status, /Claude models it may use: haiku low, medium/);
+  assert.match(status, /Change it in GSwitch → Claude Code\./);
   const skill = fs.readFileSync(path.join(plugin, "skills/mode/SKILL.md"), "utf8");
   const injection = skill.match(/!`([^`]+)`/)[1];
   assert.doesNotMatch(injection, /\$0|\$ARGUMENTS/);
@@ -140,7 +141,7 @@ test("appDataDir uses the same single-directory validation as dataDir", (t) => {
   const target = path.join(copy, "router-target.json");
   for (const appDataDir of [undefined, "..", ".", "../other", "nested/dir", "/absolute", "C:\\outside", 42]) {
     fs.writeFileSync(target, JSON.stringify({ appDataDir }));
-    assert.match(f.run(["mode", "s1", f.project], "", entry), /Mixed \(GSwitch setup\)/);
+    assert.match(f.run(["mode", "s1", f.project], "", entry), /Claude and Codex/);
   }
 });
 
@@ -148,7 +149,7 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   const f = fixture(t); f.mode("claude");
   for (const claudeAllowed of [undefined, null, [], "all", 5, { haiku: "low" }, { opus: null }, { sonnet: ["high", 42] }]) {
     f.settings({ claudeAllowed });
-    assert.equal(f.allowed(), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+    assert.equal(f.allowed(), "Claude models it may use: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
     assert.deepEqual(f.agent(), {});
     assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
     assert.deepEqual(f.agent({ subagent_type: "router:opus-low" }), {});
@@ -157,14 +158,14 @@ test("corrupt claudeAllowed falls back, unknown entries are ignored, empty stays
   assert.deepEqual(f.hook("UserPromptSubmit"), {});
   f.setup({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "on" } });
   assert.deepEqual(f.agent(), {});
-  assert.equal(f.allowed(), "Claude workers allowed: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
+  assert.equal(f.allowed(), "Claude models it may use: haiku low, medium · sonnet low, medium, high, xhigh, max · opus low, medium, high, xhigh, max\n");
   f.settings({ claudeAllowed: { sonnet: ["max", "bogus", "low", "max"], haiku: ["unknown"], fable: ["low"], unknown: null } });
-  assert.equal(f.allowed(), "Claude workers allowed: sonnet low, max\n");
+  assert.equal(f.allowed(), "Claude models it may use: sonnet low, max\n");
   assert.deepEqual(f.agent({ subagent_type: "router:sonnet-low" }), {});
   assert.match(f.agent({ subagent_type: "router:fable-low" }).hookSpecificOutput.permissionDecisionReason, /use a router worker type/);
   for (const allowed of [{}, { unknown: ["high"] }, { fable: ["max"] }, { fable: null }, { haiku: ["bogus"] }]) {
     f.settings({ claudeAllowed: allowed });
-    assert.equal(f.allowed(), "Claude workers allowed: none\n");
+    assert.equal(f.allowed(), "Claude models it may use: none\n");
     assert.match(f.agent().hookSpecificOutput.permissionDecisionReason, /Allowed: none\./);
   }
 });
@@ -254,13 +255,13 @@ test("Windows keys and slash-safe globs", () => {
 test("corrupt files default safely, malformed hooks allow and log", (t) => {
   const f = fixture(t);
   for (const file of ["config.json", "sessions/s1.json", "usage.json"]) f.write(file, "{broken");
-  assert.match(f.run(["mode", "s1", f.project]), /Off.*on/);
+  assert.match(f.run(["mode", "s1", f.project]), /^Automatic team is off/);
   assert.match(f.run(["usage"]), /unknown/);
   assert.deepEqual(f.hook("UserPromptSubmit"), {});
   assert.equal(f.run(["hook", "PreToolUse"], "{bad").trim(), "{}");
   assert.match(fs.readFileSync(path.join(f.data, "router.log"), "utf8"), /PreToolUse:/);
   f.write("config.json", { default: "invalid", projects: [] });
-  assert.match(f.run(["mode", "s1", f.project]), /Off/);
+  assert.match(f.run(["mode", "s1", f.project]), /Automatic team is off/);
 });
 
 test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) => {
@@ -298,15 +299,15 @@ test("Use first appears only in mixed mode and labels the configured preference"
   const f = fixture(t);
   f.settings({ mode: "claude", prefer: "price" });
   assert.doesNotMatch(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Use first/);
-  assert.doesNotMatch(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Use first/);
-  assert.doesNotMatch(f.run(["mode", "s1", f.project]), /Use first/);
-  assert.doesNotMatch(f.run(["statusline"]), /Use first/);
+  assert.doesNotMatch(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Try first/);
+  assert.doesNotMatch(f.run(["mode", "s1", f.project]), /Try first/);
+  assert.doesNotMatch(f.run(["statusline"]), /Try first/);
 
   f.settings({ mode: "mixed", prefer: "price" });
   assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, /Codex review in claude mode: on · Use first: price · Claude 5h:/);
-  assert.match(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Use first: Lowest API price \(GSwitch setup\)/);
-  assert.match(f.run(["mode", "s1", f.project]), /Use first: Lowest API price \(GSwitch setup\)/);
-  assert.match(f.run(["statusline"]), /Use first: Lowest API price \(GSwitch setup\)/);
+  assert.match(f.hook("SessionStart").hookSpecificOutput.additionalContext, /Try first: Cheapest/);
+  assert.match(f.run(["mode", "s1", f.project]), /Try first: Cheapest/);
+  assert.match(f.run(["statusline"]), /Try first: Cheapest/);
 });
 
 test("Agent and Task permissions, fixed models, low usage, scope, approval and helpers", (t) => {
@@ -390,7 +391,7 @@ test("concurrent worker launches preserve both records", async (t) => {
 test("statusline captures usage, passes exact stdin/output, removes expired windows", (t) => {
   const f = fixture(t); f.mode("claude");
   const input = { session_id: "s1", cwd: f.project, rate_limits: { five_hour: { used_percentage: 71.5, resets_at: Date.now() / 1000 + 3600 } } };
-  assert.match(f.run(["statusline"], input), /Claude only/);
+  assert.match(f.run(["statusline"], input), /Claude models only/);
   assert.equal(f.read("usage.json").fiveHour.usedPercentage, 71.5);
   assert.match(f.run(["usage"]), /28.5% left, resets/);
   const passthrough = path.join(f.home, "passthrough.mjs");
@@ -552,7 +553,7 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   fs.mkdirSync(path.dirname(devSetup), { recursive: true });
   fs.writeFileSync(devSetup, JSON.stringify({ version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "off", claudeAllowed: { haiku: ["low"], sonnet: ["max"], opus: ["high"] } } }));
   f.mode("codex");
-  assert.match(f.run(["mode", "s1", f.project], "", devScript), /Claude only \(GSwitch setup\).*off/);
+  assert.match(f.run(["mode", "s1", f.project], "", devScript), /Claude models only · Codex reviews: off/);
   assert.equal(fs.existsSync(path.join(f.data, "sessions/s1.json")), false);
   f.plan(devScript);
   const call = (type) => JSON.parse(f.run(["hook", "PreToolUse"], { session_id: "s1", cwd: f.project, tool_name: "Agent", tool_input: { subagent_type: type, prompt: "SCOPE: src/*\nTASK: t1" } }, devScript));
@@ -594,7 +595,7 @@ test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
   for (const value of [undefined, null, [], {}, { mode: "invalid", fastMinRemaining: 20 }]) {
     assert.deepEqual(normalizeCodexSpeed(value), { mode: "normal", fastMinRemaining: 20 });
     setup("mixed", value);
-    assert.match(f.run(["mode", "s1", f.project]), / · Speed: Normal \(GSwitch setup\)/);
+    assert.match(f.run(["mode", "s1", f.project]), / · Codex speed: Normal · /);
     assert.match(f.hook("UserPromptSubmit").hookSpecificOutput.additionalContext, / · Speed: normal$/);
     assert.doesNotMatch(plan(), /Codex speed:/);
   }
@@ -620,8 +621,8 @@ test("Codex Speed normalizes setup and appears only in Codex modes", (t) => {
       assert.doesNotMatch(line + status + output, /Speed:|Codex speed:/); continue;
     }
     assert.ok(line.endsWith(` · Speed: ${speed}`));
-    const label = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[speed];
-    assert.ok(status.includes(` · Speed: ${label} (GSwitch setup)`));
+    const label = { normal: "Normal", fast: "Fast", orchestrator: "Claude decides" }[speed];
+    assert.ok(status.includes(` · Codex speed: ${label} · `));
     if (speed === "normal") assert.doesNotMatch(output, /Codex speed:/);
     else if (speed === "fast") assert.ok(output.includes("Codex speed: Fast (falls back to Normal below 35% usage left)"));
     else assert.ok(output.includes('Codex speed: Orchestrator decides — add --speed fast --speed-reason "<why>" only when the owner is waiting on this result to continue; otherwise Normal. Fast falls back to Normal below 35% usage left.'));

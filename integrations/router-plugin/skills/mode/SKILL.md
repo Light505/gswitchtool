@@ -1,6 +1,6 @@
 ---
 name: mode
-description: Show the router mode, review setting and allowed workers from GSwitch's Claude Code setup.
+description: Show the Automatic team setup and which Claude models it may use (set in GSwitch → Claude Code).
 disable-model-invocation: true
 ---
 <!-- Added by Light505 for gswitchtool (2026). -->

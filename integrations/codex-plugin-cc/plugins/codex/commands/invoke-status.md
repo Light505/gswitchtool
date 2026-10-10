@@ -1,5 +1,5 @@
 ---
-description: "Show GSwitch Invoke Mode status: allowed Codex models and efforts, defaults, running workers, and whether Codex is signed out"
+description: "Show the Codex helper status: allowed models, defaults, running tasks"
 disable-model-invocation: true
 allowed-tools: Bash(node:*)
 ---

@@ -1,5 +1,5 @@
 ---
-description: Check whether the local Codex CLI is ready and optionally toggle the stop-time review gate
+description: Check that Codex is installed and signed in, and optionally turn the review before stopping on or off
 argument-hint: '[--enable-review-gate|--disable-review-gate]'
 allowed-tools: Bash(node:*), Bash(npm:*), AskUserQuestion
 ---

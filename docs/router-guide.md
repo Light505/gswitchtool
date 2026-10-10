@@ -75,11 +75,18 @@ context and, while routing is on, a `Router:` line whose source is
 
 | You want | Command |
 | --- | --- |
-| See mode, review, allowed workers and warnings | `/router:mode` (status only) |
-| Success rate, time, Median tokens and Median USD per worker and difficulty | `/router:stats` |
+| See mode, review, the Claude models it may use and warnings | `/router:mode` (status only) |
+| Success rate, typical time, tokens and cost per model and difficulty (the app's Results screen shows the same) | `/router:stats` |
 | One task straight to Codex, whatever the mode | `/codex:gswitch-invoke` (unchanged) |
 
-Median USD estimates transcript cost using the price table in
+`/router:mode` and the status line read, for example,
+`Automatic team · Claude and Codex · Try first: Codex · Codex speed: Claude decides · Codex reviews: on`,
+then `Claude models it may use: …` and `Change it in GSwitch → Claude Code.`
+The plugins use the app's names (Automatic team, Claude and Codex, Try first,
+Codex speed). Internal names such as `mixed` and Invoke Mode still appear in
+Claude's own instructions and in the per-message `Router:` line.
+
+Typical cost estimates transcript cost using the price table in
 `docs/model-benchmarks.md`, with cache reads priced as cached input.
 
 Any arguments to `/router:mode` print
@@ -319,10 +326,11 @@ project), so routing can be compared with your own results:
   owner-requested direct edit), it records `--worker orchestrator` with no
   agent or Codex fields. These records are not worker attempts: they are left
   out of success rates and `/router:stats` shows them as a separate count line.
-- `/router:stats` shows attempts, success rate, median time, Median tokens and Median USD per
-  worker, difficulty and Speed. Unverified counts as a pass; blocked is excluded
+- `/router:stats` shows tasks, passed, success rate, typical time, typical tokens and typical cost per
+  model, difficulty and Codex speed (columns: Model, Difficulty, Codex speed, Tasks, Passed,
+  Success, Typical time, Typical tokens, Typical cost, Codex jobs). Unverified counts as a pass; blocked is excluded
   from worker attempts and success rates.
-  Median USD is estimated from the transcript and the price table in
+  Typical cost is estimated from the transcript and the price table in
   `docs/model-benchmarks.md`, with cache reads priced as cached input.
   Missing estimates, including Codex attempts, show `-`.
 - `node scripts/router-ladder-calc.mjs --results <file>` prints your observed

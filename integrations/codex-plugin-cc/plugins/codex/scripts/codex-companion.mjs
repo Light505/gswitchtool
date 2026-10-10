@@ -1065,9 +1065,9 @@ async function handleCancel(argv) {
 
 function renderInvokeStatus(report) {
   const setup = readClaudeSetup();
-  const label = setup?.setup === "router" ? `Router (${setup.router.mode})`
-    : { "claude-only": "Claude only", "claude-codex": "Claude + Codex" }[setup?.setup];
-  const first = label ? `Claude Code setup: ${label} (change it in GSwitch: Claude Code button)\n`
+  const label = setup?.setup === "router" ? `Automatic team (${{ mixed: "Claude and Codex", claude: "Claude models only", codex: "Codex only" }[setup.router.mode] ?? setup.router.mode})`
+    : { "claude-only": "Claude alone", "claude-codex": "Claude with Codex helper" }[setup?.setup];
+  const first = label ? `Claude Code setup: ${label} (change it in GSwitch: Claude Code page)\n`
     : "Claude Code setup: unknown (open GSwitch once)\n";
   const speed = report.codex_speed ?? setup?.codexSpeed;
   const speedLabel = { normal: "Normal", fast: "Fast", orchestrator: "Orchestrator decides" }[speed?.mode];

@@ -189,8 +189,13 @@ you once that the router plugin is not installed. Missing, unreadable or
 invalid setup files add no setup line and leave the router off; open GSwitch
 once and choose a setup.
 
-`/codex:invoke-status` shows the setup first. `/codex:gswitch-invoke <task>`
-still works for a one-off task in any setup when Invoke Mode is on.
+`/codex:invoke-status` shows the setup first, for example
+`Claude Code setup: Automatic team (Claude and Codex) (change it in GSwitch: Claude Code page)`;
+the other setups read `Claude alone` and `Claude with Codex helper`.
+`/codex:gswitch-invoke <task>`
+still works for a one-off task in any setup when Invoke Mode is on. The plugins
+use the app's names; internal names (`mixed`, Invoke Mode) still appear in
+Claude's own instructions.
 
 ### Speed
 

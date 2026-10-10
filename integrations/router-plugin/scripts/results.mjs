@@ -293,10 +293,31 @@ export function statsOptions(args, normalizeProject) {
   return { project: f["--project"] ? normalizeProject(f["--project"]) : undefined, since, normalizeProject };
 }
 
+// Same plain names as the GSwitch app's Results screen.
+const codexNames = { "gpt-6.1-sol": "Codex Sol 6.1", "gpt-6-luna": "Codex Luna 6" };
+const claudeNames = { haiku: "Claude Haiku", sonnet: "Claude Sonnet", opus: "Claude Opus" };
+export function modelName(worker) {
+  const [, family, rest] = /^(router|router-dev|codex|codex-dev):(.+)$/.exec(worker) ?? [];
+  if (!family) return worker;
+  if (family.startsWith("codex")) {
+    const [model, effort] = rest.split("/");
+    const name = codexNames[model] ?? model;
+    return effort ? `${name}, ${effort}` : name;
+  }
+  const split = rest.lastIndexOf("-"), model = split < 0 ? rest : rest.slice(0, split), effort = split < 0 ? "" : rest.slice(split + 1);
+  const name = claudeNames[Object.keys(claudeNames).find((key) => model.toLowerCase().includes(key))] ?? model;
+  return effort ? `${name}, ${effort}` : name;
+}
+const plainTime = (ms) => {
+  if (!number(ms)) return "-";
+  const seconds = Math.round(ms / 1000);
+  return seconds < 60 ? `${seconds} s` : `${Math.round(seconds / 60)} min`;
+};
+
 export function statsTable(groups) {
-  const rows = [["Worker", "Difficulty", "Speed", "Attempts", "Passes", "Success", "Median ms", "Median tokens", "Median USD", "Codex jobs"],
-    ...groups.map((g) => [g.worker, g.difficulty, g.speed, String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
-      String(g.medianDurationMs ?? "-"), String(g.medianTokens ?? "-"), number(g.medianUsd) ? g.medianUsd.toFixed(3) : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
+  const rows = [["Model", "Difficulty", "Codex speed", "Tasks", "Passed", "Success", "Typical time", "Typical tokens", "Typical cost", "Codex jobs"],
+    ...groups.map((g) => [modelName(g.worker), g.difficulty, g.speed === "-" ? "-" : g.speed[0].toUpperCase() + g.speed.slice(1), String(g.attempts), String(g.passes), `${(g.successRate * 100).toFixed(1)}%`,
+      plainTime(g.medianDurationMs), String(g.medianTokens ?? "-"), number(g.medianUsd) ? `$${g.medianUsd.toFixed(2)}` : "-", /^codex(?:-dev)?:/.test(g.worker) ? String(g.linkedJobs) : "-"])];
   const widths = rows[0].map((_, i) => Math.max(...rows.map((row) => row[i].length)));
   return rows.map((row) => row.map((cell, i) => cell.padEnd(widths[i])).join("  ").trimEnd()).join("\n");
 }
@@ -317,7 +338,7 @@ export function speedComparisons(records, options = {}) {
     const fast = times("fast"), normal = times("normal"), f = median(fast), n = median(normal);
     if (!fast.length || !normal.length || f === 0 || n === 0) continue;
     const faster = n >= f, ratio = faster ? n / f : f / n;
-    lines.push(`Fast vs Normal, ${worker}: ${fast.length} fast, median ${(f / 1000).toFixed(1)}s · ${normal.length} normal, median ${(n / 1000).toFixed(1)}s · ${ratio.toFixed(2)}x ${faster ? "faster" : "slower"}`);
+    lines.push(`Fast vs Normal, ${modelName(worker)}:${fast.length} fast, median ${(f / 1000).toFixed(1)}s · ${normal.length} normal, median ${(n / 1000).toFixed(1)}s · ${ratio.toFixed(2)}x ${faster ? "faster" : "slower"}`);
   }
   return lines;
 }

@@ -74,10 +74,10 @@ test("invoke-status starts with the setup even when the app endpoint is unavaila
   const f = fixture(t);
   const status = () => f.run("codex-companion.mjs", ["invoke-status"]).split("\n")[0];
   assert.equal(status(), "Claude Code setup: unknown (open GSwitch once)");
-  for (const [name, label] of [["claude-only", "Claude only"], ["claude-codex", "Claude + Codex"],
-    ["router", "Router (mixed)"], ["router", "Router (claude)"], ["router", "Router (codex)"]]) {
-    f.write(setup(name, label.match(/\((.+)\)/)?.[1] || "mixed"));
-    assert.equal(status(), `Claude Code setup: ${label} (change it in GSwitch: Claude Code button)`);
+  for (const [name, mode, label] of [["claude-only", "mixed", "Claude alone"], ["claude-codex", "mixed", "Claude with Codex helper"],
+    ["router", "mixed", "Automatic team (Claude and Codex)"], ["router", "claude", "Automatic team (Claude models only)"], ["router", "codex", "Automatic team (Codex only)"]]) {
+    f.write(setup(name, mode));
+    assert.equal(status(), `Claude Code setup: ${label} (change it in GSwitch: Claude Code page)`);
   }
   f.write("{corrupt"); assert.equal(status(), "Claude Code setup: unknown (open GSwitch once)");
 });
@@ -91,7 +91,7 @@ test("the Dev target reads only .gswitchtool-dev and environment overrides remai
   const devDir = path.join(f.home, ".gswitchtool-dev"); fs.mkdirSync(devDir);
   fs.writeFileSync(path.join(devDir, "claude-setup.json"), JSON.stringify(setup("claude-codex")));
   assert.equal(JSON.parse(f.run("claude-setup-hook.mjs", [], copy, env)).hookSpecificOutput.additionalContext, lines["claude-codex"]);
-  assert.match(f.run("codex-companion.mjs", ["invoke-status"], copy, env), /^Claude Code setup: Claude \+ Codex/);
+  assert.match(f.run("codex-companion.mjs", ["invoke-status"], copy, env), /^Claude Code setup: Claude with Codex helper/);
   assert.equal(JSON.parse(f.run("claude-setup-hook.mjs", [], copy)).hookSpecificOutput.additionalContext, lines["claude-only"]);
 });
 

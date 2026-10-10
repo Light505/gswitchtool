@@ -220,9 +220,9 @@ test("stats merges completion metrics without double counting and isolates reuse
   fs.mkdirSync(f.data, { recursive: true });
   fs.writeFileSync(f.file, records.map((r) => JSON.stringify(r)).join("\n") + "\n{corrupt}\n");
   assert.equal(f.run(["stats"]), `${statsTable(rows)}\n`);
-  assert.match(f.run(["stats"]), /Median tokens\s+Median USD\s+Codex jobs/);
-  assert.match(f.run(["stats"]), /router:haiku-low\s+small\s+-\s+3\s+2\s+66.7%\s+200\s+60\s+-\s+-/);
-  assert.match(f.run(["stats"]), /codex:gpt-6.1-sol\/low\s+hard\s+-\s+4\s+3\s+75.0%\s+-\s+-\s+-\s+2/);
+  assert.match(f.run(["stats"]), /^Model\s+Difficulty\s+Codex speed\s+Tasks\s+Passed\s+Success\s+Typical time\s+Typical tokens\s+Typical cost\s+Codex jobs/);
+  assert.match(f.run(["stats"]), /Claude Haiku, low\s+small\s+-\s+3\s+2\s+66.7%\s+0 s\s+60\s+-\s+-/);
+  assert.match(f.run(["stats"]), /Codex Sol 6.1, low\s+hard\s+-\s+4\s+3\s+75.0%\s+-\s+-\s+-\s+2/);
   assert.equal(aggregateStats([result(), attempt({ durationMs: 0, tokens: 0 })])[0].medianTokens, 0);
   // Project is not part of attempt matching: the same session, worker and agent ID still match.
   assert.deepEqual(aggregateStats([result(), attempt({ project: `${project}/other`, durationMs: 77, tokens: 9 })])[0].medianDurationMs, 77);
@@ -371,8 +371,8 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
   assert.equal(aggregateStats(records)[0].medianDurationMs, 1500);
   assert.equal(aggregateStats(records)[0].medianTokens, 15);
   assert.equal(aggregateStats(records)[0].medianUsd, 0.2);
-  assert.match(statsTable(aggregateStats(records)), /15\s+0\.200\s+-$/);
-  assert.match(statsTable(aggregateStats([result, { ...base, usd: 0.0047 }])), /0\.005\s+-$/);
+  assert.match(statsTable(aggregateStats(records)), /15\s+\$0\.20\s+-$/);
+  assert.match(statsTable(aggregateStats([result, { ...base, usd: 0.0047 }])), /\$0\.00\s+-$/);
   assert.equal(aggregateStats([result, { ...base, usd: 0 }])[0].medianUsd, 0);
   assert.equal(aggregateStats([{ ...result, worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j1" }], { normalizeProject: projectKey })[0].worker, "codex-dev:gpt-6.1-sol/low");
   const codexDev = aggregateStats([
@@ -381,7 +381,7 @@ test("SubagentStop records the worker's cumulative totals and stats keep the lat
     { ...result, task: "t2", worker: "codex-dev:gpt-6.1-sol/low", agentId: null, codexJobId: "j2" }
   ]);
   assert.equal(codexDev[0].linkedJobs, 2);
-  assert.match(statsTable(codexDev), /codex-dev:gpt-6\.1-sol\/low\s+small\s+-\s+3\s+3\s+100\.0%\s+-\s+-\s+-\s+2$/);
+  assert.match(statsTable(codexDev), /Codex Sol 6\.1, low\s+small\s+-\s+3\s+3\s+100\.0%\s+-\s+-\s+-\s+2$/);
   assert.equal(resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router-dev").worker, "codex-dev:gpt-6.1-sol/low");
   assert.throws(() => resultRecord(["s1", f.project, "--task", "t1", "--difficulty", "small", "--worker", "codex-dev:gpt-6.1-sol/low", "--outcome", "pass"], projectKey, "router"), /Invalid worker/);
 });
@@ -395,10 +395,10 @@ test("stats table shows - for Median USD when no attempt has a cost", () => {
   assert.equal(stats[0].medianUsd, null);
   const lines = statsTable(stats).split("\n");
   assert.match(lines[1], /15\s+-\s+-$/);
-  assert.match(lines[1], /^router:haiku-low\s+small\s+-\s+1\s+1\s+100\.0%\s+1500\s+15\s+-\s+-$/);
+  assert.match(lines[1], /^Claude Haiku, low\s+small\s+-\s+1\s+1\s+100\.0%\s+2 s\s+15\s+-\s+-$/);
   const header = lines[0].split(/\s{2,}/);
   const cells = lines[1].split(/\s{2,}/);
-  assert.equal(cells[header.indexOf("Median USD")], "-");
+  assert.equal(cells[header.indexOf("Typical cost")], "-");
 });
 
 test("hooks always return JSON on malformed inputs and unwritable results, never log payload values", (t) => {
@@ -489,12 +489,12 @@ test("stats reads last Codex job telemetry, groups speeds and compares timed run
     appendResult(f.file, { type: "result", time, sessionId: "s1", project: projectKey(f.project), task: `t${i}`, difficulty: "small", worker, outcome: "pass", codexJobId: job });
   }
   const output = f.run(["stats"]);
-  assert.match(output, /Difficulty\s+Speed\s+Attempts/);
-  assert.match(output, /small\s+fast\s+3\s+3\s+100.0%\s+2000\s+20/);
-  assert.match(output, /small\s+normal\s+1\s+1\s+100.0%\s+6000\s+60/);
-  assert.match(output, /small\s+mixed\s+1\s+1\s+100.0%\s+-\s+-/);
+  assert.match(output, /Difficulty\s+Codex speed\s+Tasks/);
+  assert.match(output, /small\s+Fast\s+3\s+3\s+100.0%\s+2 s\s+20/);
+  assert.match(output, /small\s+Normal\s+1\s+1\s+100.0%\s+6 s\s+60/);
+  assert.match(output, /small\s+Mixed\s+1\s+1\s+100.0%\s+-\s+-/);
   assert.match(output, /small\s+-\s+1\s+1\s+100.0%\s+-\s+-/);
-  assert.ok(output.includes(`Fast vs Normal, ${worker}: 2 fast, median 2.0s · 1 normal, median 6.0s · 3.00x faster`));
+  assert.ok(output.includes(`Fast vs Normal, Codex Sol 6.1, low:2 fast, median 2.0s · 1 normal, median 6.0s · 3.00x faster`));
   fs.rmSync(log);
   assert.doesNotMatch(f.run(["stats"]), /Fast vs Normal/);
   // A Dev build reads only its own app directory, using the shared path helper.
@@ -504,5 +504,5 @@ test("stats reads last Codex job telemetry, groups speeds and compares timed run
   fs.mkdirSync(path.dirname(devLog));
   fs.writeFileSync(devLog, runs.map((r) => JSON.stringify({ ...r, codexMs: r.jobId === "normal" ? 1000 : r.codexMs })).join("\n"));
   const dev = f.run(["stats"], "", path.join(copy, "scripts/router.mjs"));
-  assert.ok(dev.includes(`Fast vs Normal, ${worker}: 2 fast, median 2.0s · 1 normal, median 1.0s · 2.00x slower`));
+  assert.ok(dev.includes(`Fast vs Normal, Codex Sol 6.1, low:2 fast, median 2.0s · 1 normal, median 1.0s · 2.00x slower`));
 });

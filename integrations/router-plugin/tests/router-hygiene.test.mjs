@@ -95,7 +95,7 @@ test("mode warns about a folder outside git only", (t) => {
   const f = fixture(t); f.init();
   assert.equal(f.mode("off").includes("is not a git repository"), false);
   const folder = path.join(f.home, "scratch"); fs.mkdirSync(folder);
-  assert.deepEqual(f.mode("mixed", folder).trimEnd().split("\n").slice(2), [notRepository(folder), baseRefWarning]);
+  assert.deepEqual(f.mode("mixed", folder).trimEnd().split("\n").slice(2), [notRepository(folder), baseRefWarning, "Change it in GSwitch → Claude Code."]);
 });
 
 test("identical copied settings are not worker changes in check or apply", (t) => {
