@@ -1,284 +1,175 @@
 ---
 name: route
-description: Use for every coding task while a `Router:` line in this session shows mode=mixed, mode=codex or mode=claude. Decides who writes the code (an allowed Claude worker or Codex), writes the brief with scope and verify, checks the result, and escalates. Not for mode=off.
+description: Use for every coding task while a `Router:` line in this session shows mode=mixed, mode=codex or mode=claude. Picks who writes the code (an allowed Claude worker or Codex), writes the brief, launches it, and acts on the hook's verdict. Not for mode=off.
 ---
 <!-- Added by Light505 for gswitchtool (2026). -->
-Router: `${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs` (below: `router`). Run it with
-`node "<path>" <command>`; session `${CLAUDE_SESSION_ID}`, project `${CLAUDE_PROJECT_DIR}`.
+<!-- Generated from integrations/skill-text by scripts/gen-skills.mjs; edit the templates. -->
+`router` below means `node "${CLAUDE_PLUGIN_ROOT}/scripts/router.mjs"`; session
+`${CLAUDE_SESSION_ID}`, project `"${CLAUDE_PROJECT_DIR}"`.
 
-You are the orchestrator. You decide; workers and Codex write the code. Do not
-write task code yourself while the mode is on, except the small fixes listed under
-"Yourself".
+You decide; workers and Codex write the code. Hooks verify, apply and record every
+attempt, so you never record results or re-check a pass yourself.
 
-## 1. Read the Router line
+## 1. The Router line
 
-Each message carries `Router: mode=<m> (<source>) · Codex review in claude mode:
-<on|off>[ · Use first: <codex|claude|price>] · Claude 5h: <n% left|unknown>[ ·
-LOW: no Claude workers] · Claude workers: <allowed list>[ · Speed: <normal|fast|orchestrator>]`. Use the newest one.
-In mixed mode, Use first decides the candidate order in `router plan`.
+`Router: mode=… · Use first: … · Claude 5h: … · Claude workers: … · Invoke: … · Codex: … ·
+Speed: … · Codex review in claude mode: …`. Use the newest one; settings change only in
+GSwitch → Claude Code.
 
-Mode, review and allowed workers come from GSwitch's Claude Code panel; their
-source is `GSwitch setup`. To change them, tell the owner to use that panel.
+- `mixed` or `codex` with `Invoke: off` or `unknown`: say once "Router paused: Invoke Mode
+  is off; working as a normal session" and work normally. `Invoke: paused`: follow "When
+  Codex usage runs out".
+- `LOW`: no new Claude workers. `mixed` sends new work to Codex; `claude` stops and tells
+  the user.
 
-- `mixed` or `codex` need Invoke Mode. Check it once per session with the
-  `gswitch-delegate` skill's status line. If Invoke Mode is off or GSwitch is
-  unavailable, say once "Router paused: Invoke Mode is off; working as a normal
-  session" and work normally. Never start Claude workers instead.
-- `LOW` (30% or less of the 5-hour window left): no new Claude workers. In
-  `mixed`, `router plan` leaves Claude workers out, so new work goes to Codex.
-  In `claude`, follow "Wrap up" now. Workers already running may finish their
-  current step.
-- `Claude 5h: unknown`: the threshold cannot apply; say so once in the report.
+## 2. Classify and pick
 
-## 2. Classify and plan
+- kind: `implement`, `debug`, `refactor`, `test`, `docs`, `review`, `research`,
+  `architecture`.
+- difficulty: `trivial` (one obvious edit), `small` (one function or file), `moderate`
+  (several functions or files), `hard` (cross-module, unclear cause, design) or `high-risk`
+  (credentials, account switching and failover, concurrency, money and data logic, data
+  deletion, release and update code, security, whatever the size).
 
-Classify each task yourself, in your head, before any worker starts (no extra
-model call):
+A product decision or unclear requirement goes to the user first. Trivial and small: take
+the cheapest allowed worker in Use first order. Moderate and harder, or when unsure: `router
+plan ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --kind <kind> --difficulty
+<difficulty> --title "<title>" --codex "<model>:<efforts>;<model>:<efforts>"` (Codex list
+from the Router line) and take its first candidate unless the task gives a reason for
+another listed one. Follow a worker the user names. Hooks deny workers that are not allowed
+and ask the user before a worker below the task's floor, after 3 failed attempts, and
+above Opus medium's cost. If a launch is denied for a sample attempt, launch the named
+worker and say "sample attempt" in the report.
 
-- kind: `implement`, `debug`, `refactor`, `test`, `docs`, `review`, `research`
-  or `architecture`;
-- difficulty: `trivial` (one obvious edit), `small` (one function or file, clear
-  fix), `moderate` (several functions or files, some reading needed), `hard`
-  (cross-module, unclear cause, or design inside the code) or `high-risk`
-  (credentials, account switching and failover, concurrency, money and data
-  logic, data deletion, release and update code, security, whatever the size);
-- how it is verified: a test or build command (`VERIFY:`), review only, or
-  nothing objective (docs, analysis).
+## 3. The brief
 
-A product decision or unclear requirement is not a task for a worker: ask the
-owner first.
+The worker sees the repository, not this conversation. Start with these lines:
 
-Then run, once per task (again only to change its classification):
+```
+TASK: <id>            same id (t1, t2, …) for every attempt at one task
+KIND: <kind>
+DIFFICULTY: <difficulty>
+SCOPE: <glob,glob>    the task's files plus their tests and type files
+VERIFY: <command>     when a test or build command exists
+```
 
-`router plan ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --kind
-<kind> --difficulty <difficulty> --title "<short title>" --files <1–999>
---cross-module <yes|no> --check <test|build|review|none> --repro <yes|no>
---confidence <high|medium|low> [--codex
-"<model>:<efforts>;<model>:<efforts>"]`
+Then the goal and done-criteria, the constraints that matter, what you already know
+(cause, `file:line`, commands), and after a failure what was tried, the failing output,
+and why it failed.
 
-In `mixed` and `codex`, add `--codex` copied from `invoke-status`'s allowed
-list, for example `--codex "gpt-6.1-sol:low,medium,high;gpt-6-luna:low,medium,high,xhigh,max"`.
-Use one task id (`t1`, `t2`, …) for all attempts at the same task.
-Always pass these plan flags: expected files to change, whether it crosses
-modules, the check, whether a failing test or exact reproduction exists, and
-your confidence in the difficulty rating.
+## 4. Launch
 
-When the plan prints a Sample attempt, start with that worker and say
-"sample attempt" in the report. GSwitch's sampling setting defaults on: about
-one in ten trivial/small first attempts tries a cheaper or untested allowed
-worker. After a failed sample attempt, use the candidates below; do not repair
-the sample worker, and its failure does not raise the floor.
+- Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief as the
+  prompt, `run_in_background: true`, no `model`.
+- Codex: as in "Send a task to Codex" below. The brief file starts with the same lines;
+  pass SCOPE and VERIFY as `--scope` and `--verify`.
+- Independent tasks may run at once; never two that edit the same files.
 
-The plan prints the task's capability floor, its failures so far, the recovery
-for the last failure, and the candidates: workers your settings allow (Claude
-workers from the GSwitch Claude Code panel, Codex from Invoke Mode, families by
-mode, no Claude workers when LOW) whose agent-benchmark score meets the floor,
-ordered by Use first in mixed mode (Codex first by default, Claude first, or
-Lowest API price), then cheapest within each family. Single-family modes and
-Lowest API price use cheapest first. Floors: trivial and small 0, moderate 42, hard 55, high-risk 60;
-`debug` counts as at least moderate and `architecture` as at least hard.
+## 5. The verdict
 
-Unless a Sample attempt is printed, pick the first candidate unless the task
-gives a reason for another listed one
-(for example a debugging task where a Codex model scores much higher on
-terminal work for a few cents more). Never pick a worker that is not listed. The
-owner may name a worker for a task; follow it (the hook asks the owner to
-confirm a worker below the floor).
+A Claude worker's report ends with the hook's `ROUTER:` line; Codex's with `CODEX:` and
+`CHECK:`. Those are tool facts; the rest of the report is a claim.
 
-The numbers and the method are in `docs/model-benchmarks.md` of the GSwitch
-repository.
+- `pass` or `unverified`, applied: done. Read a diff only after a warning or for files on
+  the high-risk list.
+- `fail`: do what its `Next:` line says. Verify, review or incomplete: repair once by
+  resuming the same worker (SendMessage) or Codex thread with the failing output, then
+  escalate. Capability: the next candidate. Context: supply it and retry. Tool: fix the
+  environment, retry, never escalate. After Codex's `Verify: FAILED after 1 retry`,
+  escalate instead of repairing.
+- Scope: a `SCOPE REQUEST:` or out-of-scope changes. Approve when the file is closely tied
+  to the task and low risk (`router scope ${CLAUDE_SESSION_ID} <agentId> --add <globs>`,
+  then the commands the ROUTER line prints, or resume Codex with the wider `--scope`). Ask
+  the user for high-risk files, config, build, CI or release, deletions, protected text,
+  anything outside the repository, or a much wider scope. Deny when unrelated.
+- Kept worktree: tell the user its path and reason; never delete it.
 
-## 3. Write the brief
+## 6. Review
 
-The worker sees the repository, not this conversation. The brief states:
-
-- Goal and done-criteria, the constraints that matter, and the files to start
-  from.
-- What you already know: the cause, files and functions (`file:line`), and the
-  commands to run, so the worker does not search for them again.
-- `TASK: <id>` and `SCOPE: <glob,glob>`, each on its own line (both required).
-  Write the scope generously: the task's files plus their tests and type files.
-- `VERIFY: <command>` when a test command exists.
-- After a failure: what the earlier attempts changed, the verify output or
-  review finding, and why they failed, in a few lines. Name the approach that
-  failed so the next worker does not repeat it.
-
-Claude worker: Agent tool, `subagent_type: "router:<model>-<effort>"`, the brief
-as prompt, no `model`. Codex: the `gswitch-delegate` skill, with `--write`,
-`--scope` and `--verify`, at the chosen model and effort, with the `TASK:` line
-in the brief.
-
-When Speed is orchestrator, add `--speed fast --speed-reason "<why>"` only when
-the owner is waiting on this result to continue; otherwise use Normal. Fast
-falls back to Normal below the usage cutoff shown by `router plan`.
-
-Hooks enforce the plan for both Claude workers and Codex: a launch without a
-planned `TASK:` is denied, as is a task that already passed and a worker that
-already failed it (resume that worker or Codex thread for a repair instead).
-The hook shows the owner an approval prompt for a worker below the task's
-floor, for any attempt after 3 failed ones, and for any worker that costs more
-per attempt than Opus medium (Opus high and above, Sonnet xhigh and above, Haiku
-max, Sol max). If the owner denies it, stop and ask.
-
-## 4. Check the result
-
-Trust tool facts only; the worker's text, including its RESULT line, is a claim.
-
-- Claude worker: run `router finish ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}"
-  --agent <agentId> [--verify <cmd>]`. It runs verify and the git and scope
-  check on the worker's worktree. A clean result is applied; a failed verify or
-  apply is recorded as a failure for you, and the worktree is kept for a repair.
-  After out-of-scope changes it applies nothing: decide them (section 6). If it
-  prints `Worktree kept: <dir> — <reason>`, tell the owner the path and reason.
-  A locked worktree of a stopped worker is applied and kept; it can be removed
-  after the session. Do not delete worktrees kept for other reasons.
-  Every worker must have a stop notice after its latest resume before finish
-  verifies or applies it; otherwise wait and run `router finish` again after
-  its completion notice. If it has stopped and finish still waits, use
-  `router apply`. Repeating finish after a successful apply prints
-  `Already applied.`; resuming the worker clears that state. Applied changes are
-  not recorded as failures even if cleanup fails. (`router check` and
-  `router apply` still exist for manual use; `apply --keep-locked` applies a
-  locked worktree and skips cleanup.)
-- Codex: `invoke` already reports verify, git facts and warnings.
-- Review: same rule as the `gswitch-review` skill. Run it after non-trivial
-  changes in `mixed` and `codex`; skip it for typos, comments, formatting,
-  renames, one-line fixes and text-only files, and say so in the report. In
-  `claude`, run it when the Router line says review on and Invoke Mode is on;
-  otherwise read the diff of the changed files yourself and say why in the
-  report.
-- Read diffs only after a warning, a failed verify, or changes in the high-risk
-  list, and then only those files.
-
-Decide the outcome from tool facts:
-
-- `pass`: verify passed (or the change is reviewable only and the review is
-  clean), scope warnings resolved, apply succeeded.
-- `fail`: verify failed, a serious review finding, the worker stopped, or it
-  did only part of the task.
-- `unverified`: done, but nothing objective can check it (docs, analysis); you
-  read the change. Say so in the report.
-- `blocked`: cannot go on without an outside fix or an owner decision.
-
-Record every attempt before you report or recover; `router finish` already
-recorded verify and apply failures, so do not record those again. The hooks
-count these records, and the next worker or Codex launch on a task is refused
-until every earlier attempt on it has a result. This data also replaces the
-benchmark's success rates over time:
-
-`router result ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id> --title
-"<short title>" --difficulty <difficulty> --worker <router:<model>-<effort> |
-codex:<model>/<effort> | orchestrator> --step <start|escalation|repair|retry>
---outcome <pass|fail|unverified|blocked> [--reason <reason>] [--agent
-<agentId>] [--codex-job <job>] [--codex-thread <thread>]
-[--review <none|minor|serious>] [--findings <0–99>]`
-
-When a review ran, pass its worst finding with `--review` and its finding count
-with `--findings` (`none` and 0 for a clean review).
-
-A `fail` needs a reason (section 5). Record the difficulty you judged at the
-start, even if the task turned out harder. When `router finish` says the worker
-changed nothing, record `pass` if nothing was needed, otherwise `fail` with the
-cause. When GSwitch refused a Codex run before it started (`MODEL_NOT_ALLOWED`,
-`INVOKE_MODE_DISABLED` and similar codes), record it as `blocked` with reason
-`tool`; it does not count as a failed attempt.
-
-Use `--worker orchestrator` when you made the edit yourself (the "Yourself"
-cases or an owner-requested direct edit). Omit `--agent` and `--codex-*`. Never
-record a worker that did not run. These records are not counted in worker
-success rates.
-
-After a task passes or is given up, run:
-`router close ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --task <id>
---actual <difficulty> --orchestrator-fix <yes|no> [--note "<short note>"]`.
-Use the hindsight difficulty and whether you had to fix the worker's result
-yourself. Notes are at most 120 characters.
-
-## 5. Recover from a failure
-
-Find the cause from the evidence (verify output, review finding, the worker's
-`STOPPED:` line, `invoke` codes, apply output) and record it as the reason.
-After a failure, `router result` (and `router finish`) print the recovery for
-that reason and the new candidates, so no separate `router plan` is needed. The
-reasons:
-
-| Reason | Means | Recovery |
-| --- | --- | --- |
-| `verify` | the change fails its tests or build | repair once: resume the same worker or Codex thread with the failing output; then escalate |
-| `review` | a serious review finding | repair once with the finding; then escalate |
-| `incomplete` | parts of the brief not done or done wrong | repair once with what is missing; then escalate |
-| `capability` | `STOPPED: too hard`, no progress, the same wrong fix twice | escalate |
-| `context` | `STOPPED: unclear brief`, a needed fact missing | supply the context and retry the same worker; a product decision goes to the owner |
-| `tool` | `STOPPED: environment`, a broken verify command, a crash | fix it, then retry the same worker; never escalate for this |
-| `scope` | a scope request | decide it (section 6), then resume the same worker |
-| `usage` | Codex or Claude usage ran out | Codex: GSwitch fails over by itself; on a pause, follow the Codex skill's pause rule. Claude LOW: see section 1 |
-| `worktree` | apply conflict, worktree gone | tell the owner the kept path and reason; retry on a fresh worktree or ask |
-| `stopped` | the owner stopped it | ask the owner |
-
-Escalating means the plan's next candidate: each distinct worker that failed
-for `verify`, `review`, `incomplete`, `capability` or `other` raises the floor
-one difficulty level and above that worker's score, and is not offered again.
-A stronger model is not always right: when the failure looks specific to one
-model family in `mixed` (misread instructions, tool trouble), a listed worker
-of the other family is a good next pick. Effort is part of the worker, so a
-higher effort of the same model is escalation too when it is listed.
-
-Bounds:
-
-- Repairs are once per worker per task, and count as attempts. Codex already
-  retried a failed verify once inside `invoke`; after `Verify: FAILED after 1
-  retry`, escalate instead of repairing.
-- After 3 failed attempts on a task, ask the owner before each further attempt:
-  say what each attempt tried and why it failed, and what you would try next.
-  The launch hook shows the owner a prompt too.
-- Stop and ask the owner when the plan lists no candidate, when the task is
-  blocked, or when a recovery needs a decision or an outside fix. Do not write
-  the code yourself.
-
-## 6. Scope requests
-
-A blocked worker ends with `SCOPE REQUEST: <path> — <why> — <intended change>`
-(Codex: in the `invoke` result). Decide:
-
-- Approve yourself when the file is closely tied to the task and low risk (a
-  matching test, a type file, the same module). Claude worker:
-  `router scope ${CLAUDE_SESSION_ID} <agentId> --add <globs>`, then resume the
-  worker only if its worktree still exists. If it is gone (Claude Code deletes
-  it when the worker's run changed nothing), start a new worker with the wider
-  scope and the previous report instead of resuming. Codex: resume the same
-  thread with the wider `--scope`.
-- Ask the owner when the file is on the high-risk list; is config, build, CI or
-  release; means deleting files or changing protected text; is outside the
-  repository; or makes the scope much wider.
-- Deny when it is unrelated; tell the worker to finish without it.
-
-An edit outside the scope that got through (a `WARNING: changed outside
---scope` line) is undone from git unless you or the owner approve it.
+After a moderate, hard or high-risk task passes, run a read-only Codex review (in `claude`
+mode only when review is on and Invoke is on): the runner without `--write`, with a brief
+that starts `REVIEWS: <task id>`, names the changed files, asks for concrete problems
+(bugs, risky behaviour, missing tests) by severity with file and line, and asks Codex to
+end with `REVIEW: <none|minor|serious> · findings: <n>`. Check each finding yourself. A
+serious real finding reopens the task: repair it with the same `TASK:`.
 
 ## 7. Report
 
-What changed (in user terms), which worker did it (model and effort), the Codex speed used, every
-escalation, every scope request and who decided it, the review result, what
-was not tested, and anything kept (worktrees, Codex threads).
+What changed (in user terms), who did it (model and effort), the Codex speed, every
+escalation, scope decision and review result, what was not tested, and anything kept
+(worktrees, Codex threads).
 
-## Yourself
+Yourself: only one-line fixes after a pass and edits shorter than their brief; never in
+`codex` mode.
 
-Only: one-line fixes left after a passing attempt (a typo, an import), and edits
-where a brief would be as long as the edit. Never in `codex` mode.
+## Send a task to Codex
 
-## Wrap up
+Write the brief to a file (Codex sees the repository, not this conversation: the goal, the
+constraints, what you already know, and the done-criteria). Then start the
+`codex:codex-runner` agent with the Agent tool, `run_in_background: true`, and only the
+invoke arguments as its prompt:
 
-When `claude` mode reaches LOW, or the owner says stop:
+`--model <model> --effort <effort> [--write] --cwd "<repository>" --prompt-file "<brief file>" [--scope "<glob,glob>"] [--verify "<test command>"] [--resume-thread <thread> [--worktree-dir <dir>]] [--worktree] [--speed fast --speed-reason "<why>"]`
 
-1. Start no new worker. Let running ones finish their step.
-2. Write a JSON file in the scratchpad: `{ "tasks": [{ "task", "state",
-   "next" }], "worktrees": [{ "path", "reason" }], "codexThreads": [{ "thread",
-   "model", "effort", "task" }], "resetsAt": "<from router usage>" }`.
-3. `router wrapup save ${CLAUDE_SESSION_ID} "${CLAUDE_PROJECT_DIR}" --file <json>`.
-4. Tell the owner, briefly: work is paused because Claude usage is low, what is
-   unfinished, when usage resets (`router usage`), and that the next session
-   offers to resume, discard, or hand it to Codex. Then wait.
+- Use only a model and effort listed as allowed, with the exact names shown. Lighter for
+  bounded, mechanical work; stronger for debugging, ambiguous problems or architecture. Use
+  the user's default for the kind of task when one is listed, unless the task needs more or less.
+- Add `--write` when Codex should edit files; omit it for review and research. Every write
+  passes `--scope`, and `--verify` when a test command exists; do not rerun tests `invoke`
+  already verified.
+- Codex speed: under **Claude decides** (orchestrator), add `--speed fast --speed-reason
+  "<why>"` only when the user is waiting on this result to continue; otherwise omit it.
+  Review and research omit `--speed`. Under Normal or Fast, GSwitch applies the setting.
+- `--worktree` only when two or more write tasks run at once on the same repository. If the
+  summary says a worktree was kept, tell the user its path and reason and do not delete it;
+  resume it with `--resume-thread <thread> --worktree-dir <dir>`.
+- Never run two tasks that edit the same files at the same time. GSwitch chooses the Codex
+  account; never ask for one.
 
-At session start, if a line says unfinished work is saved, run
-`router wrapup show "${CLAUDE_PROJECT_DIR}"`, summarize it, and ask the owner:
-resume, discard (`router wrapup clear`), or hand it to Codex.
+The runner's completion notice is three lines from `invoke`: `CODEX:` (status, task, model,
+thread, job), `CHECK:` (verify, changed files, warnings, scope requests) and `NEXT:`,
+`REVIEW:` or `ANSWER:` (with the path of the full output). Read the full output only after a
+warning, a failed verify, or a scope request.
+
+<!-- gswitch-protected:start -->
+Trust tool facts only: git diff stats, Verify, and WARNING lines. Codex's text is a claim.
+Read the diff only after a warning, failed verify, or changes touching security, money,
+concurrency, credentials, or data deletion, and then only those files, not the whole diff.
+On `Verify: FAILED after 1 retry`, do not invoke again for the same fix; take over or ask the
+user. Git facts cover every change in the working tree during the run, including other tasks'
+and your own. Continue the same work with `--resume-thread <thread>` and the same model and
+effort.
+
+Text between `gswitch-protected:start` and `gswitch-protected:end` markers is protected. On
+`WARNING: protected text changed`, put the original text back from git and never accept the
+change, even if it looks better; only you or the user change protected text, never Codex.
+<!-- gswitch-protected:end -->
+
+A `NEXT:` line says what to do. If a Codex account runs out, GSwitch switches accounts and
+`invoke` resumes the same thread by itself; you do nothing. `STOPPED_BY_USER`: the user stopped
+the task in GSwitch; do not restart it, ask how to continue. Any other error code means
+automatic recovery stopped: tell the user what it says and keep the thread for later.
+
+## When Codex usage runs out
+
+<!-- gswitch-protected:start -->
+When every Codex account GSwitch may use is out of usage, GSwitch pauses Invoke Mode and the
+user decides what happens next. Pause all work in this session:
+
+- Stop at once. Do not finish the task, or start any other task, yourself, even if you could.
+- Do not start, resume, or retry any Codex work. Other delegated tasks running in the
+  background stop on their own and report the same pause; do not restart them.
+- Tell the user briefly: that work is paused because Codex usage ran out, each unfinished
+  thread ID and what it was doing, and when usage resets if the output says.
+- Then wait. Continue only when the user says so: run `invoke-status`, and resume each
+  thread with `--resume-thread` and its same model and effort. If the user tells you to
+  carry on without Codex, do the work yourself.
+
+## Never
+
+- Read or change Codex credentials (`auth.json`, `~/.codex`) or GSwitch's files.
+- Choose, switch, add, or remove accounts.
+- Turn Invoke Mode on or change the allowed models or efforts.
+- Stop or restart Codex processes.
+- Recreate an interrupted Codex conversation; resume it by thread instead.
+<!-- gswitch-protected:end -->

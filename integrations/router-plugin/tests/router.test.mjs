@@ -563,8 +563,8 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   fs.copyFileSync(path.join(repository, "scripts/lib/dev-gate.mjs"), path.join(f.project, "scripts/lib/dev-gate.mjs"));
   fs.cpSync(path.join(repository, "integrations/codex-plugin-cc/plugins/codex"), path.join(f.project, "integrations/codex-plugin-cc/plugins/codex"), { recursive: true });
   fs.cpSync(plugin, path.join(f.project, "integrations/router-plugin"), { recursive: true });
-  fs.writeFileSync(path.join(f.project, "integrations/router-plugin/references.md"), "codex:gswitch-review and /router:mode");
-  fs.writeFileSync(path.join(f.project, "integrations/router-plugin/templates/references.md"), "/router:allow and codex:gswitch-review");
+  fs.writeFileSync(path.join(f.project, "integrations/router-plugin/references.md"), "codex:gswitch-invoke and /router:mode");
+  fs.writeFileSync(path.join(f.project, "integrations/router-plugin/templates/references.md"), "/router:allow and codex:gswitch-invoke");
   const result = spawnSync(process.execPath, [builder, "--no-install"], { cwd: f.project, env: f.env, encoding: "utf8", windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
   const marketplaceRoot = path.join(f.home, ".gswitchtool-dev-plugin");
@@ -576,8 +576,8 @@ test("Dev build registers both plugins, isolates router state, rewrites Markdown
   const marketplace = JSON.parse(fs.readFileSync(path.join(marketplaceRoot, ".claude-plugin/marketplace.json"), "utf8"));
   assert.deepEqual(marketplace.plugins.map((item) => item.name), ["codex-dev", "router-dev"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dev, "router-target.json"), "utf8")), { $comment: "Added by Light505 for gswitchtool (2026).", dataDir: ".gswitchtool-router-dev", appDataDir: ".gswitchtool-dev" });
-  assert.equal(fs.readFileSync(path.join(dev, "references.md"), "utf8"), "codex-dev:gswitch-review and /router-dev:mode");
-  assert.equal(fs.readFileSync(path.join(dev, "templates/references.md"), "utf8"), "/router-dev:allow and codex-dev:gswitch-review");
+  assert.equal(fs.readFileSync(path.join(dev, "references.md"), "utf8"), "codex-dev:gswitch-invoke and /router-dev:mode");
+  assert.equal(fs.readFileSync(path.join(dev, "templates/references.md"), "utf8"), "/router-dev:allow and codex-dev:gswitch-invoke");
   assert.deepEqual(fs.readdirSync(path.join(dev, "agents")).sort(), workerNames.map((name) => `${name}.md`).sort());
   for (const name of workerNames) assert.equal(fs.readFileSync(path.join(dev, "agents", `${name}.md`), "utf8"), fs.readFileSync(path.join(plugin, "agents", `${name}.md`), "utf8"));
   assert.equal(fs.readFileSync(path.join(dev, "templates/worker.md"), "utf8"), fs.readFileSync(path.join(plugin, "templates/worker.md"), "utf8"));

@@ -154,7 +154,7 @@ function pushJobDetails(lines, job, options = {}) {
   }
   if (job.status !== "queued" && job.status !== "running" && job.jobClass === "task" && job.write && options.showReviewHint) {
     lines.push("  Review changes: /codex:review --wait");
-    lines.push("  Read-only Codex review: /codex:gswitch-review");
+    lines.push("  Read-only Codex review: /codex:gswitch-invoke");
   }
   if (job.progressPreview?.length) {
     lines.push("  Progress:");

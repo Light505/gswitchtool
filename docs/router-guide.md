@@ -6,7 +6,7 @@ The router decides, for each coding task, who writes the code (a Claude worker
 from the models you allow, or a Codex model), at what effort, and when to
 escalate. GSwitch and
 the Codex plugin are unchanged underneath: account failover, `invoke`,
-`gswitch-review`, Auto Wake and the task view work as described in
+Codex reviews, Auto Wake and the task view work as described in
 [`invoke-mode-guide.md`](./invoke-mode-guide.md).
 
 Disable the plugin and every session behaves exactly as before.
@@ -86,6 +86,18 @@ The plugins use the app's names (Automatic team, Claude and Codex, Try first,
 Codex speed). Internal names such as `mixed` and Invoke Mode still appear in
 Claude's own instructions and in the per-message `Router:` line.
 
+The `Router:` line reads, for example, `Router: mode=… · Use first: … ·
+Claude 5h: … · Claude workers: … · Invoke: … · Codex: … · Speed: … · Codex
+review in claude mode: …`. `Invoke:` is `on`, `off`, `paused` or `unknown`
+(app not reachable); `Codex:` lists the allowed Codex models and efforts, so
+the orchestrator needs no separate status call.
+
+The `route` skill and the Codex plugin's `gswitch-invoke` skill are generated
+from shared text in `integrations/skill-text/` (`route.md`,
+`gswitch-invoke.md` and the common `codex-rules.md`). Edit those, then run
+`node scripts/gen-skills.mjs`; `--check` fails when the generated `SKILL.md`
+files differ, and a router test runs it.
+
 Typical cost estimates transcript cost using the price table in
 `docs/model-benchmarks.md`, with cache reads priced as cached input.
 
@@ -124,15 +136,23 @@ Sonnet max and Codex Sol max. The rule reads each worker's cost from
 the task. Claude launches use the Agent hook; a Codex invoke whose brief has a
 `TASK:` line uses the Bash hook. Invokes without one (your own
 `/codex:gswitch-invoke`, reviews) pass unchanged.
-Routing leaves out workers that are not allowed.
+Routing leaves out workers that are not allowed. The launch hooks no longer
+require `router plan` or an earlier attempt's record first: the `KIND:` and
+`DIFFICULTY:` lines at the top of a brief record the plan, and sampling happens
+at launch.
 
 Workers cannot start other agents. Each Claude worker runs in its own git
 worktree; when it finishes, a script copies the result back into the working
 tree, or keeps the worktree with a reason when that cannot be done cleanly.
 
-Codex work goes through the Codex plugin's `gswitch-delegate` skill, which Opus
-may use on its own only while Invoke Mode is on. It uses the same `invoke` as
-`/codex:gswitch-invoke`, with the models and efforts GSwitch allows.
+Codex work goes through the Codex plugin's `codex:codex-runner` agent (Haiku,
+Bash only). In Router setup the `route` skill tells Opus to start it with only
+the invoke arguments, in the background. The runner starts `invoke-run`, waits
+with `invoke-wait` and returns invoke's three summary lines: `CODEX:` (status,
+task, model, thread, job), `CHECK:` (verify, changed files, warnings, scope
+requests) and `NEXT:`, `REVIEW:` or `ANSWER:`. It uses the same `invoke` as
+`/codex:gswitch-invoke`, with the models and efforts GSwitch allows, and only
+while Invoke Mode is on. `invoke` records its own result in the router log.
 
 A hook checks every worker launch: only allowed router worker types (plus
 Codex through `invoke`) may write code while the router is on; a model
@@ -149,8 +169,11 @@ median times for each Codex model and effort.
 
 The orchestrator classifies each task by kind, difficulty and how it can be
 verified. Kinds are implement, debug, refactor, test, docs, review, research
-and architecture. It runs `router plan` before starting a worker and again
-after each failure, using the same task id for every attempt.
+and architecture. Every brief starts with `TASK:`, `KIND:`, `DIFFICULTY:`,
+`SCOPE:` and, when one exists, `VERIFY:`, using the same task id for every
+attempt; those header lines record the plan. For moderate and harder work, or
+when unsure, the orchestrator runs `router plan` to see the candidates, and
+again after each failure.
 
 The plan lists allowed workers whose agent-benchmark score meets the task's
 capability floor. In mixed mode, **Use first** (`router.prefer`) selects Codex
@@ -165,7 +188,8 @@ and workers beaten on score and cost by another eligible worker of the same
 family (Claude or Codex), so a cheap Claude worker stays listed when a Codex
 worker beats it. In mixed
 and codex modes, the orchestrator supplies the Codex allowlist from
-`invoke-status` with `--codex`. LOW leaves out Claude workers.
+the `Codex:` field of the `Router:` line (passed to `router plan` with
+`--codex`). LOW leaves out Claude workers.
 
 | Difficulty | Floor |
 | --- | --- |
@@ -186,8 +210,9 @@ The brief includes `TASK:`, `SCOPE:` and a `VERIFY:` command when one exists.
 
 ## Failures and recovery
 
-Find the cause from tool evidence, record the outcome and reason, then run
-`router plan` again.
+Find the cause from the `ROUTER:` or `CODEX:` verdict (tool evidence), then
+run `router plan` again. The hooks and `invoke` have already recorded the
+attempt.
 
 | Reason | Recovery |
 | --- | --- |
@@ -222,24 +247,20 @@ approval is denied, or recovery needs an outside fix or an owner decision.
 
 - Mode and allowlists: Claude by the launch hook, Codex by GSwitch.
 - LOW usage, Claude model overrides, scope and worktree-gone edit blocks.
-- A plan is required; a passed or unverified task cannot launch again; a failed worker cannot
+- A passed or unverified task cannot launch again; a failed worker cannot
   launch again for the same task, except a Codex thread resumed for repair.
-- Every attempt is recorded before the next one starts: a new Claude worker or
-  TASK-tagged Codex run on a task is refused while an earlier attempt on it
-  has no result. Codex runs are counted by a hook after the command starts;
-  Claude workers when they start. Verify and apply failures of Claude workers
-  are recorded by `router finish` itself.
+- Every Claude worker attempt is checked and recorded by the SubagentStop hook,
+  and every Codex attempt by `invoke` itself, so no attempt goes unrecorded.
 - Approval prompts for a worker below the floor, attempts after 3 failures,
   and workers above Opus medium's cost.
 
 ### What is still the orchestrator's judgment
 
-- Classification, and the outcome and reason recorded for each attempt.
+- Classification, and writing the brief header (`TASK:`, `KIND:`, `DIFFICULTY:`).
 - Repairs through SendMessage; only the owner check is enforced there.
 - Putting the `TASK:` line in a Codex brief; a Codex invoke without one is not
   checked against the plan.
-- One attempt at a time per task. Two launches on the same task started at
-  the same moment can both pass the record-before-relaunch check.
+- One attempt at a time per task.
 - After the owner denies a worker's approval prompt, its queued launch stays;
   a later launch of the same worker type may take over its task and scope.
   Start the next worker of that type only after the owner has decided.
@@ -308,20 +329,23 @@ project), so routing can be compared with your own results:
   worker's total so far: duration and tokens of all its runs (idle time between
   a stop and a resume is excluded). Tokens count input, cache writes, cache
   reads and output; each API response counts once.
-- The orchestrator records each attempt's outcome with `router result`: task
-  id and short title, difficulty, worker, step (start, escalation, repair or retry), outcome
-  (pass, fail, unverified or blocked), and a required reason on fail, and for Codex the GSwitch job and thread, which link to GSwitch's
-  Activity numbers.
+- The hooks record each attempt's outcome: the SubagentStop hook for Claude
+  workers, `invoke` itself for Codex. A record has the task id and short title,
+  difficulty, worker, step (start, escalation, repair or retry), outcome
+  (pass, fail, unverified or blocked), a reason on fail, and for Codex the GSwitch job and thread, which link to GSwitch's
+  Activity numbers. `router result` remains as a manual tool for a case the
+  hooks could not see.
   Optional `review` (none/minor/serious) and `findings` (0–99) capture a review.
+  A read-only Codex review whose brief starts `REVIEWS: <task id>` is recorded
+  by `invoke` as that task's review.
 - Claude stop attempts include `self`, parsed from the worker's last RESULT
   line: status, confidence, felt difficulty and `verifyFails`. Missing or
   invalid parts are null; this is a claim, not verification evidence.
-- Each `router finish` that reaches the check records files, added/deleted
-  lines, verify (passed/failed/none), scopeWarnings and whether it applied.
-  `router close` records planned/actual difficulty, `orchestratorFix`, attempt
-  count, passed state and an optional note (120 characters). Repeated closes
-  append; use the last one. Finish and close records do not affect stats.
-  Old log records still load with the new fields absent.
+- Each finish check (the SubagentStop hook, or a manual `router finish`)
+  records files, added/deleted lines, verify (passed/failed/none),
+  scopeWarnings and whether it applied. These records do not affect stats.
+  The `router usage` and `router close` commands are gone. Old log records
+  (including old close records) still load with the new fields absent.
 - When the orchestrator edits the code itself (a "Yourself" case or an
   owner-requested direct edit), it records `--worker orchestrator` with no
   agent or Codex fields. These records are not worker attempts: they are left
@@ -371,13 +395,18 @@ The final report lists every scope request and who decided it.
 
 ## After each worker
 
-1. Claude worker: one call, `router finish --agent <id> [--verify <cmd>]`, runs
-   the verify command and reports git facts and scope warnings in the same
-   format as `invoke`, then applies a clean result to the working tree. A
-   failed verify or apply is recorded as a failure by the script itself, and
-   the worktree is kept for a repair; out-of-scope changes are not applied and
-   wait for the orchestrator's decision. (For Codex, `invoke` already did the
-   checks.) Untracked files that are identical to the main worktree's copy
+1. Claude worker: nothing to run. When the worker stops, the router's
+   SubagentStop hook runs the verify command, reports git facts and scope
+   warnings in the same format as `invoke`, applies a clean result to the
+   working tree and records the attempt. It blocks the worker's stop once so
+   the worker's final message ends with a `ROUTER:` verdict line (outcome,
+   applied or not, and a `Next:` line). A failed verify or apply is recorded as
+   a failure, and the worktree is kept for a repair; out-of-scope changes are
+   not applied and wait for the orchestrator's decision. (For Codex, `invoke`
+   already did the checks and returns the `CODEX:` and `CHECK:` lines.) The
+   manual tools remain for odd cases: `router finish --agent <id> [--verify <cmd>]`
+   (the same check), `router result`, `router scope` (widen a worker's scope
+   after approving a scope request) and `router plan`. Untracked files that are identical to the main worktree's copy
    (Claude Code copies `.claude/settings.local.json` into every worker
    worktree) are not counted as worker changes and are skipped.
    A locked worktree of a stopped worker is applied and kept: tell the owner
@@ -388,16 +417,14 @@ The final report lists every scope request and who decided it.
    prints `Already applied.`; resuming the worker clears that state. Applied
    changes are not recorded as failures if cleanup fails. Manual `router apply`
    refuses locked worktrees unless `--keep-locked` is given, which skips cleanup.
-2. Review: `gswitch-review` runs after non-trivial changes in `mixed` and
-   `codex` mode, with the same rule as the review skill (typos, comments,
-   formatting, renames, one-line fixes and text-only files are skipped and the
-   report says so). In `claude` mode it runs when the review setting is on
-   (default) and Invoke Mode is on; otherwise the orchestrator reviews the diff
-   itself, and the report says why.
-3. The orchestrator records the outcome it decided (pass, a review failure, or
-   any cause the script could not see). After a failure, `router result`
-   prints the recovery and the next candidates. Report passes, unverified work
-   and blocks with the evidence.
+2. Review: after a moderate, hard or high-risk task passes in `mixed` and
+   `codex` mode, the orchestrator runs a read-only Codex review through the
+   runner (no `--write`), with a brief starting `REVIEWS: <task id>` and
+   ending with `REVIEW: <none|minor|serious> · findings: <n>`. Small and
+   trivial tasks are skipped. In `claude` mode it runs when the review setting
+   is on (default) and Invoke Mode is on. A serious finding reopens the task.
+3. After a failure the `ROUTER:` line's `Next:` text says what to do. Report
+   passes, unverified work and blocks with the evidence.
 
 The report says what changed, which worker did it (model and effort), every
 escalation, scope requests, review result, and what was not tested.

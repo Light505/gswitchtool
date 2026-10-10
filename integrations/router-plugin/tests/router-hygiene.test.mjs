@@ -138,3 +138,9 @@ test("statusline install replaces a router command from an older plugin path wit
   f.run(["statusline-uninstall"]);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), { statusLine: { type: "command", command: "echo hello" } });
 });
+
+test("generated skills match integrations/skill-text", () => {
+  const root = path.resolve(plugin, "..", "..");
+  const run = spawnSync(process.execPath, [path.join(root, "scripts", "gen-skills.mjs"), "--check"], { cwd: root, encoding: "utf8" });
+  assert.equal(run.status, 0, run.stderr);
+});

@@ -94,7 +94,7 @@ writeFileSync(
 );
 cpSync(devGate, path.join(pluginDestination, "dev-gate.mjs"));
 gateHooks(pluginDestination);
-prefixDescription(path.join(pluginDestination, "skills", "gswitch-delegate", "SKILL.md"));
+prefixDescription(path.join(pluginDestination, "skills", "gswitch-invoke", "SKILL.md"));
 mkdirSync(path.join(pluginDestination, "commands"), { recursive: true });
 writeFileSync(path.join(pluginDestination, "commands", "dev-on.md"), devOnText().replaceAll("\n", "\r\n"));
 
@@ -107,19 +107,7 @@ for (const area of ["commands", "skills", "agents"]) {
         if (entry.isDirectory()) walk(full);
         else if (entry.isFile() && entry.name.endsWith(".md")) {
           let text = readFileSync(full, "utf8");
-          const newline = text.includes("\r\n") ? "\r\n" : "\n";
-          text = text.replaceAll("/codex:", "/codex-dev:").replaceAll("GSwitch Claude Tool", "GSwitch Claude Tool (Dev)");
-          if (area === "skills" && full.endsWith(path.join("gswitch-review", "SKILL.md"))) {
-            text = text.replace(
-              /^description:.*$/m,
-              "description: Run only when the user types /codex-dev:gswitch-review for a read-only Codex review through GSwitch Invoke Mode."
-            );
-            text = text.replace(/^(---\r?\n[\s\S]*?)(---\r?\n)/, (match, frontmatter, end) =>
-              /^disable-model-invocation:/m.test(frontmatter)
-                ? `${frontmatter.replace(/^disable-model-invocation:.*$/m, "disable-model-invocation: true")}${end}`
-                : `${frontmatter}disable-model-invocation: true${newline}${end}`
-            );
-          }
+          text = text.replaceAll("/codex:", "/codex-dev:").replaceAll("codex:codex-runner", "codex-dev:codex-runner").replaceAll("GSwitch Claude Tool", "GSwitch Claude Tool (Dev)");
           writeFileSync(full, text);
         }
       }

@@ -10,8 +10,8 @@ import { readClaudeSetup } from "../plugins/codex/scripts/lib/gswitch.mjs";
 
 const plugin = fileURLToPath(new URL("../plugins/codex/", import.meta.url));
 const lines = {
-  "claude-only": "GSwitch setup: Claude only. Do not use Codex: no gswitch-delegate, gswitch-review or /codex commands unless the user asks.",
-  "claude-codex": "GSwitch setup: Claude + Codex. Send bounded, self-contained coding tasks to Codex with the gswitch-delegate skill; keep decisions, design, debugging that needs this conversation, and edits shorter than their brief. After non-trivial changes run gswitch-review.",
+  "claude-only": "GSwitch setup: Claude only. Do not use Codex: no gswitch-invoke or /codex commands unless the user asks.",
+  "claude-codex": "GSwitch setup: Claude + Codex. Use the gswitch-invoke skill: send bounded, self-contained coding tasks to Codex, and get a Codex review after non-trivial changes; keep decisions, design, debugging that needs this conversation, and edits shorter than their brief.",
   router: "GSwitch setup: Router. Follow the Router: line. If no Router: line appears, the router plugin is not installed: work as Claude only and tell the user once."
 };
 const setup = (name, mode = "mixed") => ({ version: 1, setup: name,
@@ -95,13 +95,11 @@ test("the Dev target reads only .gswitchtool-dev and environment overrides remai
   assert.equal(JSON.parse(f.run("claude-setup-hook.mjs", [], copy)).hookSpecificOutput.additionalContext, lines["claude-only"]);
 });
 
-test("delegate accepts Claude + Codex and router context while remaining model-invocable", () => {
-  const text = fs.readFileSync(path.join(plugin, "skills/gswitch-delegate/SKILL.md"), "utf8");
+test("gswitch-invoke accepts Claude + Codex while remaining model-invocable", () => {
+  const text = fs.readFileSync(path.join(plugin, "skills/gswitch-invoke/SKILL.md"), "utf8");
   assert.doesNotMatch(text.split("---")[1], /disable-model-invocation/);
   assert.match(text.split("---")[1], /GSwitch setup: Claude \+ Codex/);
-  const section = text.split("## 1.")[1].split("## 3.")[0];
-  assert.match(section, /GSwitch setup: Claude \+ Codex/);
-  assert.match(section, /mode=mixed or mode=codex/);
+  const section = text.split("## 1.")[1].split("## 2.")[0];
   assert.match(section, /Invoke Mode is off[\s\S]*do not delegate/);
 });
 

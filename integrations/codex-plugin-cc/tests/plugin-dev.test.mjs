@@ -36,12 +36,13 @@ test("plugin:dev builds an isolated, rewritten copy and replaces it on rerun", a
 
   assert.deepEqual(JSON.parse(readFileSync(path.join(home, ".gswitchtool-dev-plugin/plugins/router-dev/router-target.json"), "utf8")), { $comment: "Added by Light505 for gswitchtool (2026).", dataDir: ".gswitchtool-router-dev", appDataDir: ".gswitchtool-dev" });
 
-  const invoke = readFileSync(path.join(plugin, "skills", "gswitch-review", "SKILL.md"), "utf8");
+  const invoke = readFileSync(path.join(plugin, "skills", "gswitch-invoke", "SKILL.md"), "utf8");
   assert.match(invoke, /\/codex-dev:/);
   assert.doesNotMatch(invoke, /\/codex:/);
-  const review = readFileSync(path.join(plugin, "skills", "gswitch-review", "SKILL.md"), "utf8");
-  assert.match(review.split("---")[1], /disable-model-invocation:\s*true/);
-  assert.match(review, /only when the user types \/codex-dev:gswitch-review/);
+  assert.match(invoke, /codex-dev:codex-runner/);
+  assert.doesNotMatch(invoke, /`codex:codex-runner`/);
+  assert.match(invoke.split("---")[1], /description: "Only in a Dev test session/);
+  assert.doesNotMatch(invoke.split("---")[1], /disable-model-invocation/);
   const installedDir = path.join(home, ".gswitchtool");
   mkdirSync(installedDir, { recursive: true });
   const endpoint = process.platform === "win32"

@@ -1,11 +1,11 @@
 ---
 name: gswitch-invoke
-description: Delegate coding work to Codex through GSwitch Invoke Mode to save Claude usage. Runs only when the user invokes it.
+description: "Use while a `GSwitch setup: Claude + Codex` line is present: send bounded, self-contained coding tasks to Codex, and get a read-only Codex review after non-trivial changes, through GSwitch Invoke Mode. Also runs when the user types /codex:gswitch-invoke. Not in Router setup (the router's route skill covers it) or Claude only setup. Refuses when Invoke Mode is off."
 argument-hint: "[task for Codex, or nothing to delegate suitable work for the rest of this session]"
-disable-model-invocation: true
 ---
 
 <!-- Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool. -->
+<!-- Generated from integrations/skill-text by scripts/gen-skills.mjs; edit the templates. -->
 
 # Delegate to Codex with GSwitch Invoke Mode
 
@@ -13,20 +13,19 @@ The goal is to spend less Claude usage: let Codex do work that does not need you
 GSwitch, the user's app, decides which Codex models and reasoning efforts you may use
 and owns everything about Codex accounts.
 
-Helper: `node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs"`
+!`node "${CLAUDE_PLUGIN_ROOT}/scripts/codex-companion.mjs" invoke-status`
 
 ## 1. Check what is allowed
 
-Run `invoke-status` once per session and again after any rejection. If it says GSwitch is
-unavailable or Invoke Mode is off, do not delegate through `invoke`; do the work yourself. If it
-says Invoke Mode is paused, follow [When Codex usage runs out](#when-codex-usage-runs-out).
+Use the status above (run `invoke-status` again only after a rejection). If it says GSwitch
+is unavailable or Invoke Mode is off, do not delegate; do the work yourself and do not mention
+it again unless the user asks. If it says Invoke Mode is paused, follow
+[When Codex usage runs out](#when-codex-usage-runs-out).
 
 ## 2. Decide what to delegate
 
-Delegation through GSwitch is the user's explicit choice. Task from the user: $ARGUMENTS
-
-If the user named a task, delegate that task. If they named none, delegate suitable work for
-the rest of this session. Never call `invoke` on your own outside a request through this skill.
+Task from the user: $ARGUMENTS. If the user named a task, delegate that task. Otherwise, while
+the `GSwitch setup: Claude + Codex` line is present, delegate suitable work on your own.
 
 Suitable work is self-contained work you can state in a brief: implementing a specified change,
 refactors, writing or fixing tests, debugging a failing test or error, investigating how
@@ -46,34 +45,46 @@ When the work is on GSwitch itself, delegate through the released plugin named `
 through `codex-dev`: the dev copy and the Dev app are only for trying changes.
 <!-- gswitch-protected:end -->
 
-## 3. Choose a model and effort
+## 3. Review
 
-Use only a model and effort listed by `invoke-status`, with the exact names shown. Choose a
-lighter model or lower effort for bounded, mechanical work and a stronger model or higher
-effort for complex debugging, ambiguous problems, or architecture-sensitive changes. If
-`invoke-status` lists the user's default for the kind of task (review, research, mechanical,
-complex), use it unless the task clearly needs more or less.
+After you finish a non-trivial code change, yours or Codex's, and before you report back, run
+one read-only Codex review: new or changed behaviour, validation, error handling, data or
+money logic, concurrency, security or credentials, migrations, or edits across several
+functions or files. Skip typos, comments, formatting, renames and one-line fixes. Use the
+runner without `--write`, with a brief that says what changed and why, names the files or git
+range, and asks for concrete problems (bugs, risky behaviour, missing tests) by severity with
+file and line, without editing files. Findings are claims: check each one yourself, fix what
+is real, and tell the user about significant ones. Review each change once; do not loop
+review and fix.
 
-## 4. Invoke
+## Send a task to Codex
 
-```
-invoke --model <model> --effort <effort> [--write] [--worktree] [--scope "src/**,tests/**"] [--verify "<test command>"] [--resume-thread <thread> --worktree-dir <dir>] --cwd "<repository>" "<brief>"
-```
+Write the brief to a file (Codex sees the repository, not this conversation: the goal, the
+constraints, what you already know, and the done-criteria). Then start the
+`codex:codex-runner` agent with the Agent tool, `run_in_background: true`, and only the
+invoke arguments as its prompt:
 
-- Add `--write` when Codex should edit files; omit it for review or research.
-- Use `--worktree` only when two or more write tasks run at the same time on the same repository. A single task edits the working tree directly. Untracked files are not included in the worktree snapshot. If output says `Worktree kept`, tell the user its path and reason; do not delete it. Resume it with `--resume-thread <thread> --worktree-dir <dir>`.
-- Codex sees the repository, not this conversation. The brief states the goal and constraints.
-  Pass `--scope` for expected paths and `--verify` when there is a known test command; do not
-  rerun tests that `invoke` already verified. Use `--prompt-file <path>` for a long brief.
-- Run long tasks with the Bash tool's `run_in_background`; you are notified when each
-  finishes.
-- Run several tasks at once only when they are independent and each is substantial enough
-  to delegate on its own; otherwise send one task. `invoke-status` shows how many GSwitch
-  runs at once; tasks beyond that only wait for a free slot. Never
-  run two tasks that edit the same files in the same working tree at the same time.
-- GSwitch chooses the Codex account (the user's account order); never ask for one.
+`--model <model> --effort <effort> [--write] --cwd "<repository>" --prompt-file "<brief file>" [--scope "<glob,glob>"] [--verify "<test command>"] [--resume-thread <thread> [--worktree-dir <dir>]] [--worktree] [--speed fast --speed-reason "<why>"]`
 
-## 5. Use the result
+- Use only a model and effort listed as allowed, with the exact names shown. Lighter for
+  bounded, mechanical work; stronger for debugging, ambiguous problems or architecture. Use
+  the user's default for the kind of task when one is listed, unless the task needs more or less.
+- Add `--write` when Codex should edit files; omit it for review and research. Every write
+  passes `--scope`, and `--verify` when a test command exists; do not rerun tests `invoke`
+  already verified.
+- Codex speed: under **Claude decides** (orchestrator), add `--speed fast --speed-reason
+  "<why>"` only when the user is waiting on this result to continue; otherwise omit it.
+  Review and research omit `--speed`. Under Normal or Fast, GSwitch applies the setting.
+- `--worktree` only when two or more write tasks run at once on the same repository. If the
+  summary says a worktree was kept, tell the user its path and reason and do not delete it;
+  resume it with `--resume-thread <thread> --worktree-dir <dir>`.
+- Never run two tasks that edit the same files at the same time. GSwitch chooses the Codex
+  account; never ask for one.
+
+The runner's completion notice is three lines from `invoke`: `CODEX:` (status, task, model,
+thread, job), `CHECK:` (verify, changed files, warnings, scope requests) and `NEXT:`,
+`REVIEW:` or `ANSWER:` (with the path of the full output). Read the full output only after a
+warning, a failed verify, or a scope request.
 
 <!-- gswitch-protected:start -->
 Trust tool facts only: git diff stats, Verify, and WARNING lines. Codex's text is a claim.
@@ -89,20 +100,10 @@ Text between `gswitch-protected:start` and `gswitch-protected:end` markers is pr
 change, even if it looks better; only you or the user change protected text, never Codex.
 <!-- gswitch-protected:end -->
 
-If a Codex account runs out, GSwitch switches to another allowed account and `invoke`
-resumes the same thread by itself; the last line then says it resumed after an account
-switch. You do nothing. If the user has their own Codex open, GSwitch asks them in its window
-to close it and `invoke` waits; if `invoke-status` reports that, remind the user to close
-Codex.
-
-If `invoke` returns `MODEL_NOT_ALLOWED` or `REASONING_NOT_ALLOWED`, run `invoke-status` and
-choose again. If it returns `INVOKE_MODE_DISABLED`, `GSWITCH_UNAVAILABLE` or
-`CODEX_SIGNED_OUT`, stop delegating and tell the user what the output says. If it returns `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or `USAGE_LIMIT_EXCEEDED`,
-or the output says PAUSE ALL WORK, follow [When Codex usage runs out](#when-codex-usage-runs-out).
-If it returns `STOPPED_BY_USER`, the user stopped that task in GSwitch: do not restart or
-retry it; say what it was doing and ask how to continue.
-Any other code (for example `EXTERNAL_CODEX_RUNNING`) means automatic recovery stopped: tell
-the user what the output says and keep the thread for later. Do not retry it yourself.
+A `NEXT:` line says what to do. If a Codex account runs out, GSwitch switches accounts and
+`invoke` resumes the same thread by itself; you do nothing. `STOPPED_BY_USER`: the user stopped
+the task in GSwitch; do not restart it, ask how to continue. Any other error code means
+automatic recovery stopped: tell the user what it says and keep the thread for later.
 
 ## When Codex usage runs out
 

@@ -177,8 +177,8 @@ change the setup:
 
 | Setup | How Claude works |
 | --- | --- |
-| **Claude only** | Claude does the work itself. It does not use `gswitch-delegate`, `gswitch-review` or `/codex` commands unless you ask. |
-| **Claude + Codex** | Claude sends bounded, self-contained coding tasks to Codex through `gswitch-delegate`. It keeps decisions, design, debugging that needs the conversation, and edits shorter than their brief. After non-trivial changes it runs `gswitch-review`. |
+| **Claude only** | Claude does the work itself. It does not use `gswitch-invoke` or `/codex` commands unless you ask. |
+| **Claude + Codex** | Claude uses the `gswitch-invoke` skill on its own: it sends bounded, self-contained coding tasks to Codex, keeps decisions, design, debugging that needs the conversation, and edits shorter than their brief, and gets a read-only Codex review after non-trivial changes. |
 | **Router** | Claude follows the router's worker choices, mode, review setting and allowed workers, all chosen in this panel. Install both plugins for this setup. |
 
 The app saves `claude-setup.json` in `~/.gswitchtool` (Dev:
@@ -254,7 +254,7 @@ plugin changes that are not on `main` yet, see
 | An ordinary task | Claude follows the setup chosen in GSwitch's Claude Code panel. With no setup known, it keeps the previous defaults: Claude does the work and may request a review while Invoke Mode is on. |
 
 While Invoke Mode is on, **Claude + Codex** lets Claude choose suitable tasks
-for `gswitch-delegate`; **Router** lets the [router plugin](./router-guide.md)
+for `gswitch-invoke`; **Router** lets the [router plugin](./router-guide.md)
 choose them using its rules.
 
 Claude picks a model and effort from your allowed list: lighter for simple work,
@@ -267,8 +267,15 @@ stronger for complex work. Each Codex result ends with a line like:
 `write` means Codex could edit files; reviews never have it. To continue earlier
 work, ask Claude to continue that thread.
 
-To keep Claude's usage low, the result is short, and the facts in it come from
-the tool rather than from Codex:
+To keep Claude's usage low, Claude does not run `invoke` itself. It starts the
+Codex plugin's small `codex:codex-runner` agent (Haiku, Bash only) in the
+background with only the invoke arguments. The runner starts the task with
+`invoke-run`, waits with `invoke-wait` and hands back three short lines:
+`CODEX:` (status, task, model, thread, job), `CHECK:` (verify, changed files,
+warnings, scope requests) and `NEXT:`, `REVIEW:` or `ANSWER:` (with the path of
+the full output). In Router setup, `invoke` also records its own result, and a
+review whose brief starts `REVIEWS: <task id>`, in the router's results log.
+The facts in the output come from the tool rather than from Codex:
 
 | Line | Meaning |
 | --- | --- |
@@ -433,8 +440,8 @@ pnpm run app:dev
 It opens **GSwitch Claude Tool (Dev)** and rebuilds when the code changes. Dev
 uses its own accounts and settings in `~/.gswitchtool-dev` and Codex home in
 `~/.codex-dev`; sign in again there. The installed app can run at the same time.
-The dev plugin is `codex-dev`; use `/codex-dev:gswitch-invoke` and
-`/codex-dev:gswitch-review` to send tasks to the Dev build. The Dev plugins are
+The dev plugin is `codex-dev`; use `/codex-dev:gswitch-invoke` to send tasks to the Dev build (its skill and the
+`codex-dev:codex-runner` agent work only in a Dev test session). The Dev plugins are
 silent in normal sessions. Type `/codex-dev:dev-on` (or `/router-dev:dev-on`) in a
 session to turn them on for that session only; their hook lines are then marked
 `[Dev]`. After a plugin change, `pnpm run plugin:dev` (`node scripts/plugin-dev.mjs`)

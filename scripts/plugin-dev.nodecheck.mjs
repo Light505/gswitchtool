@@ -64,8 +64,9 @@ test("plugin-dev builds both Dev plugins with the gate", () => {
   }
   assert.ok(existsSync(join(codexDir, "commands", "dev-on.md")));
   assert.ok(existsSync(join(routerDir, "skills", "dev-on", "SKILL.md")));
-  assert.match(readFileSync(join(codexDir, "skills", "gswitch-delegate", "SKILL.md"), "utf8"),
-    /description: "Only in a Dev test session \(a \[Dev\] line is present\)\. Use when/);
+  assert.match(readFileSync(join(codexDir, "skills", "gswitch-invoke", "SKILL.md"), "utf8"),
+    /description: "Only in a Dev test session \(a \[Dev\] line is present\)\. Use while/);
+  assert.match(readFileSync(join(codexDir, "skills", "gswitch-invoke", "SKILL.md"), "utf8"), /codex-dev:codex-runner/);
   assert.match(readFileSync(join(routerDir, "skills", "route", "SKILL.md"), "utf8"),
     /description: Only in a Dev test session \(a \[Dev\] line is present\)\. Use for every/);
 });

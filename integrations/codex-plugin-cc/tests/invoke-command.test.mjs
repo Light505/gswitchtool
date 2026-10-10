@@ -819,11 +819,8 @@ test("Codex delegation is explicit while GSwitch reviews may be chosen by Claude
     fs.readFileSync(path.join(ROOT, "plugins", "codex", "skills", name, "SKILL.md"), "utf8");
   const frontmatter = (text) => text.split("---")[1];
 
-  assert.match(frontmatter(skill("gswitch-invoke")), /disable-model-invocation:\s*true/);
-  assert.doesNotMatch(frontmatter(skill("gswitch-review")), /disable-model-invocation/);
-  const review = skill("gswitch-review");
-  assert.match(review, /Never add `--write`/);
-  assert.doesNotMatch(review.replace("Never add `--write`", ""), /--write/);
+  assert.doesNotMatch(frontmatter(skill("gswitch-invoke")), /disable-model-invocation/);
+  assert.match(skill("gswitch-invoke"), /read-only Codex review/);
   for (const command of ["review.md"]) {
     const source = fs.readFileSync(path.join(ROOT, "plugins", "codex", "commands", command), "utf8");
     assert.match(frontmatter(source), /disable-model-invocation:\s*true/, command);
