@@ -2092,6 +2092,8 @@ export default function App() {
   const [pendingUpdate, setPendingUpdate] = useState<PendingUpdate | null>(null);
   const [cliInfo, setCliInfo] = useState<CodexCliInfo | null>(null);
   const [cliChecking, setCliChecking] = useState(false);
+  // False until the first Codex CLI check returns, so Settings never says "not found" too early.
+  const [cliChecked, setCliChecked] = useState(false);
   const [cliResult, setCliResult] = useState<{ kind: "updated" | "sameVersion"; version: string } | null>(null);
   const [cliError, setCliError] = useState<CodexCliUpdateFailure | "inspect_failed" | "open_guide" | null>(null);
   const [updatePhase, setUpdatePhase] = useState<UpdatePhase>("available");
@@ -2149,7 +2151,7 @@ export default function App() {
   useEffect(() => {
     if (!focusPageHeading.current) return;
     focusPageHeading.current = false;
-    document.querySelector<HTMLElement>(".content .page:not([hidden]) .page-title, #accounts-heading")?.focus();
+    document.querySelector<HTMLElement>(".content .page:not([hidden]) .page-title, .content .accounts-page-title")?.focus();
   }, [section]);
   const watchChoices = [
     ...tasks.map((task) => ({
@@ -2183,6 +2185,7 @@ export default function App() {
       setCliError("inspect_failed");
     } finally {
       setCliChecking(false);
+      setCliChecked(true);
     }
   };
 
@@ -2203,9 +2206,15 @@ export default function App() {
     let closed = false;
     const check = () => {
       void api.codexCliInfo().then((info) => {
-        if (!closed) setCliInfo(info);
+        if (!closed) {
+          setCliInfo(info);
+          setCliChecked(true);
+        }
       }).catch(() => {
-        if (!closed) setCliInfo(null);
+        if (!closed) {
+          setCliInfo(null);
+          setCliChecked(true);
+        }
       });
     };
     const initial = window.setTimeout(check, 250);
@@ -3833,7 +3842,7 @@ export default function App() {
             <section aria-labelledby="settings-cli-heading" className="page-card settings-card">
               <h3 className="page-card-title" id="settings-cli-heading">{t("toolbar.codexCli")}</h3>
               <div className="cli-panel">
-                {cliChecking ? <p className="cli-status" role="status"><LoaderCircle className="spin" size={18} />{t("cli.checking")}</p> : (
+                {cliChecking || !cliChecked ? <p className="cli-status" role="status"><LoaderCircle className="spin" size={18} />{t("cli.checking")}</p> : (
                   <p className="cli-status">
                     <Terminal size={18} />
                     {!cliInfo?.version
@@ -3875,15 +3884,16 @@ export default function App() {
 
         {section === "accounts" ? (
         <section className="accounts-section" aria-labelledby="accounts-heading">
+          <h2 className="page-title accounts-page-title" tabIndex={-1}>{t("nav.accounts")}</h2>
           <div className="section-heading">
             <div className="section-heading-main">
-              <h2 id="accounts-heading" tabIndex={-1}>
+              <h3 id="accounts-heading">
                 {loading
                   ? t("accounts.loading")
                   : accounts.length === 1
                     ? t("accounts.savedOne")
                     : t("accounts.savedMany", { count: formatNumber(accounts.length, locale.formatLocale) })}
-              </h2>
+              </h3>
               {accounts.length && !storageRecovery ? (
                 <button
                   aria-pressed={selectionMode}

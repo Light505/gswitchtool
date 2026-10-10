@@ -381,10 +381,35 @@ describe("GSwitch account workspace", () => {
   it("moves focus to the page heading after a sidebar click, not on first load", async () => {
     window.localStorage.setItem("gswitch.section", "results");
     render(<App />);
-    const results = await screen.findByRole("heading", { name: "Invoke Mode activity" });
+    const results = await screen.findByRole("heading", { name: "Activity" });
     expect(results).not.toHaveFocus();
     await goTo("Settings");
     expect(await screen.findByRole("heading", { name: "Settings" })).toHaveFocus();
+  });
+
+  it("shows Checking instead of 'not found' until the first Codex CLI check returns", async () => {
+    window.localStorage.setItem("gswitch.section", "settings");
+    let resolveInfo: (info: { version: string; update_status: string; supports_update: boolean }) => void = () => undefined;
+    mocks.codexCliInfo.mockImplementation(() => new Promise((resolve) => { resolveInfo = resolve; }));
+    render(<App />);
+    const panel = await screen.findByRole("region", { name: "Codex CLI" });
+    expect(within(panel).getByText("Checking Codex CLI…")).toBeInTheDocument();
+    expect(within(panel).queryByText("No working Codex CLI was found.")).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.codexCliInfo).toHaveBeenCalled(), { timeout: 5_000 });
+    await act(async () => resolveInfo({ version: "0.157.0", update_status: "current", supports_update: true }));
+    expect(await within(panel).findByText("Codex CLI 0.157.0")).toBeInTheDocument();
+    expect(within(panel).queryByText("Checking Codex CLI…")).not.toBeInTheDocument();
+  });
+
+  it("gives Accounts a page title above its saved-accounts heading and focuses it", async () => {
+    window.localStorage.setItem("gswitch.section", "home");
+    mocks.listAccounts.mockResolvedValue([chatAccount]);
+    render(<App />);
+    await screen.findByRole("heading", { name: "Home" });
+    await goTo("Accounts");
+    const title = await screen.findByRole("heading", { level: 2, name: "Accounts" });
+    expect(title).toHaveFocus();
+    expect(await screen.findByRole("heading", { level: 3, name: "1 saved account" })).toBeInTheDocument();
   });
 
   it("does not offer an update to a CLI without the official command", async () => {
@@ -425,17 +450,17 @@ describe("GSwitch account workspace", () => {
     await goTo("Results");
     expect(within(nav).getByRole("button", { name: "Results" })).toHaveAttribute("aria-current", "page");
     expect(home).not.toHaveAttribute("aria-current");
-    expect(await screen.findByRole("heading", { name: "Invoke Mode activity" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
     expect(window.localStorage.getItem("gswitch.section")).toBe("results");
 
     await goTo("Accounts");
     expect(await screen.findByRole("heading", { name: "1 saved account" })).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Invoke Mode activity" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Activity" })).not.toBeInTheDocument();
     await goTo("Results");
 
     first.unmount();
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Invoke Mode activity" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Activity" })).toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "Sections" })).getByRole("button", { name: "Results" }))
       .toHaveAttribute("aria-current", "page");
   });
@@ -1020,7 +1045,7 @@ describe("GSwitch account workspace", () => {
     expect(card).not.toHaveTextContent(/Resets \d/);
     expect(card).not.toHaveTextContent("5-hour");
     expect(card).not.toHaveTextContent("Reset time unavailable");
-    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start reset timer for person@example.com" })).toBeEnabled();
   });
 
   it("shows a short reset time with keyboard access to the exact date", async () => {
@@ -1046,7 +1071,7 @@ describe("GSwitch account workspace", () => {
     expect(resetTime).toHaveAttribute("aria-label", expect.stringContaining("Resets"));
     expect(resetTime).toHaveAttribute("tabindex", "0");
     expect(card).not.toHaveTextContent("Resets");
-    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start reset timer for person@example.com" })).toBeEnabled();
   });
 
   describe("quota countdown updates", () => {
@@ -1101,11 +1126,11 @@ describe("GSwitch account workspace", () => {
 
       await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
       await act(async () => {
-        fireEvent.click(screen.getByRole("button", { name: `${action === "wake" ? "Wake" : "Refresh"} person@example.com` }));
+        fireEvent.click(screen.getByRole("button", { name: `${action === "wake" ? "Start reset timer for" : "Refresh"} person@example.com` }));
       });
       if (action === "wake") {
         await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-        const dialog = screen.getByRole("dialog", { name: "Wake" });
+        const dialog = screen.getByRole("dialog", { name: "Reset timers" });
         await act(async () => { fireEvent.click(within(dialog).getByRole("button", { name: "Done" })); });
       }
       expect(mocks.refreshAccountQuota).toHaveBeenCalledTimes(1);
@@ -1153,9 +1178,9 @@ describe("GSwitch account workspace", () => {
       results: [{ account_id: chatAccount.id, label: "Personal", result: "reply_received", request_state: "sent" }],
     });
     render(<App />);
-    const wakeButton = await screen.findByRole("button", { name: "Wake person@example.com" });
+    const wakeButton = await screen.findByRole("button", { name: "Start reset timer for person@example.com" });
     await userEvent.click(wakeButton);
-    const firstDialog = await screen.findByRole("dialog", { name: "Wake" });
+    const firstDialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(firstDialog).findByText("Succeeded")).toBeInTheDocument();
     await userEvent.click(within(firstDialog).getByRole("button", { name: "Done" }));
     expect(wakeButton).toBeEnabled();
@@ -1190,7 +1215,7 @@ describe("GSwitch account workspace", () => {
     expect(await screen.findByRole("heading", { name: "person@example.com" })).toBeInTheDocument();
     expect(screen.getByText("Personal")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Refresh person@example.com" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start reset timer for person@example.com" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Switch to person@example.com" })).toBeEnabled();
   });
 
@@ -1200,7 +1225,7 @@ describe("GSwitch account workspace", () => {
 
     expect(await screen.findByRole("button", { name: "Switch to person@example.com" })).toBeEnabled();
     expect(screen.getAllByText("Team").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start reset timer for person@example.com" })).toBeEnabled();
   });
 
   it("identifies the current account in its disabled action", async () => {
@@ -1439,7 +1464,7 @@ describe("GSwitch account workspace", () => {
     await userEvent.click(await screen.findByRole("button", { name: "Refresh" }));
 
     expect(await screen.findByRole("button", { name: "Refreshing 0/1" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Wake person@example.com" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start reset timer for person@example.com" })).toBeEnabled();
   });
 
   it("refreshes up to three accounts at once and continues after one quota failure", async () => {
@@ -1722,7 +1747,7 @@ describe("GSwitch account workspace", () => {
     await waitFor(() => expect(mocks.refreshAccountQuota).toHaveBeenCalledWith("account-1", true));
 
     expect(screen.getByRole("button", { name: "Refresh person@example.com" })).toBeDisabled();
-    const otherWake = screen.getByRole("button", { name: "Wake other@example.com" });
+    const otherWake = screen.getByRole("button", { name: "Start reset timer for other@example.com" });
     expect(otherWake).toBeEnabled();
     await userEvent.click(otherWake);
     await waitFor(() => expect(mocks.startWake).toHaveBeenCalledWith("account-2", false));
@@ -2092,11 +2117,11 @@ describe("GSwitch account workspace", () => {
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(within(dialog).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
-    expect(within(dialog).getByRole("button", { name: /Close Wake/ })).toBeDisabled();
-    expect(within(dialog).getByText("Waking…")).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /Close Reset timers/ })).toBeDisabled();
+    expect(within(dialog).getByText("Starting…")).toBeInTheDocument();
     expect(within(dialog).getByText("Processed 0")).toBeInTheDocument();
     expect(within(dialog).queryByText("Working…")).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/Sending a Codex request/)).not.toBeInTheDocument();
@@ -2109,15 +2134,15 @@ describe("GSwitch account workspace", () => {
     const resultDialog = dialog;
     expect(await within(resultDialog).findByText("person@example.com")).toBeInTheDocument();
     expect(within(resultDialog).getByText("Personal")).toBeInTheDocument();
-    expect(within(resultDialog).getByText("Not sent · Could not complete Wake.")).toBeInTheDocument();
+    expect(within(resultDialog).getByText("Not sent · Could not start the reset timer.")).toBeInTheDocument();
     expect(within(resultDialog).getByText(/1 failed/)).toBeInTheDocument();
     expect(within(resultDialog).queryByText("raw provider error text")).not.toBeInTheDocument();
     await userEvent.click(within(resultDialog).getByRole("button", { name: "Done" }));
-    expect(await screen.findByRole("button", { name: "Wake all" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Start all reset timers" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Last result" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("dialog", { name: "Wake" })).not.toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    expect(await screen.findByRole("dialog", { name: "Wake" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Reset timers" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    expect(await screen.findByRole("dialog", { name: "Reset timers" })).toBeInTheDocument();
     expect(mocks.startWakeAll).toHaveBeenCalledTimes(2);
   });
 
@@ -2138,14 +2163,14 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "3 saved accounts" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("1 succeeded · 1 unconfirmed · 1 failed")).toBeInTheDocument();
     expect(within(dialog).getByText("Unconfirmed. The request may have been sent.")).toBeInTheDocument();
     expect(within(dialog).getByText("Succeeded")).toBeInTheDocument();
     expect(within(dialog).getByText("Limit reached. Try later.")).toBeInTheDocument();
     expect(within(dialog).queryByText(/Request sent/)).not.toBeInTheDocument();
-    expect(within(dialog).queryByRole("button", { name: /Retry Wake/ })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole("button", { name: /Retry reset timer/ })).not.toBeInTheDocument();
   });
 
   it("shows stopped accounts without implying their requests were sent", async () => {
@@ -2158,8 +2183,8 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("Stopped")).toBeInTheDocument();
     expect(within(dialog).getByText("1 not run")).toBeInTheDocument();
     expect(within(dialog).getByText("Not run.")).toBeInTheDocument();
@@ -2176,8 +2201,8 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("Request parameters were rejected. (HTTP 400)")).toBeInTheDocument();
     expect(within(dialog).queryByText(/private provider details/)).not.toBeInTheDocument();
   });
@@ -2198,8 +2223,8 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("1 succeeded · 1 failed")).toBeInTheDocument();
     expect(within(dialog).getByText("Succeeded")).toBeInTheDocument();
     expect(within(dialog).getByText("Not sent · Sign in again.")).toBeInTheDocument();
@@ -2222,13 +2247,13 @@ describe("GSwitch account workspace", () => {
     }));
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("GPT-6 Luna unavailable.")).toBeInTheDocument();
-    await userEvent.click(within(dialog).getByRole("button", { name: "Retry Wake for person@example.com with GPT-5.6 Luna" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Retry reset timer for person@example.com with GPT-5.6 Luna" }));
     expect(mocks.startWake).toHaveBeenCalledWith("account-1", true);
     await within(dialog).findByText("GPT-5.6 Luna unavailable.");
-    await waitFor(() => expect(within(dialog).queryByRole("button", { name: /Retry Wake/ })).not.toBeInTheDocument());
+    await waitFor(() => expect(within(dialog).queryByRole("button", { name: /Retry reset timer/ })).not.toBeInTheDocument());
   });
 
   it("retains a running Wake operation when a status read briefly fails", async () => {
@@ -2243,10 +2268,10 @@ describe("GSwitch account workspace", () => {
       });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
 
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
-    expect(await within(dialog).findByText(/cannot check the Wake result right now/i)).toBeInTheDocument();
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
+    expect(await within(dialog).findByText(/cannot check the reset timer result right now/i)).toBeInTheDocument();
     expect(within(dialog).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
     expect(await within(dialog).findByText("1 succeeded", {}, { timeout: 5000 })).toBeInTheDocument();
     expect(mocks.startWakeAll).toHaveBeenCalledOnce();
@@ -2268,11 +2293,11 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "5 saved accounts" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     expect(await within(dialog).findByText("5 succeeded")).toBeInTheDocument();
     expect(within(dialog).getAllByText("Succeeded")).toHaveLength(5);
-    expect(screen.getByRole("button", { name: "Wake all" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Start all reset timers" })).toBeEnabled();
   });
 
   it("opens the affected saved account from a Wake sign-in failure", async () => {
@@ -2284,8 +2309,8 @@ describe("GSwitch account workspace", () => {
     });
     render(<App />);
     await screen.findByRole("heading", { name: "person@example.com" });
-    await userEvent.click(screen.getByRole("button", { name: "Wake all" }));
-    const dialog = await screen.findByRole("dialog", { name: "Wake" });
+    await userEvent.click(screen.getByRole("button", { name: "Start all reset timers" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reset timers" });
     await userEvent.click(await within(dialog).findByRole("button", { name: "Sign in again" }));
     expect(mocks.startOAuth).toHaveBeenCalledWith(chatAccount.id);
     expect(await screen.findByRole("dialog", { name: "Sign in again · person@example.com" })).toBeInTheDocument();
@@ -2297,9 +2322,9 @@ describe("GSwitch account workspace", () => {
     render(<App />);
     await screen.findByText("Personal");
 
-    await userEvent.click(screen.getByRole("button", { name: /^Wake all$/ }));
-    expect(await screen.findByRole("dialog", { name: "Wake" })).toBeInTheDocument();
-    expect(screen.getByText("Waking…")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^Start all reset timers$/ }));
+    expect(await screen.findByRole("dialog", { name: "Reset timers" })).toBeInTheDocument();
+    expect(screen.getByText("Starting…")).toBeInTheDocument();
     expect(mocks.startWakeAll).toHaveBeenCalledOnce();
   });
 
@@ -2333,10 +2358,10 @@ describe("GSwitch account workspace", () => {
     const accountChoice = screen.getByRole("checkbox", { name: "Select person@example.com" });
     expect(accountChoice).not.toBeChecked();
     await userEvent.click(accountChoice);
-    await userEvent.click(screen.getByRole("button", { name: "Wake" }));
+    await userEvent.click(screen.getByRole("button", { name: "Start reset timer" }));
     await waitFor(() => expect(mocks.startWakeSelected).toHaveBeenCalledWith(["account-1"]));
-    expect(await screen.findByRole("dialog", { name: "Wake" })).toBeInTheDocument();
-    const wakeDialog = await screen.findByRole("dialog", { name: "Wake" });
+    expect(await screen.findByRole("dialog", { name: "Reset timers" })).toBeInTheDocument();
+    const wakeDialog = await screen.findByRole("dialog", { name: "Reset timers" });
     await userEvent.click(await within(wakeDialog).findByRole("button", { name: "Done" }));
 
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
@@ -2492,12 +2517,12 @@ describe("Invoke Mode", () => {
   it("keeps Claude only as the plain switcher and says so on Home", async () => {
     render(<App />);
     expect(await screen.findByRole("region", { name: "How your setup works" }))
-      .toHaveTextContent("Claude Code does all the work. Codex is not used.");
+      .toHaveTextContent("Claude alone: Claude Code does all the work. Codex is not used.");
     await goTo("Accounts");
     expect((await screen.findAllByText("person@example.com")).length).toBeGreaterThan(0);
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Account mode" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /Invoke settings/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Codex helper settings/ })).not.toBeInTheDocument();
   });
 
   it("explains the saved setup on Home and opens Claude Code from Change", async () => {
@@ -2506,11 +2531,11 @@ describe("Invoke Mode", () => {
     render(<App />);
     const card = await screen.findByRole("region", { name: "How your setup works" });
     expect(card).toHaveTextContent(
-      "Claude Code plans each task and checks the result. Codex writes the code first; if it fails, a stronger model takes over. Codex may use 1 of your 1 accounts and switches when one runs out.",
+      "Automatic team: Claude Code plans each task and checks the result. Codex writes the code first; if it fails, a stronger model takes over. Codex may use 1 of your 1 accounts and switches when one runs out.",
     );
     await userEvent.click(within(card).getByRole("button", { name: "Change" }));
     const panel = await screen.findByRole("region", { name: "Claude Code" });
-    expect(within(panel).getByRole("button", { name: /^Router/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("button", { name: /^Automatic team/ })).toHaveAttribute("aria-pressed", "true");
     expect(window.localStorage.getItem("gswitch.section")).toBe("claude-code");
   });
 
@@ -2524,22 +2549,22 @@ describe("Invoke Mode", () => {
     expect(within(recent).getAllByRole("listitem").map((item) => item.textContent?.match(/on (m\d)/)?.[1]))
       .toEqual(["m0", "m1", "m2", "m3", "m4"]);
     await userEvent.click(within(recent).getByRole("button", { name: "See all in Results" }));
-    const results = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    const results = await screen.findByRole("region", { name: "Activity" });
     await waitFor(() => expect(results.querySelectorAll(".activity-list > li")).toHaveLength(7));
   });
 
   it("enables Invoke through a saved setup and offers per-account eligibility", async () => {
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true)));
     expect(await screen.findByText("Claude Code setup saved.")).toBeInTheDocument();
-    expect(within(panel).getByRole("button", { name: /^Claude \+ Codex/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("button", { name: /^Claude with Codex helper/ })).toHaveAttribute("aria-pressed", "true");
     await goTo("Accounts");
     // Only ChatGPT accounts can be failover targets; API-key cards get no switch.
-    const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
+    const allow = await screen.findByRole("switch", { name: "Claude may use person@example.com" });
     expect(screen.getAllByRole("switch")).toHaveLength(1);
     expect(allow).not.toBeChecked();
 
@@ -2550,25 +2575,25 @@ describe("Invoke Mode", () => {
   });
 
   it.each([
-    ["claude-only", "Claude only", "mixed", "on", false],
-    ["claude-codex", "Claude + Codex", "mixed", "on", true],
-    ["router", "Router", "mixed", "on", true],
-    ["router", "Router", "mixed", "off", true],
-    ["router", "Router", "codex", "on", true],
-    ["router", "Router", "codex", "off", true],
-    ["router", "Router", "claude", "on", true],
-    ["router", "Router", "claude", "off", false],
+    ["claude-only", "Claude alone", "mixed", "on", false],
+    ["claude-codex", "Claude with Codex helper", "mixed", "on", true],
+    ["router", "Automatic team", "mixed", "on", true],
+    ["router", "Automatic team", "mixed", "off", true],
+    ["router", "Automatic team", "codex", "on", true],
+    ["router", "Automatic team", "codex", "off", true],
+    ["router", "Automatic team", "claude", "on", true],
+    ["router", "Automatic team", "claude", "off", false],
   ] as const)("saves %s / %s / %s / %s with its exact payload", async (kind, name, mode, review, enabled) => {
     const initial = claudeSetup(true);
     initial.router.claudeOnlyReview = review;
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
     render(<App />);
     const panel = await openClaudeSetup();
-    expect(within(panel).getByRole("button", { name: /^Claude \+ Codex/ })).toHaveAttribute("aria-pressed", "true");
+    expect(within(panel).getByRole("button", { name: /^Claude with Codex helper/ })).toHaveAttribute("aria-pressed", "true");
     await userEvent.click(within(panel).getByRole("button", { name: new RegExp("^" + name.replace("+", "\\+")) }));
     if (kind === "router") {
-      await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
-      const reviewControl = within(panel).queryByRole("combobox", { name: "Codex review in Claude mode" });
+      await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Who writes the code" }), mode);
+      const reviewControl = within(panel).queryByRole("combobox", { name: "Codex reviews Claude's changes" });
       if (mode === "claude") {
         expect(reviewControl).toBeInTheDocument();
         await userEvent.selectOptions(reviewControl!, review);
@@ -2603,19 +2628,19 @@ describe("Invoke Mode", () => {
   it.each(["codex", "claude", "price"] as const)("saves Use first %s only in mixed mode", async (prefer) => {
     render(<App />);
     const panel = await openClaudeSetup();
-    expect(within(panel).queryByRole("combobox", { name: "Use first" })).not.toBeInTheDocument();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
-    const control = within(panel).getByRole("combobox", { name: "Use first" });
+    expect(within(panel).queryByRole("combobox", { name: "Try first" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
+    const control = within(panel).getByRole("combobox", { name: "Try first" });
     expect(control).toHaveValue("codex");
-    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Codex", "Claude", "Lowest API price"]);
+    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Codex", "Claude", "Cheapest"]);
     await userEvent.selectOptions(control, prefer);
-    const mode = within(panel).getByRole("combobox", { name: "Router mode" });
+    const mode = within(panel).getByRole("combobox", { name: "Who writes the code" });
     for (const value of ["claude", "codex"]) {
       await userEvent.selectOptions(mode, value);
-      expect(within(panel).queryByRole("combobox", { name: "Use first" })).not.toBeInTheDocument();
+      expect(within(panel).queryByRole("combobox", { name: "Try first" })).not.toBeInTheDocument();
     }
     await userEvent.selectOptions(mode, "mixed");
-    expect(within(panel).getByRole("combobox", { name: "Use first" })).toHaveValue(prefer);
+    expect(within(panel).getByRole("combobox", { name: "Try first" })).toHaveValue(prefer);
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     const initial = claudeSetup(false);
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "router", router: { ...initial.router, prefer } }));
@@ -2625,28 +2650,28 @@ describe("Invoke Mode", () => {
   it.each(["normal", "fast", "orchestrator"] as const)("saves Codex speed %s and retains the cutoff across setup modes", async (speed) => {
     render(<App />);
     const panel = await openClaudeSetup();
-    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
-    const control = within(panel).getByRole("combobox", { name: "Speed" });
+    expect(within(panel).queryByRole("combobox", { name: "Codex speed" })).not.toBeInTheDocument();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
+    const control = within(panel).getByRole("combobox", { name: "Codex speed" });
     expect(control).toHaveValue("normal");
-    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Normal", "Fast", "Orchestrator decides"]);
-    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    expect(within(control).getAllByRole("option").map((option) => option.textContent)).toEqual(["Normal", "Fast", "Claude decides"]);
+    expect(within(panel).queryByRole("spinbutton", { name: "Use Normal below (% usage left)" })).not.toBeInTheDocument();
     await userEvent.selectOptions(control, speed);
     if (speed !== "normal") {
-      const cutoff = within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" });
+      const cutoff = within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" });
       expect(cutoff).toHaveValue(20);
       await userEvent.clear(cutoff);
       await userEvent.type(cutoff, "35");
     }
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
-    const mode = within(panel).getByRole("combobox", { name: "Router mode" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
+    const mode = within(panel).getByRole("combobox", { name: "Who writes the code" });
     await userEvent.selectOptions(mode, "claude");
-    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
-    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("combobox", { name: "Codex speed" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("spinbutton", { name: "Use Normal below (% usage left)" })).not.toBeInTheDocument();
     for (const value of ["codex", "mixed"]) {
       await userEvent.selectOptions(mode, value);
-      expect(within(panel).getByRole("combobox", { name: "Speed" })).toHaveValue(speed);
-      if (speed !== "normal") expect(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" })).toHaveValue(35);
+      expect(within(panel).getByRole("combobox", { name: "Codex speed" })).toHaveValue(speed);
+      if (speed !== "normal") expect(within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" })).toHaveValue(35);
     }
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     const initial = claudeSetup(false);
@@ -2658,12 +2683,12 @@ describe("Invoke Mode", () => {
   it("saves Normal after clearing the Fast cutoff", async () => {
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
-    const speed = within(panel).getByRole("combobox", { name: "Speed" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
+    const speed = within(panel).getByRole("combobox", { name: "Codex speed" });
     await userEvent.selectOptions(speed, "fast");
-    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }));
+    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" }));
     await userEvent.selectOptions(speed, "normal");
-    expect(within(panel).queryByRole("spinbutton", { name: "Fast only above (% usage left)" })).not.toBeInTheDocument();
+    expect(within(panel).queryByRole("spinbutton", { name: "Use Normal below (% usage left)" })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith(claudeSetup(true)));
   });
@@ -2673,9 +2698,9 @@ describe("Invoke Mode", () => {
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: initial, allowed_invocation_profiles: [] });
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }));
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude only/ }));
-    expect(within(panel).queryByRole("combobox", { name: "Speed" })).not.toBeInTheDocument();
+    await userEvent.clear(within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude alone/ }));
+    expect(within(panel).queryByRole("combobox", { name: "Codex speed" })).not.toBeInTheDocument();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "claude-only" }));
   });
@@ -2683,9 +2708,9 @@ describe("Invoke Mode", () => {
   it.each(["", "-1", "91", "20.5"])("refuses an invalid Fast cutoff %s", async (value) => {
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
-    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
-    const cutoff = within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Codex speed" }), "fast");
+    const cutoff = within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" });
     fireEvent.change(cutoff, { target: { value } });
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
@@ -2695,9 +2720,9 @@ describe("Invoke Mode", () => {
   it.each(["0", "90"])("saves the Fast cutoff boundary %s", async (value) => {
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Claude \+ Codex/ }));
-    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Speed" }), "fast");
-    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Fast only above (% usage left)" }), { target: { value } });
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Codex speed" }), "fast");
+    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Use Normal below (% usage left)" }), { target: { value } });
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({
       ...claudeSetup(true), codexSpeed: { mode: "fast", fastMinRemaining: Number(value) },
@@ -2708,8 +2733,8 @@ describe("Invoke Mode", () => {
     render(<App />);
     const panel = await openClaudeSetup();
     expect(within(panel).queryByRole("checkbox", { name: "Try cheaper models on easy tasks" })).not.toBeInTheDocument();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
-    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Router mode" }), mode);
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Who writes the code" }), mode);
     const control = within(panel).getByRole("checkbox", { name: "Try cheaper models on easy tasks" });
     expect(control).toBeChecked();
     await userEvent.click(control);
@@ -2722,12 +2747,12 @@ describe("Invoke Mode", () => {
   it("cancels draft changes without saving", async () => {
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
     await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
     await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
-    expect(within(panel).getByRole("button", { name: /^Claude only/ })).toHaveAttribute("aria-pressed", "true");
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    expect(within(panel).getByRole("button", { name: /^Claude alone/ })).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
     expect(within(panel).getByRole("checkbox", { name: "haiku high" })).not.toBeChecked();
   });
 
@@ -2737,12 +2762,12 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
     await userEvent.click(within(panel).getByRole("checkbox", { name: "haiku high" }));
     const helper = screen.getByRole("region", { name: "Codex helper" });
     await waitFor(() => expect(within(helper).getByRole("button", { name: "Save" })).toBeEnabled());
     await userEvent.click(within(helper).getByRole("button", { name: "Save" }));
-    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex helper settings saved.")).toBeInTheDocument();
     expect(within(panel).getByRole("checkbox", { name: "haiku high" })).toBeChecked();
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
   });
@@ -2751,13 +2776,13 @@ describe("Invoke Mode", () => {
     mocks.setClaudeSetup.mockRejectedValue("Unable to atomically replace Claude Code setup");
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     expect(await within(panel).findByRole("alert")).toHaveTextContent("Claude Code setup was not saved.");
     expect(within(panel).getByRole("button", { name: "Save" })).toBeEnabled();
     await goTo("Home");
     expect(await screen.findByRole("region", { name: "How your setup works" }))
-      .toHaveTextContent("Claude Code does all the work. Codex is not used.");
+      .toHaveTextContent("Claude alone: Claude Code does all the work. Codex is not used.");
   });
 
   it("still shows a setup save that fails after leaving the page", async () => {
@@ -2765,7 +2790,7 @@ describe("Invoke Mode", () => {
     mocks.setClaudeSetup.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
     render(<App />);
     const panel = await openClaudeSetup();
-    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     await goTo("Home");
     await act(async () => reject("Unable to atomically replace Claude Code setup"));
@@ -2779,10 +2804,10 @@ describe("Invoke Mode", () => {
     mocks.invokeSettings.mockResolvedValue({ invoke_mode: true, claude_setup: claudeSetup(true), allowed_invocation_profiles: [] });
     mocks.invokePause.mockResolvedValue({ resumes_at: null });
     render(<App />);
-    expect(await screen.findByRole("heading", { name: "Invoke Mode paused" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Codex helper paused" })).toBeInTheDocument();
     const panel = await openClaudeSetup();
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Codex helper paused" })).not.toBeInTheDocument());
     expect(mocks.setClaudeSetup).toHaveBeenCalledWith(claudeSetup(true));
   });
 
@@ -2792,9 +2817,9 @@ describe("Invoke Mode", () => {
     render(<App />);
     await goTo("Accounts");
 
-    const allow = await screen.findByRole("switch", { name: "Allow person@example.com in Invoke Mode" });
+    const allow = await screen.findByRole("switch", { name: "Claude may use person@example.com" });
     await userEvent.click(allow);
-    expect(await screen.findByText("Could not change Invoke Mode for this account.")).toBeInTheDocument();
+    expect(await screen.findByText("Could not change whether Claude may use this account.")).toBeInTheDocument();
     expect(allow).not.toBeChecked();
   });
 
@@ -2823,7 +2848,7 @@ describe("Invoke Mode", () => {
       { model: "model-a", reasoning_efforts: ["low", "max"] },
     ]));
     expect(mocks.setInvokeTaskDefaults).toHaveBeenCalledWith({ review: { model: "model-a", effort: "low" } });
-    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex helper settings saved.")).toBeInTheDocument();
   });
 
   it("saves the account order and limits with the allowed models", async () => {
@@ -2860,15 +2885,15 @@ describe("Invoke Mode", () => {
     // Values this card does not own are the saved ones.
     await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 20, 2, false));
     expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({});
-    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex helper settings saved.")).toBeInTheDocument();
     mocks.setInvokePreferences.mockClear();
     mocks.setInvokeWeeklyReserve.mockClear();
 
     const dialog = await openInvokeSettings();
-    const threshold = within(dialog).getByRole("spinbutton", { name: /Enough usage left/ });
+    const threshold = within(dialog).getByRole("spinbutton", { name: /Move on below/ });
     await userEvent.clear(threshold);
     await userEvent.type(threshold, "35");
-    const tasks = within(dialog).getByRole("spinbutton", { name: /Codex tasks at once/ });
+    const tasks = within(dialog).getByRole("spinbutton", { name: /Codex tasks at the same time/ });
     await userEvent.clear(tasks);
     await userEvent.type(tasks, "9");
     const autoWake = within(dialog).getByRole("checkbox", { name: /Start reset timers automatically/ });
@@ -2880,7 +2905,7 @@ describe("Invoke Mode", () => {
     // the reserve is not touched.
     await waitFor(() => expect(mocks.setInvokePreferences).toHaveBeenCalledWith(["account-2", "account-1"], 35, 6, true));
     expect(mocks.setInvokeWeeklyReserve).not.toHaveBeenCalled();
-    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex helper settings saved.")).toBeInTheDocument();
   });
 
   it("sends the saved limits when the order card is saved", async () => {
@@ -2994,7 +3019,7 @@ describe("Invoke Mode", () => {
     render(<App />);
 
     await goTo("Results");
-    const history = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    const history = await screen.findByRole("region", { name: "Activity" });
     await userEvent.click(await within(history).findByRole("button", { name: "View log" }));
     const dialog = await screen.findByRole("dialog", { name: "Codex thread 01a1e9b8" });
     expect((await within(dialog).findAllByText("All tests pass."))[0]).toBeInTheDocument();
@@ -3083,7 +3108,7 @@ describe("Invoke Mode", () => {
     mocks.readTaskLog.mockResolvedValue({ found: true, offset: 1, items: [] });
     render(<App />);
     await goTo("Results");
-    const history = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    const history = await screen.findByRole("region", { name: "Activity" });
     await userEvent.click((await within(history).findAllByRole("button", { name: "View log" }))[0]);
     await userEvent.selectOptions(screen.getByRole("combobox", { name: "Watch another task" }), "thread-2");
     const dialog = screen.getByRole("dialog", { name: "Codex task logs" });
@@ -3119,7 +3144,7 @@ describe("Invoke Mode", () => {
     render(<App />);
 
     await goTo("Results");
-    const dialog = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    const dialog = await screen.findByRole("region", { name: "Activity" });
     expect(await within(dialog).findByText(
       "Switched Codex from person@example.com to second@example.com: person@example.com ran out of usage.",
     )).toBeInTheDocument();
@@ -3145,7 +3170,7 @@ describe("Invoke Mode", () => {
     ]);
     render(<App />);
     await goTo("Results");
-    const dialog = await screen.findByRole("region", { name: "Invoke Mode activity" });
+    const dialog = await screen.findByRole("region", { name: "Activity" });
     expect(await within(dialog).findByText("Input 2k · Cached 9k (82% hit) · Output 300")).toBeInTheDocument();
     expect(within(dialog).getByText("1.2k tokens")).toBeInTheDocument();
     expect(within(dialog).getByText("10.2k tokens · Output 200")).toBeInTheDocument();
@@ -3163,11 +3188,11 @@ describe("Invoke Mode", () => {
 
     await goTo("Accounts");
     const dialog = await screen.findByRole("region", { name: "Order Claude uses" });
-    const reserve = within(dialog).getByRole("spinbutton", { name: "Weekly reserve for person@example.com" });
+    const reserve = within(dialog).getByRole("spinbutton", { name: "Keep for yourself for person@example.com" });
     await userEvent.type(reserve, "30");
     await userEvent.click(await within(dialog).findByRole("button", { name: "Save" }));
     await waitFor(() => expect(mocks.setInvokeWeeklyReserve).toHaveBeenCalledWith({ "account-1": 30 }));
-    expect(await screen.findByText("Invoke settings saved.")).toBeInTheDocument();
+    expect(await screen.findByText("Codex helper settings saved.")).toBeInTheDocument();
   });
 
   it("says which paused threads can continue when usage is back", async () => {
@@ -3216,11 +3241,11 @@ describe("Invoke Mode", () => {
 
     act(() => announce!({ from: "account-1", to: "account-2", reason: "priority" }));
     expect(await screen.findByText(
-      "Invoke Mode switched Codex from person@example.com to second@example.com, your preferred account with usage left.",
+      "The Codex helper switched Codex from person@example.com to second@example.com, your preferred account with usage left.",
     )).toBeInTheDocument();
     act(() => announce!({ from: "account-2", to: "account-1", reason: "model" }));
     expect(await screen.findByText(
-      "Invoke Mode switched Codex from second@example.com to person@example.com, which offers the model Claude asked for.",
+      "The Codex helper switched Codex from second@example.com to person@example.com, which offers the model Claude asked for.",
     )).toBeInTheDocument();
   });
 
@@ -3240,7 +3265,7 @@ describe("Invoke Mode", () => {
 
     act(() => notify!({ from: "account-1", to: "account-2" }));
     expect(await screen.findByText(
-      "person@example.com reached its Codex usage limit. Invoke Mode switched Codex to second@example.com.",
+      "person@example.com reached its Codex usage limit. The Codex helper switched Codex to second@example.com.",
     )).toBeInTheDocument();
     await waitFor(() => expect(mocks.appSnapshot.mock.calls.length).toBeGreaterThan(snapshots));
   });
@@ -3293,19 +3318,19 @@ describe("Invoke Mode", () => {
     });
     render(<App />);
 
-    expect(await screen.findByRole("heading", { name: "Invoke Mode paused" })).toBeInTheDocument();
-    expect(screen.getByText(/out of Codex usage, so Claude was told to pause its work\. Invoke Mode resumes at .+\./))
+    expect(await screen.findByRole("heading", { name: "Codex helper paused" })).toBeInTheDocument();
+    expect(screen.getByText(/out of Codex usage, so Claude was told to pause its work\. The Codex helper resumes at .+\./))
       .toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Resume now" }));
     await waitFor(() => expect(mocks.resumeInvoke).toHaveBeenCalledOnce());
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Codex helper paused" })).not.toBeInTheDocument());
 
     // A later pause with no known reset time arrives as an event.
     act(() => update!({ resumes_at: null }));
     expect(await screen.findByText(/Allow another account, or choose Resume now once usage is available again\./))
       .toBeInTheDocument();
     act(() => update!(null));
-    await waitFor(() => expect(screen.queryByRole("heading", { name: "Invoke Mode paused" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("heading", { name: "Codex helper paused" })).not.toBeInTheDocument());
   });
 
   it("keeps the dialog open with a safe message when the model list cannot be read", async () => {

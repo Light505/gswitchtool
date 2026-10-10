@@ -866,7 +866,10 @@ summary:focus-visible {
   line-height: 1.2;
 }
 
-.section-heading h2,
+.accounts-page-title {
+  margin-bottom: 16px;
+}
+
 .first-run h2 {
   margin: 5px 0 0;
   color: var(--text);
@@ -876,7 +879,15 @@ summary:focus-visible {
   line-height: 1.15;
 }
 
-.section-heading h2 {
+.section-heading h3 {
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 720;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
+}
+
+.section-heading h3 {
   margin: 0;
 }
 

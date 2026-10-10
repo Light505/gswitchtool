@@ -5,7 +5,7 @@ understand the current state and act within seconds.
 
 The primary flow is:
 
-> Open → see state → Switch, reset, or Wake → done
+> Open → see state → Switch, reset, or Start reset timer → done
 
 The interface does not need to advertise feature depth.
 
@@ -22,7 +22,7 @@ selected section is a per-computer WebView preference; without one the window
 opens Home, or Accounts while no account is saved. The update, safety,
 recovery, Invoke pause, and close-Codex notices and the floating notice appear
 above every section. Accounts is the account workspace: a header with Select
-accounts, Refresh, Wake all, and Add account, then a responsive grid of small
+accounts, Refresh, Start all reset timers, and Add account, then a responsive grid of small
 account cards. Three cards fit on a wide desktop with enough card width, then
 collapse to two and one card. Focused dialogs may handle add-account, explicit
 confirmation, progress/results, or recovery; they do not create a second
@@ -39,22 +39,24 @@ Home says in one sentence how the saved setup shares the work
 (`src/setupSummary.ts`), with a **Change** button that opens Claude Code; lists
 running Codex tasks with Watch and Stop (or "Nothing is running."); and shows
 the five newest Activity events with a link to Results. The Claude Code section
-shows the setup as a page with selectable Claude only, Claude + Codex, and
-Router cards, Save and Cancel (Cancel discards unsaved edits), and a
-next-message scope note. Router exposes its mode, a three-model by five-effort
-worker grid, and Codex review on/off only in Claude mode. Below it, **Codex
-helper** holds the Invoke settings with their own Save; saving either part
-keeps the other's unsaved edits. The account order and each account's weekly
-reserve live on the Accounts page in an **Order Claude uses** card with its own
+shows the setup as a page with selectable Claude alone, Claude with Codex
+helper, and Automatic team cards, Save and Cancel (Cancel discards unsaved
+edits), and a next-message scope note. Automatic team exposes **Who writes the
+code**, a three-model by five-effort grid (**Claude models it may use**), and
+**Codex reviews Claude's changes** on/off only for Claude models only. Below it,
+the **Codex helper** (called Invoke Mode in the plugins) holds its settings
+with their own Save; saving either part
+keeps the other's unsaved edits. The account order and each account's **Keep
+for yourself** (weekly reserve) live on the Accounts page in an **Order Claude uses** card with its own
 Save (the draft is kept in App state while you navigate); Codex helper points
-there with a button. Invoke Mode is derived from the saved setup
+there with a button. The Codex helper is derived from the saved setup
 and has no direct frontend toggle. When it is on, each ChatGPT card retains its
-**Allow in Invoke Mode** row. The Claude Code section remains available during
-an Invoke pause. When an Invoke Mode switch is waiting for the user to quit
+**Claude may use this account** row. The Claude Code section remains available
+during a pause. When a Codex helper switch is waiting for the user to quit
 Codex, the window shows it in the safety-notice position with both accounts and
 a **Cancel switch** action, and asks the operating system for attention. The current account is
-identified on its card rather than repeated beside the brand. Results shows the
-Activity history with its seven-day summary. Settings holds Appearance (palette
+identified on its card rather than repeated beside the brand. Results (titled
+**Activity**) shows the history with its seven-day summary. Settings holds Appearance (palette
 and mode), Updates (version, Check for updates, Roll back to previous version),
 and the Codex CLI status and update.
 Unknown, setup, and recovery states use the existing actionable notice. With
@@ -67,7 +69,7 @@ An account card should show only the state needed for a decision:
 - current selection, needs-login, pending-apply, unsupported, or busy state;
 - the Codex quota windows actually supplied for that plan, with reset timing when available;
 - reset-credit count and nearest expiry when available;
-- direct actions such as Switch, Wake, refresh, reset, or remove when eligible.
+- direct actions such as Switch, Start reset timer, refresh, reset, or remove when eligible.
 
 For ChatGPT accounts, the email is the primary identity and the normalized
 workspace or account name is secondary context when it adds information. A
@@ -79,13 +81,14 @@ readers and keyboard users.
 
 The active account must be obvious at a glance through a clear border and
 status badge. Actions stay next to the account they affect. Global actions such
-as **Add account** and **Wake all** stay near the cards rather than behind a
+as **Add account** and **Start all reset timers** stay near the cards rather than behind a
 sidebar.
 
-The account section has one heading: the saved-account count. A persistent,
+The Accounts page has the page title **Accounts** and a sub-heading with the
+saved-account count. A persistent,
 bordered **Select accounts** button sits directly beside it, with a clear
 keyboard focus indicator. It enters a compact selection mode. Checkboxes appear
-only in that mode, with Select all, Clear, Wake, and Export in one compact
+only in that mode, with Select all, Clear, Start reset timer, and Export in one compact
 action bar. It remains a card-grid interaction. Export always opens a focused
 warning before the native save dialog because its portable JSON contains
 unencrypted credentials.

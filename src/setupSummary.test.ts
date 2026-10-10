@@ -28,7 +28,7 @@ const account = (id: string, invoke_allowed: boolean, kind: AccountView["kind"] 
 // Two of three ChatGPT accounts allowed; the API-key account is never counted.
 const accounts = [account("a", true), account("b", true), account("c", false), account("key", true, "api_key")];
 const accountPart = "Codex may use 2 of your 3 accounts and switches when one runs out.";
-const plans = "Claude Code plans each task and checks the result.";
+const plans = "Automatic team: Claude Code plans each task and checks the result.";
 
 describe("describeSetup", () => {
   it("says nothing before the settings are read", () => {
@@ -36,12 +36,12 @@ describe("describeSetup", () => {
   });
 
   it("describes Claude only", () => {
-    expect(describeSetup(settings("claude-only"), accounts)).toBe("Claude Code does all the work. Codex is not used.");
+    expect(describeSetup(settings("claude-only"), accounts)).toBe("Claude alone: Claude Code does all the work. Codex is not used.");
   });
 
   it("describes Claude + Codex with the allowed accounts", () => {
     expect(describeSetup(settings("claude-codex"), accounts)).toBe(
-      `Claude Code does the work and hands suitable coding tasks to Codex, and has Codex review bigger changes. ${accountPart}`,
+      `Claude with Codex helper: Claude Code does the work and hands suitable coding tasks to Codex, and has Codex review bigger changes. ${accountPart}`,
     );
   });
 
@@ -71,7 +71,7 @@ describe("describeSetup", () => {
     const none = [account("a", false), account("b", false)];
     const missing = "No account is allowed for Codex yet — allow one in Accounts.";
     expect(describeSetup(settings("claude-codex"), none)).toBe(
-      `Claude Code does the work and hands suitable coding tasks to Codex, and has Codex review bigger changes. ${missing}`,
+      `Claude with Codex helper: Claude Code does the work and hands suitable coding tasks to Codex, and has Codex review bigger changes. ${missing}`,
     );
     expect(describeSetup(settings("router", { mode: "codex" }), [])).toBe(
       `${plans} Codex writes all the code; if it fails, a stronger Codex model takes over. ${missing}`,

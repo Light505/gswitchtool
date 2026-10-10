@@ -38,7 +38,7 @@ left, switch with one click, and keep using Codex.
   computer, or import its export files, and pick the ones you want.
 - **Sign in again in place.** When a saved sign-in stops working, sign in again
   from its card instead of removing and re-adding the account.
-- **Wake.** Send one short Codex request to each selected account and see which
+- **Start reset timer.** Send one short Codex request to each selected account and see which
   accounts replied.
 - **No analytics or telemetry.** Saved credentials stay encrypted on your
   computer.
