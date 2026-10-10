@@ -90,7 +90,7 @@ Typical cost estimates transcript cost using the price table in
 `docs/model-benchmarks.md`, with cache reads priced as cached input.
 
 Any arguments to `/router:mode` print
-`Change the setup in GSwitch: Claude Code button.` and change nothing.
+`Change it in GSwitch → Claude Code.` and change nothing.
 The `route` skill follows the current Router line automatically; `stats` and
 `statusline` remain available. Use `/router:statusline` to install or remove
 the usage-capturing status line.

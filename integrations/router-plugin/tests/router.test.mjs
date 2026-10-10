@@ -115,7 +115,7 @@ test("mode arguments change no setup, config or worker state", (t) => {
   const files = [f.setupFile, path.join(f.data, "config.json"), path.join(f.data, "sessions/s1.json")];
   const before = files.map((file) => fs.readFileSync(file));
   for (const words of [["codex"], ["off", "do", "task"], ["unknown"], ["it's a \"task\""], [""]]) {
-    assert.equal(f.run(["mode", "s1", f.project, ...words]), "Change the setup in GSwitch: Claude Code button.\n");
+    assert.equal(f.run(["mode", "s1", f.project, ...words]), "Change it in GSwitch → Claude Code.\n");
     files.forEach((file, index) => assert.deepEqual(fs.readFileSync(file), before[index]));
   }
   const status = f.run(["mode", "s1", f.project]);
@@ -126,7 +126,7 @@ test("mode arguments change no setup, config or worker state", (t) => {
   const injection = skill.match(/!`([^`]+)`/)[1];
   assert.doesNotMatch(injection, /\$0|\$ARGUMENTS/);
   assert.match(skill, /If any arguments were supplied/);
-  assert.match(skill, /Change the setup in GSwitch: Claude Code button\./);
+  assert.match(skill, /Change it in GSwitch → Claude Code\./);
   assert.deepEqual(f.agent(), {});
   const state = f.read("sessions/s1.json");
   assert.equal(Object.hasOwn(state, "mode"), false);

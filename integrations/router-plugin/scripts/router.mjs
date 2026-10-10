@@ -803,7 +803,7 @@ function command(args, raw) {
   if (name === "statusline-install" || name === "statusline-uninstall") return statuslineSettings(name === "statusline-install");
   if (name === "mode") {
     const [, directory, ...words] = rest;
-    if (words.length) return "Change the setup in GSwitch: Claude Code button.";
+    if (words.length) return "Change it in GSwitch → Claude Code.";
     const folder = projectKey(directory);
     const state = resolved();
     const lines = [routerLine(state), `Claude models it may use: ${allowedList(config().claudeAllowed, true)}`];
