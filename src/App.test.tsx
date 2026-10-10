@@ -364,6 +364,29 @@ describe("GSwitch account workspace", () => {
     expect(within(panel).getByText("Codex CLI 0.156.1 · 0.157.0 available")).toBeInTheDocument();
   });
 
+  it("keeps a CLI update failure that happened while Settings was closed", async () => {
+    let reject: (reason: unknown) => void = () => {};
+    mocks.updateCodexCli.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    render(<App />);
+    await userEvent.click(await screen.findByRole("button", { name: /Codex CLI 0\.157\.0 available/ }, { timeout: 5_000 }));
+    const panel = await screen.findByRole("region", { name: "Codex CLI" });
+    await userEvent.click(await within(panel).findByRole("button", { name: "Update" }));
+    await goTo("Home");
+    await act(async () => reject("codex_open"));
+    await goTo("Settings");
+    expect(await within(await screen.findByRole("region", { name: "Codex CLI" })).findByRole("alert"))
+      .toHaveTextContent("Quit Codex, then try the update again.");
+  });
+
+  it("moves focus to the page heading after a sidebar click, not on first load", async () => {
+    window.localStorage.setItem("gswitch.section", "results");
+    render(<App />);
+    const results = await screen.findByRole("heading", { name: "Invoke Mode activity" });
+    expect(results).not.toHaveFocus();
+    await goTo("Settings");
+    expect(await screen.findByRole("heading", { name: "Settings" })).toHaveFocus();
+  });
+
   it("does not offer an update to a CLI without the official command", async () => {
     mocks.codexCliInfo.mockResolvedValue({ version: "0.100.0", latest_version: "0.157.0", update_status: "available", supports_update: false });
     render(<App />);
@@ -2572,7 +2595,8 @@ describe("Invoke Mode", () => {
     expect(await screen.findByText("Claude Code setup saved.")).toBeInTheDocument();
     expect(within(panel).getByRole("button", { name: new RegExp("^" + name.replace("+", "\\+")) })).toHaveAttribute("aria-pressed", "true");
     await goTo("Accounts");
-    await screen.findByText("person@example.com");
+    // The hidden Claude Code page also lists the account.
+    await screen.findByRole("heading", { name: "person@example.com" });
     expect(screen.queryAllByRole("switch")).toHaveLength(enabled ? 1 : 0);
   });
 
@@ -2734,6 +2758,21 @@ describe("Invoke Mode", () => {
     await goTo("Home");
     expect(await screen.findByRole("region", { name: "How your setup works" }))
       .toHaveTextContent("Claude Code does all the work. Codex is not used.");
+  });
+
+  it("still shows a setup save that fails after leaving the page", async () => {
+    let reject: (reason: unknown) => void = () => {};
+    mocks.setClaudeSetup.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    render(<App />);
+    const panel = await openClaudeSetup();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Router/ }));
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await goTo("Home");
+    await act(async () => reject("Unable to atomically replace Claude Code setup"));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Claude Code setup was not saved.");
+    await goTo("Claude Code");
+    expect(within(await screen.findByRole("region", { name: "Claude Code" })).getByRole("alert"))
+      .toHaveTextContent("Claude Code setup was not saved.");
   });
 
   it("opens the panel while paused and clears the pause after a saved human decision", async () => {

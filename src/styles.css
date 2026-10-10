@@ -468,6 +468,10 @@ summary:focus-visible {
   gap: 18px;
 }
 
+.page[hidden] { display: none; }
+
+.page-title:focus { outline: none; }
+
 .page-section {
   display: grid;
   min-width: 0;

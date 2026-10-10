@@ -1587,9 +1587,10 @@ function orderedAccounts(accounts: AccountView[], priority: string[]) {
   ).map(({ account }) => account);
 }
 
-function ClaudeSetupPanel({ settings, onSaved, t }: {
+function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
   settings: InvokeSettings;
   onSaved: (settings: InvokeSettings) => void;
+  onSaveFailed: (message: string) => void;
   t: Translator;
 }) {
   const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
@@ -1621,7 +1622,9 @@ function ClaudeSetupPanel({ settings, onSaved, t }: {
     try {
       onSaved(await api.setClaudeSetup({ ...draft, codexSpeed: { ...draft.codexSpeed, fastMinRemaining: cutoff } }));
     } catch (failure) {
-      setError(friendlyError(t, failure, t("claudeSetup.saveError")));
+      const message = friendlyError(t, failure, t("claudeSetup.saveError"));
+      setError(message);
+      onSaveFailed(message);
     } finally {
       setSaving(false);
     }
@@ -1743,10 +1746,11 @@ function ClaudeSetupPanel({ settings, onSaved, t }: {
   );
 }
 
-function InvokeSettingsPanel({ settings, accounts, onSaved, t }: {
+function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
   settings: InvokeSettings;
   accounts: AccountView[];
   onSaved: (settings: InvokeSettings) => void;
+  onSaveFailed: (message: string) => void;
   t: Translator;
 }) {
   const [order, setOrder] = useState<AccountView[]>(() => orderedAccounts(accounts, settings.account_priority ?? []));
@@ -1832,6 +1836,7 @@ function InvokeSettingsPanel({ settings, accounts, onSaved, t }: {
       onSaved(await api.setInvokeTaskDefaults(allowedDefaults));
     } catch {
       setSaveError(t("error.invokeSave"));
+      onSaveFailed(t("error.invokeSave"));
     } finally {
       setSaving(false);
     }
@@ -2105,6 +2110,24 @@ export default function App() {
     setSection(next);
     saveSection(next);
   };
+  const sectionRef = useRef(section);
+  sectionRef.current = section;
+  // The Claude Code page stays mounted once opened, so its drafts, saving state
+  // and errors survive navigation; a save that fails elsewhere is also toasted.
+  const [claudeCodeOpened, setClaudeCodeOpened] = useState(false);
+  useEffect(() => {
+    if (section === "claude-code") setClaudeCodeOpened(true);
+  }, [section]);
+  const reportSaveFailure = (text: string) => {
+    if (sectionRef.current !== "claude-code") setNotice({ kind: "error", text });
+  };
+  // A sidebar click moves focus to the new page's heading; first load does not.
+  const focusPageHeading = useRef(false);
+  useEffect(() => {
+    if (!focusPageHeading.current) return;
+    focusPageHeading.current = false;
+    document.querySelector<HTMLElement>(".content .page:not([hidden]) .page-title, #accounts-heading")?.focus();
+  }, [section]);
   const watchChoices = [
     ...tasks.map((task) => ({
       id: task.id,
@@ -2141,9 +2164,8 @@ export default function App() {
   };
 
   const openSettings = () => {
-    if (section !== "settings") {
-      setCliResult(null);
-      setCliError(null);
+    // An update's result or failure stays until a new check or update starts.
+    if (section !== "settings" && busy !== "codex-cli-update" && !cliResult && !cliError) {
       void checkCodexCli();
     }
     selectSection("settings");
@@ -3465,7 +3487,11 @@ export default function App() {
                 <button
                   aria-current={section === item ? "page" : undefined}
                   className="nav-item"
-                  onClick={() => (item === "settings" ? openSettings() : selectSection(item))}
+                  onClick={() => {
+                    if (item !== section) focusPageHeading.current = true;
+                    if (item === "settings") openSettings();
+                    else selectSection(item);
+                  }}
                   type="button"
                 >
                   {navItems[item].icon}
@@ -3565,7 +3591,7 @@ export default function App() {
 
         {section === "home" ? (
           <div className="page">
-            <h2 className="page-title">{t("nav.home")}</h2>
+            <h2 className="page-title" tabIndex={-1}>{t("nav.home")}</h2>
             {setupSentence ? (
               <section aria-labelledby="home-setup-heading" className="page-card home-setup">
                 <div>
@@ -3633,18 +3659,19 @@ export default function App() {
           </div>
         ) : null}
 
-        {section === "claude-code" ? (
-          <div className="page">
+        {section === "claude-code" || claudeCodeOpened ? (
+          <div className="page" hidden={section !== "claude-code"}>
             {invokeSettings && !loading && !storageRecovery ? (
               <>
                 <section aria-labelledby="claude-setup-heading" className="page-section">
-                  <h2 className="page-title" id="claude-setup-heading">{t("claudeSetup.title")}</h2>
+                  <h2 className="page-title" id="claude-setup-heading" tabIndex={-1}>{t("claudeSetup.title")}</h2>
                   <ClaudeSetupPanel
                     onSaved={(saved) => {
                       setInvokeSettings(saved);
                       setInvokePause(null);
                       setNotice({ kind: "success", text: t("claudeSetup.saved") });
                     }}
+                    onSaveFailed={reportSaveFailure}
                     settings={invokeSettings}
                     t={t}
                   />
@@ -3657,6 +3684,7 @@ export default function App() {
                       setInvokeSettings(saved);
                       setNotice({ kind: "success", text: t("invoke.saved") });
                     }}
+                    onSaveFailed={reportSaveFailure}
                     settings={invokeSettings}
                     t={t}
                   />
@@ -3664,7 +3692,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <h2 className="page-title">{t("claudeSetup.title")}</h2>
+                <h2 className="page-title" tabIndex={-1}>{t("claudeSetup.title")}</h2>
                 {storageRecovery ? <p className="home-empty">{t("accounts.recoveryDescription")}</p>
                   : invokeSettingsFailed ? <p className="remove-error" role="alert">{t("claudeCode.unavailable")}</p>
                   : <div className="loading-state"><LoaderCircle className="spin" size={24} />{t("claudeCode.loading")}</div>}
@@ -3675,14 +3703,14 @@ export default function App() {
 
         {section === "results" ? (
           <section aria-labelledby="results-heading" className="page">
-            <h2 className="page-title" id="results-heading">{t("activity.title")}</h2>
+            <h2 className="page-title" id="results-heading" tabIndex={-1}>{t("activity.title")}</h2>
             <ActivityPanel formatLocale={locale.formatLocale} name={accountName} onViewLog={showHistoryLog} t={t} />
           </section>
         ) : null}
 
         {section === "settings" ? (
           <div className="page">
-            <h2 className="page-title">{t("nav.settings")}</h2>
+            <h2 className="page-title" tabIndex={-1}>{t("nav.settings")}</h2>
             <section aria-labelledby="settings-appearance-heading" className="page-card settings-card">
               <h3 className="page-card-title" id="settings-appearance-heading">{t("toolbar.appearance")}</h3>
               <div aria-label={t("appearance.palette")} className="settings-choices" role="group">
@@ -3790,7 +3818,7 @@ export default function App() {
         <section className="accounts-section" aria-labelledby="accounts-heading">
           <div className="section-heading">
             <div className="section-heading-main">
-              <h2 id="accounts-heading">
+              <h2 id="accounts-heading" tabIndex={-1}>
                 {loading
                   ? t("accounts.loading")
                   : accounts.length === 1
