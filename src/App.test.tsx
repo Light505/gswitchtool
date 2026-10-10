@@ -2625,6 +2625,51 @@ describe("Invoke Mode", () => {
     expect(screen.queryAllByRole("switch")).toHaveLength(enabled ? 1 : 0);
   });
 
+  it("shows the typical task for the draft setup before saving", async () => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    const card = within(panel).getByRole("region", { name: "What happens to a typical task" });
+    expect(card).toHaveTextContent("Claude runs your tests.");
+    await userEvent.click(within(panel).getByRole("button", { name: /^Claude with Codex helper/ }));
+    expect(card).toHaveTextContent("Codex makes the change; Claude does small or unclear tasks itself.");
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
+    expect(card).toHaveTextContent("The cheapest Codex model that is strong enough.");
+    expect(card).toHaveTextContent("About 1 in 10 easy tasks first tries a cheaper or untested model.");
+    await userEvent.selectOptions(within(panel).getByRole("combobox", { name: "Try first" }), "price");
+    expect(card).toHaveTextContent("The cheapest model that is strong enough, Claude or Codex.");
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+  });
+
+  it.each([[1, false], [2, true]] as const)("with %i allowed accounts the Recommended tag shows: %s", async (count, shown) => {
+    const accounts = [1, 2].map((n) => ({ ...chatAccount, id: `account-${n}`, email: `p${n}@example.com`, invoke_allowed: n <= count }));
+    mocks.listAccounts.mockResolvedValue(accounts);
+    render(<App />);
+    const panel = await openClaudeSetup();
+    const tag = "Recommended with 2+ Codex accounts";
+    if (shown) expect(await within(panel).findByText(tag)).toBeInTheDocument();
+    else {
+      await within(panel).findByRole("button", { name: /^Automatic team/ });
+      expect(within(panel).queryByText(tag)).not.toBeInTheDocument();
+    }
+  });
+
+  it("keeps the Automatic team options in a Fine-tune group that starts closed", async () => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    expect(panel.querySelector("details")).toBeNull();
+    await userEvent.click(within(panel).getByRole("button", { name: /^Automatic team/ }));
+    const group = panel.querySelector("details")!;
+    expect(group).not.toHaveAttribute("open");
+    expect(group.querySelector("summary")).toHaveTextContent("Fine-tune");
+    for (const name of ["Who writes the code", "Try first"]) {
+      expect(within(group).getByRole("combobox", { name })).toBeInTheDocument();
+    }
+    expect(within(group).getByRole("checkbox", { name: "Try cheaper models on easy tasks" })).toBeInTheDocument();
+    expect(within(group).getByText("Claude models it may use")).toBeInTheDocument();
+    expect(within(group).queryByRole("combobox", { name: "Codex speed" })).not.toBeInTheDocument();
+    expect(within(panel).getByRole("combobox", { name: "Codex speed" })).toBeInTheDocument();
+  });
+
   it.each(["codex", "claude", "price"] as const)("saves Use first %s only in mixed mode", async (prefer) => {
     render(<App />);
     const panel = await openClaudeSetup();

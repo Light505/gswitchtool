@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { describeSetup } from "./setupSummary";
+import { createTranslator } from "./i18n";
+import { describeSetup, describeTypicalTask } from "./setupSummary";
 import type { AccountView, ClaudeSetup, InvokeSettings } from "./types";
 
 function settings(setup: ClaudeSetup["setup"], router: Partial<ClaudeSetup["router"]> = {}): InvokeSettings {
@@ -29,6 +30,54 @@ const account = (id: string, invoke_allowed: boolean, kind: AccountView["kind"] 
 const accounts = [account("a", true), account("b", true), account("c", false), account("key", true, "api_key")];
 const accountPart = "Codex may use 2 of your 3 accounts and switches when one runs out.";
 const plans = "Automatic team: Claude Code plans each task and checks the result.";
+
+const t = createTranslator();
+const typical = (setup: ClaudeSetup["setup"], router: Partial<ClaudeSetup["router"]> = {}) => {
+  const result = describeTypicalTask(settings(setup, router).claude_setup);
+  return {
+    steps: result.steps.map((step) => `${t(step.label)}: ${t(step.text)}`),
+    note: result.note ? t(result.note) : null,
+  };
+};
+const sampling = "About 1 in 10 easy tasks first tries a cheaper or untested model.";
+
+describe("describeTypicalTask", () => {
+  it("describes Claude alone", () => {
+    expect(typical("claude-only")).toEqual({
+      steps: ["Plan: Claude reads your request and plans the change.", "Write: Claude makes the change.", "Check: Claude runs your tests."],
+      note: null,
+    });
+  });
+
+  it("describes Claude with Codex helper", () => {
+    expect(typical("claude-codex")).toEqual({
+      steps: [
+        "Plan: Claude decides whether the task suits Codex.",
+        "Write: Codex makes the change; Claude does small or unclear tasks itself.",
+        "Check: Tests run, and Codex reviews bigger changes.",
+      ],
+      note: null,
+    });
+  });
+
+  it.each([
+    [{ mode: "mixed", prefer: "codex" }, "The cheapest Codex model that is strong enough.", "Tests run on the change."],
+    [{ mode: "mixed", prefer: "claude" }, "The cheapest Claude model that is strong enough.", "Tests run on the change."],
+    [{ mode: "mixed", prefer: "price" }, "The cheapest model that is strong enough, Claude or Codex.", "Tests run on the change."],
+    [{ mode: "codex" }, "The cheapest Codex model that is strong enough.", "Tests run on the change."],
+    [{ mode: "claude", claudeOnlyReview: "off" }, "The cheapest allowed Claude model that is strong enough.", "Tests run on the change."],
+    [{ mode: "claude", claudeOnlyReview: "on" }, "The cheapest allowed Claude model that is strong enough.", "Tests run on the change and Codex reviews it."],
+  ] as const)("describes the Automatic team %j", (router, pick, check) => {
+    const expected = [
+      "Rate: Claude rates the task from trivial to high-risk.",
+      `Pick: ${pick}`,
+      `Check: ${check}`,
+      "If it fails: A stronger model tries next. After 3 failures you are asked.",
+    ];
+    expect(typical("router", { ...router, sampling: "off" })).toEqual({ steps: expected, note: null });
+    expect(typical("router", { ...router, sampling: "on" })).toEqual({ steps: expected, note: sampling });
+  });
+});
 
 describe("describeSetup", () => {
   it("says nothing before the settings are read", () => {

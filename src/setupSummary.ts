@@ -1,8 +1,39 @@
 // Added by Light505 for gswitchtool (2026): the Home page's one-sentence
 // summary of how Claude Code and Codex share the work under the saved settings.
 
-import { createTranslator } from "./i18n";
-import type { AccountView, InvokeSettings } from "./types";
+import { createTranslator, type TranslationKey } from "./i18n";
+import type { AccountView, ClaudeSetup, InvokeSettings } from "./types";
+
+export interface TypicalTaskStep { label: TranslationKey; text: TranslationKey }
+export interface TypicalTask { steps: TypicalTaskStep[]; note: TranslationKey | null }
+
+/** The steps a typical task goes through under the (possibly unsaved) setup; i18n keys only. */
+export function describeTypicalTask(draft: ClaudeSetup): TypicalTask {
+  const step = (name: string, text = name): TypicalTaskStep => ({
+    label: `typical.label.${name}` as TranslationKey,
+    text: `typical.text.${text}` as TranslationKey,
+  });
+  if (draft.setup === "claude-only") {
+    return { steps: [step("plan", "plan.claudeOnly"), step("write", "write.claudeOnly"), step("check", "check.claudeOnly")], note: null };
+  }
+  if (draft.setup === "claude-codex") {
+    return { steps: [step("plan", "plan.claudeCodex"), step("write", "write.claudeCodex"), step("check", "check.claudeCodex")], note: null };
+  }
+  const { mode, prefer, claudeOnlyReview, sampling } = draft.router;
+  const pick = mode === "codex" ? "pick.codex"
+    : mode === "claude" ? "pick.claudeOnly"
+    : `pick.mixed.${prefer}`;
+  const review = mode === "claude" && claudeOnlyReview === "on";
+  return {
+    steps: [
+      step("rate"),
+      step("pick", pick),
+      step("check", review ? "check.routerReview" : "check.router"),
+      step("fail"),
+    ],
+    note: sampling === "on" ? "typical.sampling" : null,
+  };
+}
 
 const t = createTranslator();
 

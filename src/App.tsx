@@ -64,7 +64,7 @@ import {
 import { PALETTES, PALETTE_SWATCHES, SCHEMES, readAppearance, saveAppearance, type Appearance } from "./appearance";
 import { RefreshLanes } from "./refreshLanes";
 import { quotaRefreshDue } from "./refreshPolicy";
-import { describeSetup } from "./setupSummary";
+import { describeSetup, describeTypicalTask } from "./setupSummary";
 import type {
   AccountView,
   CatalogModel,
@@ -1587,14 +1587,17 @@ function orderedAccounts(accounts: AccountView[], priority: string[]) {
   ).map(({ account }) => account);
 }
 
-function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
+function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
   settings: InvokeSettings;
+  accounts: AccountView[];
   onSaved: (settings: InvokeSettings) => void;
   onSaveFailed: (message: string) => void;
   t: Translator;
 }) {
   const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
   const [fastMinRemaining, setFastMinRemaining] = useState(String(settings.claude_setup.codexSpeed.fastMinRemaining));
+  const allowedForCodex = accounts.filter((account) => account.invoke_allowed === true).length;
+  const typical = describeTypicalTask(draft);
   const usesCodex = draft.setup === "claude-codex" || (draft.setup === "router" && draft.router.mode !== "claude");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1646,12 +1649,30 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
                 onClick={() => setDraft((current) => ({ ...current, setup }))} type="button">
                 <strong>{t(`claudeSetup.name.${setup}`)}</strong>
                 <span>{t(`claudeSetup.description.${setup}`)}</span>
+                {setup === "router" && allowedForCodex >= 2 ? (
+                  <em className="claude-setup-tag">{t("claudeSetup.recommended")}</em>
+                ) : null}
               </button>
             </div>
           ))}
         </div>
+        <section aria-labelledby="typical-task-heading" className="typical-task">
+          <h3 className="typical-task-title" id="typical-task-heading">{t("typical.title")}</h3>
+          <ol className="typical-task-steps">
+            {typical.steps.map((step, index) => (
+              <li key={step.label}>
+                <span className="typical-task-label">{index + 1} · {t(step.label)}</span>
+                <span>{t(step.text)}</span>
+              </li>
+            ))}
+          </ol>
+          {typical.note ? <p className="claude-setup-note">{t(typical.note)}</p> : null}
+        </section>
         {draft.setup === "router" ? (
+          <details className="claude-fine-tune">
+            <summary>{t("claudeSetup.fineTune")}</summary>
           <div className="claude-router-options">
+            <div className="claude-option">
             <label className="claude-router-mode">
               <span>{t("claudeSetup.mode")}</span>
               <select disabled={saving} value={draft.router.mode}
@@ -1661,6 +1682,8 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
                 <option value="codex">{t("claudeSetup.mode.codex")}</option>
               </select>
             </label>
+            <p className="claude-setup-note">{t("claudeSetup.modeNote")}</p>
+            </div>
             <div className="claude-worker-grid">
               <table>
                 <caption>{t("claudeSetup.workers")}</caption>
@@ -1683,6 +1706,7 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
             </div>
             <p className="claude-setup-note">{t("claudeSetup.costNote")}</p>
             {draft.router.mode === "claude" ? (
+              <div className="claude-option">
               <label className="claude-router-mode">
                 <span>{t("claudeSetup.review")}</span>
                 <select disabled={saving} value={draft.router.claudeOnlyReview}
@@ -1691,8 +1715,11 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
                   <option value="off">{t("claudeSetup.off")}</option>
                 </select>
               </label>
+              <p className="claude-setup-note">{t("claudeSetup.reviewNote")}</p>
+              </div>
             ) : null}
             {draft.router.mode === "mixed" ? (
+              <div className="claude-option">
               <label className="claude-router-mode">
                 <span>{t("claudeSetup.useFirst")}</span>
                 <select disabled={saving} value={draft.router.prefer}
@@ -1702,7 +1729,10 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
                   <option value="price">{t("claudeSetup.prefer.price")}</option>
                 </select>
               </label>
+              <p className="claude-setup-note">{t("claudeSetup.useFirstNote")}</p>
+              </div>
             ) : null}
+            <div className="claude-option">
             <label className="claude-router-mode">
               <input type="checkbox" disabled={saving} checked={draft.router.sampling === "on"}
                 onChange={(event) => {
@@ -1712,10 +1742,13 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
               <span>{t("claudeSetup.sampling")}</span>
             </label>
             <p className="claude-setup-note">{t("claudeSetup.samplingNote")}</p>
+            </div>
           </div>
+          </details>
         ) : null}
         {usesCodex ? (
           <div className="claude-router-options">
+            <div className="claude-option">
             <label className="claude-router-mode">
               <span>{t("claudeSetup.speed")}</span>
               <select disabled={saving} value={draft.codexSpeed.mode}
@@ -1725,6 +1758,8 @@ function ClaudeSetupPanel({ settings, onSaved, onSaveFailed, t }: {
                 <option value="orchestrator">{t("claudeSetup.speed.orchestrator")}</option>
               </select>
             </label>
+            <p className="claude-setup-note">{t("claudeSetup.speedNote")}</p>
+            </div>
             {draft.codexSpeed.mode !== "normal" ? (
               <label className="claude-router-mode">
                 <span>{t("claudeSetup.fastCutoff")}</span>
@@ -1894,6 +1929,7 @@ function InvokeSettingsPanel({ settings, accounts, onSaved, onSaveFailed, onOpen
   return (
       <div className="invoke-panel">
         <h4>{t("invoke.modelsTitle")}</h4>
+        <p>{t("invoke.modelsHint")}</p>
         <p>{t("invoke.modelsIntro")}</p>
         {loadingModels && !catalog ? (
           <p className="invoke-loading" role="status"><LoaderCircle className="spin" size={15} />{t("invoke.loadingModels")}</p>
@@ -3738,6 +3774,7 @@ export default function App() {
                       setInvokePause(null);
                       setNotice({ kind: "success", text: t("claudeSetup.saved") });
                     }}
+                    accounts={chatGptAccounts}
                     onSaveFailed={reportSaveFailure}
                     settings={invokeSettings}
                     t={t}

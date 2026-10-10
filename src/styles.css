@@ -2211,6 +2211,37 @@ textarea {
 .claude-setup-choice span, .claude-setup-note { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.6; }
 .claude-router-options { display: grid; gap: 12px; }
 .claude-router-mode { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.claude-option { display: grid; gap: 4px; }
+.claude-setup-choice .claude-setup-tag {
+  justify-self: start;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--surface-soft);
+  border: 1px solid var(--accent);
+  font-size: 11.5px;
+  font-style: normal;
+  font-weight: 600;
+}
+.typical-task { display: grid; gap: 10px; padding: 14px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-soft); }
+.typical-task-title { margin: 0; font-size: 14px; }
+.typical-task-steps { display: flex; flex-wrap: wrap; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.typical-task-steps li {
+  display: grid;
+  flex: 1 1 150px;
+  align-content: start;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.typical-task-label { color: var(--muted); font-size: 11.5px; font-weight: 640; }
+.claude-fine-tune { display: grid; gap: 12px; }
+.claude-fine-tune summary { cursor: pointer; font-weight: 640; margin-bottom: 12px; }
 .claude-worker-grid { overflow-x: auto; }
 .claude-worker-grid table { width: 100%; border-collapse: collapse; }
 .claude-worker-grid caption { text-align: left; padding: 8px 0; font-weight: 640; }
