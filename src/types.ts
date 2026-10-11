@@ -32,6 +32,7 @@ export type ClaudeEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export interface ClaudeSetup {
   setup: ClaudeSetupKind;
   codexSpeed: { mode: "normal" | "fast" | "orchestrator"; fastMinRemaining: number };
+  sessionLimit: number;
   router: {
     mode: "mixed" | "claude" | "codex";
     prefer: "codex" | "claude" | "price";

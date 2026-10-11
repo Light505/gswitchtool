@@ -53,6 +53,7 @@ let invokeSettings: InvokeSettings = {
   claude_setup: {
     setup: "claude-codex",
     codexSpeed: { mode: "normal", fastMinRemaining: 20 },
+    sessionLimit: 250000,
     router: {
       mode: "mixed",
       claudeAllowed: {

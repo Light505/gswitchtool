@@ -11,6 +11,7 @@ function settings(setup: ClaudeSetup["setup"], router: Partial<ClaudeSetup["rout
     claude_setup: {
       setup,
       codexSpeed: { mode: "normal", fastMinRemaining: 20 },
+      sessionLimit: 250000,
       router: {
         mode: "mixed",
         prefer: "codex",

@@ -156,6 +156,7 @@ function claudeSetup(enabled = false): ClaudeSetup {
   return {
     setup: enabled ? "claude-codex" : "claude-only",
     codexSpeed: { mode: "normal", fastMinRemaining: 20 },
+    sessionLimit: 250000,
     router: {
       mode: "mixed",
       claudeAllowed: {
@@ -2914,6 +2915,39 @@ describe("Invoke Mode", () => {
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     const initial = claudeSetup(false);
     await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...initial, setup: "router", router: { ...initial.router, mode, sampling: "off" } }));
+  });
+
+  it.each([/^Claude alone/, /^Claude with Codex helper/, /^Automatic team/])("shows the session limit as 250 in setup %s", async (name) => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    await userEvent.click(within(panel).getByRole("button", { name }));
+    expect(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" })).toHaveValue(250);
+  });
+
+  it("saves the session limit in tokens", async () => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" }), { target: { value: "60" } });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...claudeSetup(false), sessionLimit: 60000 }));
+  });
+
+  it.each(["49", "12.5", ""])("refuses an invalid session limit %s", async (value) => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" }), { target: { value } });
+    await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
+    expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Enter a whole number from 50 to 1000.");
+  });
+
+  it("restores the saved session limit on cancel", async () => {
+    render(<App />);
+    const panel = await openClaudeSetup();
+    const field = within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" });
+    fireEvent.change(field, { target: { value: "60" } });
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+    expect(field).toHaveValue(250);
   });
 
   it("cancels draft changes without saving", async () => {

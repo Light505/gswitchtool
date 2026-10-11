@@ -144,6 +144,9 @@ impl InvokeState {
         if setup.codex_speed.fast_min_remaining > 90 {
             return Err("Fast cutoff must be between 0 and 90 percent".to_string());
         }
+        if !(50_000..=1_000_000).contains(&setup.session_limit) {
+            return Err("Session limit must be between 50k and 1000k tokens".to_string());
+        }
         setup.normalize();
         self.update_with_setup(
             |settings| {
@@ -677,6 +680,7 @@ mod tests {
                             claude_only_review: review,
                             ..ClaudeRouterOptions::default()
                         },
+                        session_limit: 250_000,
                     };
                     let expected = kind == ClaudeSetupKind::ClaudeCodex
                         || (kind == ClaudeSetupKind::Router
@@ -876,7 +880,8 @@ mod tests {
                     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
                     "claudeOnlyReview": "on"
                 },
-                "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 }
+                "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 },
+                "sessionLimit": 250000
             })
         );
         assert!(content.find("\"prefer\"").unwrap() < content.find("\"sampling\"").unwrap());
@@ -1007,6 +1012,52 @@ mod tests {
                 .unwrap();
                 assert_eq!(shared["codexSpeed"], value["codexSpeed"]);
             }
+        }
+        fs::remove_dir_all(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn session_limit_defaults_validates_and_publishes() {
+        assert_eq!(ClaudeSetup::default().session_limit, 250_000);
+        assert_eq!(ClaudeSetup::from_invoke_mode(true).session_limit, 250_000);
+        let base = serde_json::to_value(ClaudeSetup::default()).unwrap();
+        for bad in [
+            json!(49999),
+            json!(1000001),
+            json!(60000.5),
+            json!("60000"),
+            Value::Null,
+        ] {
+            let mut value = base.clone();
+            value["sessionLimit"] = bad;
+            let parsed: ClaudeSetup = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed.session_limit, 250_000);
+        }
+        let mut missing = base.clone();
+        missing.as_object_mut().unwrap().remove("sessionLimit");
+        let parsed: ClaudeSetup = serde_json::from_value(missing).unwrap();
+        assert_eq!(parsed.session_limit, 250_000);
+
+        let path = temp_path("session-limit");
+        let state = InvokeState::load(path.clone());
+        for bad in [49_999, 1_000_001] {
+            let mut setup = ClaudeSetup::default();
+            setup.session_limit = bad;
+            assert_eq!(
+                state.set_claude_setup(setup).unwrap_err(),
+                "Session limit must be between 50k and 1000k tokens"
+            );
+        }
+        for good in [50_000, 60_000, 1_000_000] {
+            let mut setup = ClaudeSetup::default();
+            setup.session_limit = good;
+            let saved = state.set_claude_setup(setup).unwrap();
+            assert_eq!(InvokeState::load(path.clone()).settings().unwrap(), saved);
+            let shared: Value = serde_json::from_slice(
+                &fs::read(path.with_file_name("claude-setup.json")).unwrap(),
+            )
+            .unwrap();
+            assert_eq!(shared["sessionLimit"], good);
         }
         fs::remove_dir_all(path.parent().unwrap()).unwrap();
     }

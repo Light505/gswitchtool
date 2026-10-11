@@ -189,6 +189,13 @@ you once that the router plugin is not installed. Missing, unreadable or
 invalid setup files add no setup line and leave the router off; open GSwitch
 once and choose a setup.
 
+The same page has one more setting, the **session limit** (thousand tokens;
+default 250k, range 50k to 1000k). At 80% of it a Claude Code session finishes
+its current tasks and starts no new ones. At the limit it writes a handoff and
+blocks new messages; open a new session in the same folder and type `continue`.
+There is no off switch and no in-session override, so it is set only here and
+published as `sessionLimit` in `claude-setup.json`.
+
 `/codex:invoke-status` shows the setup first, for example
 `Claude Code setup: Automatic team (Claude and Codex) (change it in GSwitch: Claude Code page)`;
 the other setups read `Claude alone` and `Claude with Codex helper`.

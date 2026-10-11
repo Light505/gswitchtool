@@ -71,9 +71,13 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
     "claudeAllowed": { "haiku": ["low", "medium"], "sonnet": ["low"], "opus": [] },
     "claudeOnlyReview": "on"
   },
-  "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 }
+  "codexSpeed": { "mode": "normal", "fastMinRemaining": 20 },
+  "sessionLimit": 250000
 }
 ```
+
+`sessionLimit` is the Claude Code session limit in tokens (50000 to 1000000,
+default 250000; a missing or invalid stored value loads as the default).
 
 `router` is always present. Setup values are `claude-only`, `claude-codex`,
 and `router`; modes are `mixed`, `claude`, and `codex`; review is `on` or

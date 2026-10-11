@@ -1752,6 +1752,8 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
 }) {
   const [draft, setDraft] = useState<ClaudeSetup>(() => settings.claude_setup);
   const [fastMinRemaining, setFastMinRemaining] = useState(String(settings.claude_setup.codexSpeed.fastMinRemaining));
+  const savedSessionLimitK = () => String((settings.claude_setup.sessionLimit ?? 250000) / 1000);
+  const [sessionLimitK, setSessionLimitK] = useState(savedSessionLimitK);
   const allowedForCodex = accounts.filter((account) => account.invoke_allowed === true).length;
   const typical = describeTypicalTask(draft);
   const usesCodex = draft.setup === "claude-codex" || (draft.setup === "router" && draft.router.mode !== "claude");
@@ -1776,10 +1778,15 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
       setError(t("claudeSetup.fastCutoffError"));
       return;
     }
+    const limitK = Number(sessionLimitK);
+    if (!sessionLimitK.trim() || !Number.isInteger(limitK) || limitK < 50 || limitK > 1000) {
+      setError(t("claudeSetup.sessionLimitError"));
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
-      onSaved(await api.setClaudeSetup({ ...draft, codexSpeed: { ...draft.codexSpeed, fastMinRemaining: cutoff } }));
+      onSaved(await api.setClaudeSetup({ ...draft, codexSpeed: { ...draft.codexSpeed, fastMinRemaining: cutoff }, sessionLimit: limitK * 1000 }));
     } catch (failure) {
       const message = friendlyError(t, failure, t("claudeSetup.saveError"));
       setError(message);
@@ -1793,6 +1800,7 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
   const cancel = () => {
     setDraft(settings.claude_setup);
     setFastMinRemaining(String(settings.claude_setup.codexSpeed.fastMinRemaining));
+    setSessionLimitK(savedSessionLimitK());
     setError(null);
   };
 
@@ -1925,6 +1933,16 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
             ) : null}
           </div>
         ) : null}
+        <div className="claude-router-options">
+          <div className="claude-option">
+            <label className="claude-router-mode">
+              <span>{t("claudeSetup.sessionLimit")}</span>
+              <input disabled={saving} max={1000} min={50} step={1} type="number" value={sessionLimitK}
+                onChange={(event) => setSessionLimitK(event.target.value)} />
+            </label>
+            <p className="claude-setup-note">{t("claudeSetup.sessionLimitNote")}</p>
+          </div>
+        </div>
         {error ? <p className="remove-error" role="alert">{error}</p> : null}
         <p className="claude-setup-note">{t("claudeSetup.footer")}</p>
         <div className="modal-actions">

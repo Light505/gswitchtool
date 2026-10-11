@@ -290,6 +290,27 @@ pub struct ClaudeSetup {
     pub router: ClaudeRouterOptions,
     #[serde(default, rename = "codexSpeed")]
     pub codex_speed: CodexSpeed,
+    #[serde(
+        default = "default_session_limit",
+        deserialize_with = "lenient_session_limit",
+        rename = "sessionLimit"
+    )]
+    pub session_limit: u32,
+}
+
+pub const DEFAULT_SESSION_LIMIT: u32 = 250_000;
+
+fn default_session_limit() -> u32 {
+    DEFAULT_SESSION_LIMIT
+}
+
+fn lenient_session_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    let value = Value::deserialize(d)?;
+    Ok(value
+        .as_f64()
+        .filter(|n| n.fract() == 0.0 && (50_000.0..=1_000_000.0).contains(n))
+        .map(|n| n as u32)
+        .unwrap_or(DEFAULT_SESSION_LIMIT))
 }
 
 impl ClaudeSetup {
@@ -302,6 +323,7 @@ impl ClaudeSetup {
             },
             router: ClaudeRouterOptions::default(),
             codex_speed: CodexSpeed::default(),
+            session_limit: DEFAULT_SESSION_LIMIT,
         }
     }
 
