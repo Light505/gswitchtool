@@ -339,18 +339,9 @@ impl Drop for AppServer {
     }
 }
 
-// Codex 0.162 on Windows rejects every shell command while a node_repl.exe runs
-// (sandbox setup refresh fails with os error 32), so workers turn off that helper.
-const WORKER_CONFIG_ARGS: [&str; 4] = [
-    "-c",
-    "mcp_servers.node_repl.enabled=false",
-    "-c",
-    "plugins.\"unified-computer-use@openai-bundled\".enabled=false",
-];
-
 fn app_server_command(codex_home: &Path) -> Command {
     let mut command = codex_command();
-    command.arg("app-server").args(WORKER_CONFIG_ARGS);
+    command.arg("app-server");
 
     command
         .current_dir(codex_home)
@@ -787,25 +778,6 @@ mod tests {
             Some(OsStr::new("1"))
         );
         fs::remove_dir_all(root).expect("remove fixture");
-    }
-
-    #[test]
-    fn workers_start_codex_app_server_without_the_browser_helper() {
-        let command = app_server_command(Path::new("codex-home"));
-        let args: Vec<String> = command
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(
-            args,
-            vec![
-                "app-server",
-                "-c",
-                "mcp_servers.node_repl.enabled=false",
-                "-c",
-                "plugins.\"unified-computer-use@openai-bundled\".enabled=false",
-            ]
-        );
     }
 
     #[cfg(not(windows))]
