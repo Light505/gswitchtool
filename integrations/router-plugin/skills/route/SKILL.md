@@ -21,6 +21,9 @@ GSwitch → Claude Code.
   Codex usage runs out".
 - `LOW`: no new Claude workers. `mixed` sends new work to Codex; `claude` stops and tells
   the user.
+- `Session N of M: finish current tasks, start no new ones`: launch nothing new; only finish,
+  repair or resume running tasks. When the router asks for the handoff, reply with only the
+  handoff.
 
 ## 2. Classify and pick
 

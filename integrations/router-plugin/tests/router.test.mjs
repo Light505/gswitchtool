@@ -257,7 +257,7 @@ test("corrupt files default safely, malformed hooks allow and log", (t) => {
   for (const file of ["config.json", "sessions/s1.json", "usage.json"]) f.write(file, "{broken");
   assert.match(f.run(["mode", "s1", f.project]), /^Automatic team is off/);
   // The Router line and records replace the usage and close commands.
-  for (const name of ["usage", "close"]) {
+  for (const name of ["usage", "close", "wrapup"]) {
     const removed = spawnSync(process.execPath, [script, name, "s1", f.project], { cwd: f.home, env: f.env, encoding: "utf8", windowsHide: true });
     assert.equal(removed.status, 1); assert.match(removed.stderr, /Unknown router command/);
   }
@@ -268,7 +268,7 @@ test("corrupt files default safely, malformed hooks allow and log", (t) => {
   assert.match(f.run(["mode", "s1", f.project]), /Automatic team is off/);
 });
 
-test("SessionStart cleanup, model warning and pending wrapup in off mode", (t) => {
+test("SessionStart cleanup and model warning in off mode", (t) => {
   const f = fixture(t);
   f.write("sessions/old.json", {}); f.write("sessions/new.json", {});
   fs.utimesSync(path.join(f.data, "sessions/old.json"), new Date(0), new Date(0));
@@ -541,17 +541,6 @@ test("apply rejects foreign repositories and untracked destination collisions", 
   fs.writeFileSync(path.join(worker, "new.txt"), "worker"); fs.writeFileSync(path.join(f.project, "new.txt"), "owner");
   assert.match(f.run(["apply", "--worktree", worker, "--cwd", f.project]), /untracked destination exists/);
   assert.equal(fs.readFileSync(path.join(f.project, "new.txt"), "utf8"), "owner");
-});
-
-test("wrapup save/show/clear and off-mode session notice", (t) => {
-  const f = fixture(t);
-  assert.match(f.run(["wrapup", "show", f.project]), /none/);
-  const source = path.join(f.home, "wrapup.json"); fs.writeFileSync(source, JSON.stringify({ tasks: ["parser"], nextSteps: ["verify"] }));
-  assert.match(f.run(["wrapup", "save", "s1", f.project, "--file", source]), /saved/);
-  assert.deepEqual(JSON.parse(f.run(["wrapup", "show", f.project])).tasks, ["parser"]);
-  const notice = f.hook("SessionStart").hookSpecificOutput.additionalContext;
-  assert.match(notice, /wrapup show/); assert.doesNotMatch(notice, /Router: Off/);
-  f.run(["wrapup", "clear", f.project]); assert.match(f.run(["wrapup", "show", f.project]), /none/);
 });
 
 test("Dev build registers both plugins, isolates router state, rewrites Markdown and replaces stale copies", (t) => {

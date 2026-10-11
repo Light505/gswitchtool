@@ -67,6 +67,9 @@ suite (`npm test` there); its Invoke Mode tests are `tests/invoke-*.test.mjs`.
 
 The router plugin mechanics and Dev packaging use temporary homes and Git
 repositories: `node --test integrations/router-plugin/tests/router.test.mjs`.
+The session limit, handoff and protected-file checks are in
+`integrations/router-plugin/tests/router-handoff.test.mjs`; the Dev gate's
+handoff adoption is in `scripts/plugin-dev.nodecheck.mjs`.
 The generated skills (`route`, `gswitch-invoke`) are built from
 `integrations/skill-text` by `node scripts/gen-skills.mjs`; `--check` fails when
 they differ, and the router hygiene test runs it.

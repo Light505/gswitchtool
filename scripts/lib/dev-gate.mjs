@@ -1,5 +1,6 @@
 // Added by Light505 for gswitchtool (2026): hook wrapper for the Dev plugins. Hooks run only in a session
-// that typed /codex-dev:dev-on or /router-dev:dev-on; other sessions get no output.
+// that typed /codex-dev:dev-on or /router-dev:dev-on; other sessions get no output, except that router-dev
+// adopts a new session (startup or /clear) whose SessionStart loads a pending handoff.
 // Usage: node "<plugin root>/dev-gate.mjs" "<plugin root>/scripts/x.mjs" [args...]
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -81,8 +82,9 @@ function main() {
   const input = parseObject(text);
   const event = typeof input.hook_event_name === "string" ? input.hook_event_name : "";
   let enabled = false;
+  let marker = "";
   try {
-    const marker = sessionMarker(input.session_id);
+    marker = sessionMarker(input.session_id);
     if (marker) {
       if (isDevOn(input)) enableSession(marker);
       enabled = existsSync(marker);
@@ -90,7 +92,9 @@ function main() {
   } catch {
     enabled = false;
   }
-  if (!enabled) process.exit(0);
+  // /clear starts a new session ID: a pending router-dev handoff must still load, and then the session is a Dev session.
+  const adopting = !enabled && !!marker && pluginName === "router-dev" && event === "SessionStart" && ["startup", "clear"].includes(input.source);
+  if (!enabled && !adopting) process.exit(0);
 
   const child = spawnSync(process.execPath, [script, ...args], {
     cwd: process.cwd(),
@@ -100,10 +104,13 @@ function main() {
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true
   });
-  if (child.stderr) process.stderr.write(child.stderr);
-
   const stdout = child.stdout || "";
   const parsed = parseContext(stdout);
+  if (adopting) {
+    if (!parsed?.hookSpecificOutput.additionalContext.includes("Handoff from the previous session")) process.exit(0);
+    enableSession(marker);
+  }
+  if (child.stderr) process.stderr.write(child.stderr);
   let output = stdout;
   if (parsed) {
     parsed.hookSpecificOutput.additionalContext = markLines(parsed.hookSpecificOutput.additionalContext);

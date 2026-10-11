@@ -87,13 +87,15 @@ export function normalizeCodexSpeed(value) {
     fastMinRemaining: Number.isInteger(value?.fastMinRemaining) && value.fastMinRemaining >= 0 && value.fastMinRemaining <= 90
       ? value.fastMinRemaining : 20 };
 }
+// The session size (tokens) at which a session hands off to a new one; anything else means 250000.
+export const normalizeSessionLimit = (value) => Number.isInteger(value) && value >= 50000 && value <= 1000000 ? value : 250000;
 function config() {
   const setup = readJSON(setupFile);
   const valid = setup.version === 1 && ["claude-only", "claude-codex", "router"].includes(setup.setup) &&
     modes.slice(1).includes(setup.router?.mode) && reviews.includes(setup.router?.claudeOnlyReview);
   const value = valid ? setup.router : {};
   return { mode: valid && setup.setup === "router" ? value.mode : "off",
-    codexSpeed: normalizeCodexSpeed(setup.codexSpeed),
+    codexSpeed: normalizeCodexSpeed(setup.codexSpeed), sessionLimit: normalizeSessionLimit(setup.sessionLimit),
     prefer: prefers.includes(value.prefer) ? value.prefer : "codex",
     sampling: value.sampling === "off" ? "off" : "on",
     claudeOnlyReview: value.claudeOnlyReview ?? "on", claudeAllowed: claudeAllowed(value.claudeAllowed) };
@@ -103,9 +105,10 @@ function statuslineConfig() {
   const { statusLinePrevious, statusLineCommand } = readJSON(data("config.json"));
   return { statusLinePrevious, statusLineCommand };
 }
+const safeName = (id) => /^[\w-]+$/.test(id) ? id : hash(id);
 function sessionFile(id) {
   if (!id) throw new Error("A session ID is required");
-  return data("sessions", `${/^[\w-]+$/.test(id) ? id : hash(id)}.json`);
+  return data("sessions", `${safeName(id)}.json`);
 }
 function session(id) {
   const { mode: _mode, claudeOnlyReview: _review, ...value } = id ? readJSON(sessionFile(id)) : {};
@@ -138,7 +141,7 @@ function usage() {
 }
 const codexList = (allowed) => Object.entries(allowed).map(([model, list]) => `${model} ${list.join(", ")}`).join(" · ") || "none";
 // The orchestrator's per-message context; it carries Invoke status so the orchestrator never runs invoke-status.
-async function promptLine(state) {
+async function promptLine(state, soft) {
   const mode = state.mode.value, window = usage();
   const parts = [`Router: mode=${mode}`];
   if (mode === "mixed") parts.push(`Use first: ${state.prefer}`);
@@ -150,6 +153,7 @@ async function promptLine(state) {
   }
   if (["mixed", "codex"].includes(mode)) parts.push(`Speed: ${state.codexSpeed.mode}`);
   parts.push(`Codex review in claude mode: ${state.review.value}`);
+  if (soft) parts.push(soft);
   return parts.join(" · ");
 }
 export function matchesScope(file, pattern) {
@@ -267,7 +271,204 @@ function relativeEdit(cwd, file) {
 const context = (event, text) => text ? { hookSpecificOutput: { hookEventName: event, additionalContext: text } } : {};
 const decision = (value, reason) => ({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: value, permissionDecisionReason: reason } });
 const isWorker = (type) => workerNames.some((name) => type === `${pluginName}:${name}`);
-function wrapupFile(directory) { return data("wrapups", `${hash(comparable(directory))}.json`); }
+
+// Session size, soft limit (80%), hard limit and handoff. The released router leaves all of it to router-dev in a Dev test session.
+const kilo = (n) => `${Math.round(n / 1000)}k`;
+const resumes = (text) => /(?:^|\s)--resume-thread(?:\s|=|$)/.test(String(text || ""));
+const devSession = (id) => {
+  const safe = String(id ?? "").replace(/[^A-Za-z0-9_-]/g, "");
+  return pluginName === "router" && !!safe && fs.existsSync(path.join(home, ".gswitchtool-dev", "dev-sessions", safe));
+};
+// Input tokens of the newest main-thread assistant line, read from the end of the transcript in chunks.
+function transcriptSize(file) {
+  let fd;
+  try { fd = fs.openSync(file, "r"); } catch { return null; }
+  try {
+    let position = fs.fstatSync(fd).size, tail = Buffer.alloc(0);
+    while (position > 0) {
+      const length = Math.min(262144, position);
+      position -= length;
+      const chunk = Buffer.alloc(length);
+      fs.readSync(fd, chunk, 0, length, position);
+      tail = Buffer.concat([chunk, tail]);
+      // Lines before the first newline may be cut off; they are completed by the next chunk.
+      const start = position > 0 ? tail.indexOf(10) + 1 : 0;
+      if (position > 0 && start === 0) continue;
+      const lines = tail.subarray(start).toString("utf8").split("\n");
+      for (let i = lines.length - 1; i >= 0; i--) {
+        if (!lines[i].includes('"assistant"')) continue;
+        let entry;
+        try { entry = JSON.parse(lines[i]); } catch { continue; }
+        const usage = object(entry?.message?.usage);
+        if (entry?.type !== "assistant" || entry.isSidechain === true || entry.message?.model === "<synthetic>" || !entry.message?.usage) continue;
+        return ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].reduce((sum, name) => sum + (Number.isFinite(usage[name]) ? usage[name] : 0), 0);
+      }
+      tail = tail.subarray(0, start);
+    }
+  } catch { return null; }
+  finally { fs.closeSync(fd); }
+  return null;
+}
+// A subagent's hook call measures the main transcript the session file remembers.
+function sizing(input, sess) {
+  const limit = config().sessionLimit;
+  const file = input.agent_id ? sess.transcriptPath : input.transcript_path;
+  const known = [typeof file === "string" && file ? transcriptSize(file) : null, sess.fullSize].filter(Number.isFinite);
+  const size = known.length ? Math.max(...known) : null;
+  const full = sess.full === true || (size !== null && size >= limit);
+  const of = `${kilo(size ?? limit)} of ${kilo(limit)}`;
+  return { size, limit, full, of, soft: full || (size !== null && size >= Math.floor(limit * 0.8)), line: `Session ${of}: finish current tasks, start no new ones` };
+}
+const savedText = (info) => `This session is full (${info.of}). The handoff is saved. Open a new session in this folder and type continue.`;
+const handoffFile = (id) => data("handoffs", `${safeName(id)}.json`);
+const readHandoff = (id) => { const value = readJSON(handoffFile(id), null); return value?.version === 1 ? value : null; };
+const sessionProject = (input) => projectKey(process.env.CLAUDE_PROJECT_DIR || input.cwd);
+// The router's own view of the work in flight, each part on its own so one failure shows as unknown.
+function handoffFacts(id, project, sess) {
+  const part = (action) => { try { return action(); } catch { return "unknown"; } };
+  const list = (items) => items.length ? items.join("; ") : "none";
+  let open = [];
+  const openTasks = part(() => {
+    const records = readResults(data("results.jsonl")).filter((r) => r.sessionId === id);
+    open = [...new Set(records.filter((r) => r.type === "plan").map((r) => r.task))].map((task) => taskState(records, id, task)).filter((state) => !state.done);
+    return list(open.map(({ plan, last }) => `${plan.task} ${plan.title ? `"${plan.title}" ` : ""}(${plan.kind}, ${plan.difficulty})${last ? `, last: ${last.worker} ${last.outcome}${last.reason ? ` (${last.reason})` : ""}` : ""}`));
+  });
+  const codexJobs = () => {
+    const root = path.join(pluginsHome, "data"), jobs = [];
+    if (!fs.existsSync(root)) return "none";
+    for (const name of fs.readdirSync(root)) {
+      if (pluginName === "router-dev" ? !name.startsWith("codex-dev-") : !name.startsWith("codex-") || name.startsWith("codex-dev-")) continue;
+      try {
+        for (const sub of fs.readdirSync(path.join(root, name, "state"))) {
+          for (const job of readJSON(path.join(root, name, "state", sub, "state.json")).jobs ?? []) {
+            if (job?.sessionId !== id || !["queued", "running"].includes(job.status)) continue;
+            let gone = false;
+            if (job.pid) try { process.kill(job.pid, 0); } catch (error) { gone = error.code !== "EPERM"; }
+            jobs.push(`${job.id} thread ${job.threadId ?? "none"} "${shortTitle(job.title) ?? ""}"${gone ? " (process gone)" : ""}`);
+          }
+        }
+      } catch {}
+    }
+    return list(jobs);
+  };
+  return { time: new Date().toISOString(),
+    branch: part(() => gitText(project, ["rev-parse", "--abbrev-ref", "HEAD"])),
+    lastCommit: part(() => gitText(project, ["log", "-1", "--format=%h %s"])),
+    uncommitted: part(() => {
+      const status = git(project, ["status", "--porcelain"]);
+      if (status.status !== 0) throw new Error("git status failed");
+      const files = status.stdout.split(/\r?\n/).filter(Boolean).map((line) => line.slice(3));
+      return files.length ? `${files.length} file${files.length === 1 ? "" : "s"}: ${files.slice(0, 20).join(", ")}${files.length > 20 ? `, and ${files.length - 20} more` : ""}` : "none";
+    }),
+    openTasks,
+    codexThreads: part(() => [...new Set(open.flatMap((state) => state.results.map((r) => r.codexThreadId).filter(Boolean)))].join("; ")),
+    workers: part(() => list(Object.entries(sess.bindings).filter(([agent, bound]) => {
+      const stopped = sess.finished.find((worker) => worker.agentId === agent);
+      return !stopped || (bound.resumedAt != null && bound.resumedAt > stopped.time);
+    }).map(([agent, bound]) => `${agent} ${bound.type} ${bound.task ?? "-"}`))),
+    codexJobs: part(codexJobs),
+    worktrees: part(() => list(worktrees(project).slice(1).map((item) => `${item.root} (${[item.branch?.replace(/^refs\/heads\//, "") ?? "detached", item.locked && "locked"].filter(Boolean).join(", ")})`))) };
+}
+function newHandoff(id, input, sess, info, judgement = null) {
+  const project = sessionProject(input);
+  return { version: 1, sessionId: id, project, createdAt: new Date().toISOString(), size: info.size, limit: info.limit, judgement,
+    facts: handoffFacts(id, project, sess), nextRequests: [], usedAt: null, usedBy: null };
+}
+function handoffText(handoff) {
+  const facts = object(handoff.facts), fact = (name) => facts[name] ?? "unknown";
+  const lines = [`Handoff from the previous session (ended at ${kilo(handoff.size ?? handoff.limit)} of ${kilo(handoff.limit)}, ${handoff.createdAt}). Start by saying in 3 lines where things stand, then continue.`,
+    handoff.judgement || "(No written handoff: the session filled up before writing one.)", `Facts (router, ${fact("time")}):`,
+    `- Branch: ${fact("branch")} · last commit ${fact("lastCommit")}`, `- Uncommitted: ${fact("uncommitted")}`, `- Open tasks: ${fact("openTasks")}`,
+    `- Claude workers still running: ${fact("workers")}`, `- Codex jobs running: ${fact("codexJobs")}`, `- Kept worktrees: ${fact("worktrees")}`];
+  if (facts.codexThreads) lines.push(`- Codex threads of open tasks: ${facts.codexThreads}`);
+  for (const request of Array.isArray(handoff.nextRequests) ? handoff.nextRequests : []) lines.push(`Next request (typed in the full session): ${String(request.text).replace(/\s+/g, " ").trim()}`);
+  return lines.join("\n");
+}
+// The newest unused handoff of this folder; older unused ones are superseded. Runs under the state lock.
+function takeHandoff(id, project) {
+  let found = [];
+  try {
+    found = fs.readdirSync(data("handoffs")).filter((name) => name.endsWith(".json")).map((name) => ({ file: data("handoffs", name), handoff: readJSON(data("handoffs", name), null) }))
+      .filter(({ handoff }) => handoff?.version === 1 && handoff.usedAt == null && handoff.sessionId !== id && typeof handoff.project === "string" && comparable(handoff.project) === comparable(project));
+  } catch {}
+  found.sort((a, b) => String(b.handoff.createdAt).localeCompare(String(a.handoff.createdAt)));
+  const now = new Date().toISOString();
+  for (const { file, handoff } of found) atomicJSON(file, { ...handoff, usedAt: now, usedBy: id });
+  return found[0]?.handoff ?? null;
+}
+// A prompt typed in a full session is blocked, kept for the next session, and the handoff is saved if it is not yet.
+async function fullPrompt(id, input, info) {
+  await locked(() => {
+    const current = session(id);
+    saveSession(id, { ...current, full: true, fullSize: info.size ?? current.fullSize, transcriptPath: input.transcript_path ?? current.transcriptPath });
+    const handoff = readHandoff(id) ?? newHandoff(id, input, current, info);
+    // Background-task notices also pass UserPromptSubmit; they are blocked but are not the owner's next request.
+    const typed = String(input.prompt ?? "").trim();
+    const text = /^<(?:task-notification|system-reminder|agent-message)\b/.test(typed) ? "" : typed.slice(0, 2000);
+    handoff.nextRequests = Array.isArray(handoff.nextRequests) ? handoff.nextRequests : [];
+    if (text) handoff.nextRequests.push({ time: new Date().toISOString(), text });
+    if (handoff.usedAt) { handoff.usedAt = null; handoff.usedBy = null; }
+    atomicJSON(handoffFile(id), handoff);
+  });
+  return { decision: "block", reason: savedText(info) };
+}
+// Stop in a full session: the first one asks for the handoff, the next one saves the reply. Never blocks twice.
+async function stop(input) {
+  const id = input.session_id;
+  if (input.agent_id || !id || devSession(id)) return {};
+  const info = sizing(input, session(id));
+  if (!info.full) return {};
+  const existing = readHandoff(id);
+  if (existing?.judgement) return {};
+  const ask = await locked(() => {
+    const current = session(id);
+    // Another plugin's Stop block (stop_hook_active) does not count as our request: ask once all the same.
+    if (current.handoffRequested === true) return false;
+    saveSession(id, { ...current, full: true, fullSize: info.size ?? current.fullSize, handoffRequested: true, transcriptPath: input.transcript_path ?? current.transcriptPath });
+    return true;
+  });
+  if (ask) return { decision: "block", reason: `This session is full (${info.of}). Write the handoff now. Reply with only the handoff, at most 60 lines, for the next session: the goal, decisions made and why, the current state (done, in progress), the exact next step, and anything the next session would get wrong. Do not run tools and do not start new work. The router adds the facts itself: open tasks, running Codex jobs and threads, kept worktrees, branch, last commit, uncommitted files.` };
+  const reply = typeof input.last_assistant_message === "string" && input.last_assistant_message.trim() ? input.last_assistant_message : transcriptText(input.transcript_path);
+  const judgement = reply.trim().split(/\r?\n/).slice(0, 60).join("\n").trim() || null;
+  await locked(() => atomicJSON(handoffFile(id), { ...newHandoff(id, input, session(id), info, judgement),
+    nextRequests: Array.isArray(existing?.nextRequests) ? existing.nextRequests : [] }));
+  return { systemMessage: savedText(info) };
+}
+// Protected: the router's data, the app's setup file and the installed plugin copies change only through GSwitch and the router.
+const protectedReason = "Protected: the router's settings, session and handoff files and the installed plugin change only through GSwitch and the router. Change settings in GSwitch → Claude Code.";
+const slashes = (text) => String(text ?? "").replace(/\\/g, "/");
+const foldCase = (text) => process.platform === "win32" ? text.toLowerCase() : text;
+const pluginsHome = path.join(home, ".claude", "plugins");
+const within = (file, root) => {
+  const a = foldCase(slashes(file)).replace(/\/+$/, ""), b = foldCase(slashes(root)).replace(/\/+$/, "");
+  return a === b || a.startsWith(`${b}/`);
+};
+function protectedEdit(input) {
+  const file = input.tool_input?.file_path || input.tool_input?.notebook_path;
+  if (typeof file !== "string" || !file) return false;
+  const absolute = path.resolve(input.cwd || process.cwd(), file);
+  const roots = [dataDir, setupFile, path.join(pluginsHome, "cache"), path.join(pluginsHome, "marketplaces"), ...(within(pluginRoot, pluginsHome) ? [pluginRoot] : [])];
+  // Compare as written and with symlinks and short names resolved.
+  const real = (list) => [...list, ...list.flatMap((item) => { try { return [canonical(item)]; } catch { return []; } })];
+  const protectedRoots = real(roots);
+  return real([absolute]).some((target) => protectedRoots.some((root) => within(target, root)));
+}
+function protectedCommand(command) {
+  const homePath = slashes(home);
+  // The scripts the skills run themselves (router.mjs, codex-companion.mjs) may live in the installed plugin.
+  const text = slashes(command).replace(/(^|[\s"'=:(])~(?=\/|\s|"|'|$)/g, (_, before) => before + homePath)
+    .replace(/\$\{?(?:HOME|USERPROFILE)\}?|\$env:USERPROFILE|%USERPROFILE%/gi, () => homePath)
+    .replace(/(^|[\s;&|(])node(?:\.exe)?["']?\s+(?:"[^"]*|'[^']*|[^\s"']*)\/(?:scripts\/router|codex-companion)\.mjs["']?/gi, "$1node");
+  const hay = foldCase(text);
+  return [dataName, "claude-setup.json", ".claude/plugins/cache", ".claude/plugins/marketplaces", ...(within(pluginRoot, pluginsHome) ? [slashes(pluginRoot)] : [])]
+    .some((fragment) => hay.includes(foldCase(fragment)));
+}
+function protection(input) {
+  const tool = input.tool_name;
+  const hit = ["Edit", "Write", "MultiEdit", "NotebookEdit"].includes(tool) ? () => protectedEdit(input)
+    : ["Bash", "PowerShell"].includes(tool) ? () => protectedCommand(input.tool_input?.command) : null;
+  return hit && !devSession(input.session_id) && hit() ? decision("deny", protectedReason) : null;
+}
 // An inline invoke brief starts right after its opening quote; a prompt file may use CRLF.
 const header = (text, name) => String(text || "").match(new RegExp(`(?:^|["'])[ \\t]*${name}:[ \\t]*([\\w.-]{1,40})[ \\t]*["']?[ \\t]*\\r?$`, "m"))?.[1];
 const taskId = (text) => header(text, "TASK");
@@ -366,15 +567,21 @@ async function hook(event, input) {
   if (["PreToolUse", "PostToolUse", "PostToolUseFailure"].includes(event) && input.tool_name === "Bash" && !isInvoke(command)) return {};
   // Runs outside the state lock: it takes the lock itself only to read and write state.
   if (event === "SubagentStop") return subagentStop(input);
-  // Expire old worker state, including a resumed session with this ID.
-  if (event === "SessionStart" && fs.existsSync(data("sessions"))) for (const name of fs.readdirSync(data("sessions"))) {
-    const file = data("sessions", name);
-    if (name.endsWith(".json") && fs.statSync(file).mtimeMs < Date.now() - 7 * 86400000) fs.rmSync(file);
+  if (event === "Stop") return stop(input);
+  // Expire old worker state, including a resumed session with this ID, and handoffs after 30 days.
+  if (event === "SessionStart") for (const [folder, days] of [["sessions", 7], ["handoffs", 30]]) if (fs.existsSync(data(folder))) for (const name of fs.readdirSync(data(folder))) {
+    const file = data(folder, name);
+    if (name.endsWith(".json") && fs.statSync(file).mtimeMs < Date.now() - days * 86400000) fs.rmSync(file);
   }
   const id = input.session_id;
   const cwd = input.cwd || process.cwd();
   const sess = session(id);
   const state = resolved();
+  const dev = devSession(id);
+  // Subagent hook calls measure the main transcript, so the main thread's path is kept (UserPromptSubmit runs unlocked and does it below).
+  if (id && event !== "UserPromptSubmit" && !input.agent_id && typeof input.transcript_path === "string" && input.transcript_path && sess.transcriptPath !== input.transcript_path) {
+    sess.transcriptPath = input.transcript_path; saveSession(id, sess);
+  }
   if (["PostToolUse", "PostToolUseFailure"].includes(event) && input.tool_name === "Bash") {
     const launch = codexLaunch(input);
     if (launch) { sess.codexLaunches.push(launch); saveSession(id, sess); }
@@ -396,14 +603,36 @@ async function hook(event, input) {
   if (event === "SessionStart") {
     const lines = state.mode.value === "off" ? [] : [routerLine(state)];
     if (state.mode.value !== "off" && worktreeBaseRef(cwd) !== "head") lines.push(baseRefWarning);
-    if (fs.existsSync(wrapupFile(cwd))) lines.push(`Router: unfinished work saved; run node "${path.join(pluginRoot, "scripts", "router.mjs")}" wrapup show "${cwd}".`);
     const model = typeof input.model === "string" ? input.model : input.model?.id;
     if (state.mode.value !== "off" && model && !/opus/i.test(model)) lines.push("Router warning: use an Opus model for the orchestrator.");
+    if (!dev) {
+      const info = sizing(input, sess);
+      if (info.full) lines.push(`This session is full (${info.of}); new messages are blocked. Open a new session in this folder and type continue.`);
+      else if (["startup", "clear"].includes(input.source)) {
+        const handoff = takeHandoff(id, sessionProject(input));
+        if (handoff) lines.push(handoffText(handoff));
+      }
+    }
     return context(event, lines.join("\n"));
   }
   if (event === "UserPromptSubmit") {
-    if (state.mode.value === "off") return {};
-    return context(event, await promptLine(state));
+    let soft = "";
+    if (!dev) {
+      const info = sizing(input, sess);
+      if (info.full) return fullPrompt(id, input, info);
+      if (info.soft) soft = info.line;
+      // The main thread's path is kept under the lock only when it changes.
+      if (id && typeof input.transcript_path === "string" && input.transcript_path && sess.transcriptPath !== input.transcript_path)
+        await locked(() => saveSession(id, { ...session(id), transcriptPath: input.transcript_path }));
+    }
+    if (state.mode.value === "off") return context(event, soft);
+    return context(event, await promptLine(state, soft));
+  }
+  if (event === "PreCompact") {
+    if (dev) return {};
+    const info = sizing(input, sess);
+    if (input.trigger === "auto") saveSession(id, { ...sess, full: true, fullSize: info.size ?? sess.fullSize });
+    return { decision: "block", reason: `Compaction is off: this session hands off at ${kilo(info.limit)} instead (now ${info.size === null ? "unknown" : kilo(info.size)}).` };
   }
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {
     const bound = sess.bindings[input.tool_input?.to];
@@ -416,6 +645,15 @@ async function hook(event, input) {
     const task = taskState(readResults(data("results.jsonl")), id, bound.task);
     return task.failures >= ownerCheckAfter && !task.done
       ? decision("ask", `Task ${bound.task} has ${task.failures} failed attempts; continue by resuming ${bound.type}?`) : {};
+  }
+  // Past 80% of the session limit nothing new starts, in every mode; running workers and Codex threads may be resumed.
+  if (event === "PreToolUse" && !dev) {
+    const type = input.tool_input?.subagent_type;
+    const launch = ["Agent", "Task"].includes(input.tool_name) ? isWorker(type) || (/^codex(?:-dev)?:codex-runner$/.test(type) && !resumes(input.tool_input?.prompt)) : input.tool_name === "Bash" && !resumes(command);
+    if (launch) {
+      const info = sizing(input, sess);
+      if (info.soft) return decision("deny", `Session ${info.of}: finish current tasks, start no new ones. Resume a running worker with SendMessage or a Codex thread with --resume-thread.`);
+    }
   }
   if (state.mode.value === "off") return {};
   if (event === "PreToolUse" && input.tool_name === "Bash") {
@@ -964,21 +1202,6 @@ async function command(args, raw) {
     saveSession(id, sess);
     return `Scope: ${agent} — ${sess.bindings[agent].scope.join(",")}`;
   }
-  if (name === "wrapup") {
-    const [action, first, second] = rest;
-    const directory = action === "save" ? second : first;
-    if (!directory) throw new Error("wrapup requires a project directory");
-    const file = wrapupFile(directory);
-    if (action === "clear") { fs.rmSync(file, { force: true }); return "Wrapup: cleared"; }
-    if (action === "show") return fs.existsSync(file) ? JSON.stringify(readJSON(file), null, 2) : "Wrapup: none";
-    if (action === "save") {
-      const source = option(rest, "--file");
-      if (!source) throw new Error("wrapup save requires --file <json>");
-      const record = object(JSON.parse(fs.readFileSync(source, "utf8").replace(/^\uFEFF/, "")));
-      atomicJSON(file, { ...record, sessionId: first, projectDir: projectKey(directory), updatedAt: new Date().toISOString() });
-      return "Wrapup: saved";
-    }
-  }
   throw new Error("Unknown router command");
 }
 async function main() {
@@ -989,14 +1212,17 @@ async function main() {
     const raw = ["hook", "statusline"].includes(args[0]) ? fs.readFileSync(0, "utf8") : "";
     // Parsed before the lock so a lock timeout can still deny a worker's edit.
     if (isHook) try { input = object(JSON.parse(raw || "{}")); } catch {}
+    // Protected files and the installed plugin are checked first, for every tool and without the state lock.
+    const guarded = isHook && args[1] === "PreToolUse" ? protection(input) : null;
+    if (guarded) { process.stdout.write(`${JSON.stringify(guarded)}\n`); return; }
     // Commands that are not invokes never touch router state.
     const bash = isHook && ["PreToolUse", "PostToolUse", "PostToolUseFailure"].includes(args[1]) && input.tool_name === "Bash";
-    if (bash && (!isInvoke(String(input.tool_input?.command || "")) || (args[1] !== "PreToolUse" && !codexLaunch(input)))) {
+    if ((bash && (!isInvoke(String(input.tool_input?.command || "")) || (args[1] !== "PreToolUse" && !codexLaunch(input)))) || (isHook && input.tool_name === "PowerShell")) {
       process.stdout.write("{}\n"); return;
     }
-    // Git and verification operations have private indexes and need no state lock; SubagentStop takes the lock
-    // itself around its state reads and writes (its verify can take minutes); UserPromptSubmit only reads.
-    const unlocked = ["check", "apply", "finish", "statusline"].includes(args[0]) || (isHook && ["SubagentStop", "UserPromptSubmit"].includes(args[1]));
+    // Git and verification operations have private indexes and need no state lock; SubagentStop and Stop take the lock
+    // themselves (SubagentStop's verify can take minutes); UserPromptSubmit only reads, and locks to write.
+    const unlocked = ["check", "apply", "finish", "statusline"].includes(args[0]) || (isHook && ["SubagentStop", "Stop", "UserPromptSubmit"].includes(args[1]));
     const output = unlocked ? await command(args, raw) : await locked(() => command(args, raw));
     process.stdout.write(args[0] === "statusline" ? output : `${output}\n`);
   } catch (error) {

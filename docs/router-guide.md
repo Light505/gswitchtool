@@ -37,7 +37,7 @@ unreadable or invalid setup file, leave routing off.
 - The orchestrator only makes decisions. Mechanics (settings, scope checks,
   limits, usage reading, copying worktree results back, recording unfinished
   work) run in scripts and hooks, never through the model.
-- Nothing is written into the project. Results, usage, wrap-ups, worker scope
+- Nothing is written into the project. Results, usage, handoffs, worker scope
   records and locks stay in `~/.gswitchtool-router/` (Dev:
   `~/.gswitchtool-router-dev/`). Setup choices belong to the app.
 - Tool facts beat claims: the orchestrator trusts verify results, git facts and
@@ -442,19 +442,58 @@ Claude accounts, and hitting the limit stops the whole session.
 - When 30% or less of the 5-hour window is left, every Claude worker type stops:
   `mixed` sends new work to Codex and leaves out Claude candidates; `claude` stops and
   asks the owner.
-- Graceful wrap-up: no new workers start; running ones finish their step; a
-  script records unfinished work (tasks, kept worktrees, Codex threads, next
-  steps, reset time) under `~/.gswitchtool-router/wrapups/`. The next session
-  in that project is told about it and offers to resume, discard, or hand the
-  work to Codex.
 - Without usage data (no status line support, API billing, no reply yet) the
   threshold does not apply; the report says so once.
+
+## Session handoff
+
+A long orchestrator session costs more with every message, so the router stops
+it at a size limit and the next session in the same folder continues from a
+handoff. It applies in every mode, including `off` and the Claude-only setups;
+there is no switch to turn it off.
+
+- Limit: `sessionLimit` (tokens, a whole number from 50000 to 1000000) in the
+  app's `claude-setup.json`, set in GSwitch → Claude Code. Missing or invalid
+  means 250000. The session's size is the newest main-thread assistant message's
+  `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` in the
+  session transcript.
+- At 80% of the limit (soft limit) the Router line (or, in mode `off`, a line of
+  its own) says `Session 205k of 250k: finish current tasks, start no new ones`.
+  The hooks then deny new router workers, `codex:codex-runner` launches and
+  `invoke` commands that do not resume a Codex thread (`--resume-thread`).
+  Resuming a running worker with SendMessage always works, and background
+  workers and Codex jobs still finish and record their results.
+- At the limit (hard limit) the session is full for good. Stop asks once for a
+  handoff (at most 60 lines: goal, decisions, state, exact next step, traps) and
+  the next Stop saves the reply with the router's own facts (branch, last commit,
+  uncommitted files, open tasks, running Claude workers and Codex jobs, Codex
+  threads, kept worktrees). It never blocks twice. After that, every prompt
+  typed in that session is blocked and kept in the handoff as a "next request";
+  the user is told to open a new session in the folder and type `continue`.
+- Compaction is off: PreCompact is blocked. An automatic compaction attempt marks
+  the session full.
+- A new session (`startup` or `/clear`) in the same folder is given the newest
+  unused handoff once, as context, and it is marked used; older unused ones are
+  marked used too. A resumed full session is told it is full. Files are in
+  `~/.gswitchtool-router/handoffs/<session id>.json` (Dev:
+  `~/.gswitchtool-router-dev/handoffs/`) and are deleted after 30 days.
+- Protected files: the router's data folder, the app's `claude-setup.json` and
+  the installed plugin copies (`~/.claude/plugins/cache` and `marketplaces`)
+  cannot be edited or mentioned by Edit, Write, Bash or PowerShell, for the
+  orchestrator and every subagent. The skills' own `router.mjs` and
+  `codex-companion.mjs` commands are exempt. A command that merely names such a
+  file (for example `grep claude-setup.json`) is denied too.
+- Dev: in a Dev test session the released `router` leaves all of this to
+  `router-dev`. `/clear` starts a new session ID, so a router-dev SessionStart
+  with source `startup` or `clear` runs even without `/router-dev:dev-on`; if it
+  finds a pending handoff the session becomes a Dev session, otherwise the gate
+  stays silent.
 
 ## Releases
 
 - Release 1: plugin, modes and settings, review setting, workers, routing,
   escalation ladder, scope blocking for Claude workers and Codex, usage
-  threshold and wrap-up.
+  threshold and session handoff.
 - Release 2: splitting a task into parallel pieces, after a real parallel
   conflict test has passed.
 
@@ -465,9 +504,10 @@ Claude accounts, and hitting the limit stops the whole session.
 `~/.gswitchtool-dev/claude-setup.json`. The Dev plugins are silent until you type
 `/router-dev:dev-on` (or `/codex-dev:dev-on`) in a session; then only that session
 gets their lines, marked `[Dev]`. `pnpm run plugin:dev` re-enables both plugins.
-The Bash hooks carry Claude Code's `"if": "Bash(node *)"` filter, so commands
-that run no `node` (git, pnpm, tests) start no hook process; the script itself
-still checks every command that gets through (about 0.27 s each on this PC).
+The Bash PostToolUse hooks carry Claude Code's `"if": "Bash(node *)"` filter. The
+Bash and PowerShell PreToolUse hooks have none, because the protected-file check
+reads every command; the script answers an ordinary command right away (about
+0.27 s each on this PC).
 The released router and `router-dev` can both be on in one session: each checks
 only its own workers (`router:*` or `router-dev:*`) and its own Codex plugin
 (`codex` or `codex-dev`) and lets the other's through. Not provable by unit tests and checked
