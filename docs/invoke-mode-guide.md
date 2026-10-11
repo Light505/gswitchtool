@@ -390,6 +390,7 @@ Codex sign-in, accounts Claude may use) and how to fix each item.
 | GSwitch never offers an update | Run `git pull` in the repository once so Git saves your GitHub sign-in, then reopen the app. Versions before 1.1.0 cannot update themselves. |
 | *Quit Codex* although no Codex window is open | GSwitch stops Codex's background service by itself; an IDE extension or a `codex` command running in a terminal still counts as open. |
 | *… is already open. Close it before opening …* | That same build is already open. Close it before opening another copy. Dev and installed can run side by side. |
+| Every Codex shell command fails with `setup refresh had errors` (Windows) | GSwitch's Codex workers start with Codex's browser and computer-use helper (`node_repl`) turned off, because Codex 0.162 rejects every shell command while any `node_repl.exe` runs. If commands still fail, close Codex desktop sessions that use the browser or computer use. |
 | Building fails while downloading libsodium | Some networks block its plain-HTTP download. Download `LATEST.tar.gz`, `libsodium-1.0.22-stable-msvc.zip`, and their `.minisig` files from https://download.libsodium.org/libsodium/releases/ into one folder and set `SODIUM_DIST_DIR` to it; the build still checks their signatures. |
 
 ## Roll back
