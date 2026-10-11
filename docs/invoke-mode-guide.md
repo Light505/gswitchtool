@@ -190,7 +190,8 @@ invalid setup files add no setup line and leave the router off; open GSwitch
 once and choose a setup.
 
 The same page has one more setting, the **session limit** (thousand tokens;
-default 250k, range 50k to 1000k). At 80% of it a Claude Code session finishes
+default 250k, range 100k to 1000k; a fresh session already uses about 60k, so a session that
+starts at 80% of the limit or more is not limited and is told to raise it). At 80% of it a Claude Code session finishes
 its current tasks and starts no new ones. At the limit it writes a handoff and
 blocks new messages; open a new session in the same folder and type `continue`.
 There is no off switch and no in-session override, so it is set only here and

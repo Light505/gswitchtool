@@ -32,7 +32,8 @@ function fixture(t, { setup = true } = {}) {
   const f = { home, project, data, setupFile, transcript, write };
   f.setup = (value = {}) => write(setupFile, { version: 1, setup: "router", router: { mode: "claude", claudeOnlyReview: "off" }, ...value });
   if (setup) f.setup();
-  f.size = (n, text) => write(transcript, assistant(n, text));
+  // A small first message keeps the loop guard (starting size) out of the way.
+  f.size = (n, text) => write(transcript, assistant(Math.min(n, 40000)) + assistant(n, text));
   f.run = (args, input, extraEnv = {}) => {
     const result = spawnSync(process.execPath, [script, ...args], { cwd: home, env: { ...env, ...extraEnv }, input: JSON.stringify(input ?? {}), encoding: "utf8", windowsHide: true });
     assert.equal(result.status, 0, result.stderr);
@@ -74,13 +75,51 @@ test("the session size is the newest main-thread usage, read from the end of a l
   assert.equal(f.hook("Stop").decision, undefined);
 });
 
-test("sessionLimit: 50000 to 1000000 as an integer, anything else means 250000", (t) => {
+test("the starting size is the first main-thread usage, read from the start of a large transcript", (t) => {
   const f = fixture(t);
-  f.size(50000);
-  f.setup({ sessionLimit: 60000 });
-  assert.match(f.context("UserPromptSubmit"), new RegExp(`${soft("50k of 60k")}$`));
+  f.setup({ sessionLimit: 100000 });
+  const filler = line({ type: "user", message: { role: "user", content: "x".repeat(400000) } });
+  // A sidechain (300k) or synthetic (85k) first line would trigger the guard; the real first usage (63k) does not.
+  fs.writeFileSync(f.transcript, "{broken\n" + filler + assistant(300000, "side", { isSidechain: true }) + line({ type: "assistant", message: { model: "<synthetic>", usage: { input_tokens: 85000 } } }) +
+    filler + assistant(63000, "first") + filler + assistant(90000, "newest"));
+  assert.match(f.context("UserPromptSubmit"), /Session 90k of 100k: finish current tasks/);
+  assert.equal(f.session().startSize, undefined);
+  fs.writeFileSync(f.transcript, filler + assistant(85000, "first") + filler + assistant(90000, "newest"));
+  assert.match(f.context("UserPromptSubmit"), /Session limit 100k is below this session's starting size \(85k\): raise it in GSwitch → Claude Code/);
+});
+
+test("loop guard: a session starting at 80% of the limit is not limited, and the Router line says to raise it", (t) => {
+  const f = fixture(t);
+  f.setup({ sessionLimit: 100000 });
+  fs.writeFileSync(f.transcript, assistant(85000) + assistant(130000, "newest"));
+  const guard = "Session limit 100k is below this session's starting size (85k): raise it in GSwitch → Claude Code";
+  assert.ok(f.context("UserPromptSubmit").startsWith("Router: mode=claude · ") && f.context("UserPromptSubmit").endsWith(` · ${guard}`));
+  assert.equal(f.hook("Stop").decision, undefined);
+  assert.equal(f.hook("UserPromptSubmit", { prompt: "go" }).decision, undefined);
+  assert.doesNotMatch(f.reason(f.hook("PreToolUse", { tool_name: "Agent", tool_input: { subagent_type: "router:haiku-low", prompt: "Do it\nSCOPE: src/*\nTASK: t1" } })) ?? "", /^Session /);
+  assert.equal(f.hook("PreCompact", { trigger: "auto" }).decision, "block");
+  assert.notEqual(f.session().full, true);
+  f.write(f.setupFile, { version: 1, setup: "claude-only", router: { mode: "mixed", claudeOnlyReview: "on" }, sessionLimit: 100000 });
+  assert.equal(f.context("UserPromptSubmit"), guard);
+  // A handoff still loads in a guarded session.
+  f.write(path.join(f.data, "handoffs", "old.json"), { version: 1, sessionId: "old", project: f.project, createdAt: "2026-02-02T10:00:00.000Z", size: 1, limit: 1, judgement: "Old goal", facts: {}, nextRequests: [], usedAt: null, usedBy: null });
+  assert.match(f.context("SessionStart", { source: "startup" }), /Old goal/);
+  // A session already marked full stays full.
+  f.write(path.join(f.data, "sessions", "s2.json"), { full: true });
+  assert.equal(f.hook("UserPromptSubmit", { session_id: "s2", prompt: "go" }).decision, "block");
+  // A lower first usage: the limit applies as before.
+  f.write(f.transcript, assistant(40000) + assistant(130000, "newest"));
+  fs.rmSync(path.join(f.data, "sessions", "s1.json"));
+  assert.equal(f.hook("UserPromptSubmit", { prompt: "go" }).decision, "block");
+});
+
+test("sessionLimit: 100000 to 1000000 as an integer, anything else means 250000", (t) => {
+  const f = fixture(t);
+  f.size(85000);
+  f.setup({ sessionLimit: 100000 });
+  assert.match(f.context("UserPromptSubmit"), new RegExp(`${soft("85k of 100k")}$`));
   f.size(200000);
-  for (const value of [49999, 1000001, 150000.5, "100000", null, true, undefined]) {
+  for (const value of [99999, 1000001, 150000.5, "100000", null, true, undefined]) {
     f.setup({ sessionLimit: value });
     assert.match(f.context("UserPromptSubmit"), new RegExp(`${soft("200k of 250k")}$`), String(value));
   }
@@ -174,7 +213,7 @@ test("Stop: not full does nothing; full asks for the handoff once, then saves it
   assert.equal(f.handoff().judgement, handoff.judgement);
 
   // Without stop_hook_active the second Stop saves too, using the transcript when there is no last message.
-  f.write(f.transcript, assistant(262000, "written in the transcript"));
+  f.size(262000, "written in the transcript");
   assert.equal(f.hook("Stop", { session_id: "s2" }).decision, "block");
   assert.equal(f.hook("Stop", { session_id: "s2" }).systemMessage?.startsWith("This session is full"), true);
   assert.equal(f.handoff("s2").judgement, "written in the transcript");

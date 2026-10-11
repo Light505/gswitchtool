@@ -88,7 +88,7 @@ export function normalizeCodexSpeed(value) {
       ? value.fastMinRemaining : 20 };
 }
 // The session size (tokens) at which a session hands off to a new one; anything else means 250000.
-export const normalizeSessionLimit = (value) => Number.isInteger(value) && value >= 50000 && value <= 1000000 ? value : 250000;
+export const normalizeSessionLimit = (value) => Number.isInteger(value) && value >= 100000 && value <= 1000000 ? value : 250000;
 function config() {
   const setup = readJSON(setupFile);
   const valid = setup.version === 1 && ["claude-only", "claude-codex", "router"].includes(setup.setup) &&
@@ -309,15 +309,51 @@ function transcriptSize(file) {
   finally { fs.closeSync(fd); }
   return null;
 }
+// Input tokens of the FIRST main-thread assistant line, read from the start of the transcript in chunks.
+function transcriptStartSize(file) {
+  let fd;
+  try { fd = fs.openSync(file, "r"); } catch { return null; }
+  try {
+    const total = fs.fstatSync(fd).size;
+    let position = 0, rest = Buffer.alloc(0);
+    while (position < total) {
+      const length = Math.min(262144, total - position);
+      const chunk = Buffer.alloc(length);
+      fs.readSync(fd, chunk, 0, length, position);
+      position += length;
+      rest = Buffer.concat([rest, chunk]);
+      const end = position < total ? rest.lastIndexOf(10) : rest.length;
+      if (end < 0) continue;
+      const lines = rest.subarray(0, end).toString("utf8").split("\n");
+      rest = rest.subarray(end);
+      for (const line of lines) {
+        if (!line.includes('"assistant"')) continue;
+        let entry;
+        try { entry = JSON.parse(line); } catch { continue; }
+        const usage = object(entry?.message?.usage);
+        if (entry?.type !== "assistant" || entry.isSidechain === true || entry.message?.model === "<synthetic>" || !entry.message?.usage) continue;
+        return ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"].reduce((sum, name) => sum + (Number.isFinite(usage[name]) ? usage[name] : 0), 0);
+      }
+    }
+  } catch { return null; }
+  finally { fs.closeSync(fd); }
+  return null;
+}
 // A subagent's hook call measures the main transcript the session file remembers.
+// A session that already starts at 80% of the limit (a fresh one is about 60k) is not limited; the owner is told to raise the limit.
 function sizing(input, sess) {
   const limit = config().sessionLimit;
   const file = input.agent_id ? sess.transcriptPath : input.transcript_path;
-  const known = [typeof file === "string" && file ? transcriptSize(file) : null, sess.fullSize].filter(Number.isFinite);
+  const hasFile = typeof file === "string" && file;
+  const known = [hasFile ? transcriptSize(file) : null, sess.fullSize].filter(Number.isFinite);
   const size = known.length ? Math.max(...known) : null;
-  const full = sess.full === true || (size !== null && size >= limit);
+  // Read each time, never cached: sizing also runs outside the state lock, where a session write could lose worker bindings.
+  const startSize = hasFile ? transcriptStartSize(file) : null;
+  const guard = sess.full !== true && startSize !== null && startSize >= Math.floor(limit * 0.8);
+  const full = sess.full === true || (!guard && size !== null && size >= limit);
   const of = `${kilo(size ?? limit)} of ${kilo(limit)}`;
-  return { size, limit, full, of, soft: full || (size !== null && size >= Math.floor(limit * 0.8)), line: `Session ${of}: finish current tasks, start no new ones` };
+  return { size, limit, full, guard, guardLine: `Session limit ${kilo(limit)} is below this session's starting size (${kilo(startSize ?? 0)}): raise it in GSwitch → Claude Code`,
+    of, soft: full || (!guard && size !== null && size >= Math.floor(limit * 0.8)), line: `Session ${of}: finish current tasks, start no new ones` };
 }
 const savedText = (info) => `This session is full (${info.of}). The handoff is saved. Open a new session in this folder and type continue.`;
 const handoffFile = (id) => data("handoffs", `${safeName(id)}.json`);
@@ -621,6 +657,7 @@ async function hook(event, input) {
       const info = sizing(input, sess);
       if (info.full) return fullPrompt(id, input, info);
       if (info.soft) soft = info.line;
+      else if (info.guard) soft = info.guardLine;
       // The main thread's path is kept under the lock only when it changes.
       if (id && typeof input.transcript_path === "string" && input.transcript_path && sess.transcriptPath !== input.transcript_path)
         await locked(() => saveSession(id, { ...session(id), transcriptPath: input.transcript_path }));
@@ -631,7 +668,7 @@ async function hook(event, input) {
   if (event === "PreCompact") {
     if (dev) return {};
     const info = sizing(input, sess);
-    if (input.trigger === "auto") saveSession(id, { ...sess, full: true, fullSize: info.size ?? sess.fullSize });
+    if (input.trigger === "auto" && !info.guard) saveSession(id, { ...sess, full: true, fullSize: info.size ?? sess.fullSize });
     return { decision: "block", reason: `Compaction is off: this session hands off at ${kilo(info.limit)} instead (now ${info.size === null ? "unknown" : kilo(info.size)}).` };
   }
   if (event === "PreToolUse" && input.tool_name === "SendMessage") {

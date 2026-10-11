@@ -510,7 +510,7 @@ const en = {
   "claudeSetup.fastCutoffError": "The Normal speed cutoff must be an integer between 0 and 90 percent.",
   "claudeSetup.sessionLimit": "Session limit (thousand tokens)",
   "claudeSetup.sessionLimitNote": "At 80% the session finishes its current tasks and starts no new ones. At the limit it writes a handoff and blocks new messages; open a new session in the same folder and type continue.",
-  "claudeSetup.sessionLimitError": "Enter a whole number from 50 to 1000.",
+  "claudeSetup.sessionLimitError": "Enter a whole number from 100 to 1000.",
   "claudeSetup.footer":"Applies to every Claude Code session from your next message.",
   "claudeSetup.saved": "Claude Code setup saved.",
   "claudeSetup.saveError": "Claude Code setup was not saved.",

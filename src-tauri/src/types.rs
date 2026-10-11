@@ -308,7 +308,7 @@ fn lenient_session_limit<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, 
     let value = Value::deserialize(d)?;
     Ok(value
         .as_f64()
-        .filter(|n| n.fract() == 0.0 && (50_000.0..=1_000_000.0).contains(n))
+        .filter(|n| n.fract() == 0.0 && (100_000.0..=1_000_000.0).contains(n))
         .map(|n| n as u32)
         .unwrap_or(DEFAULT_SESSION_LIMIT))
 }

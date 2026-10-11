@@ -144,8 +144,8 @@ impl InvokeState {
         if setup.codex_speed.fast_min_remaining > 90 {
             return Err("Fast cutoff must be between 0 and 90 percent".to_string());
         }
-        if !(50_000..=1_000_000).contains(&setup.session_limit) {
-            return Err("Session limit must be between 50k and 1000k tokens".to_string());
+        if !(100_000..=1_000_000).contains(&setup.session_limit) {
+            return Err("Session limit must be between 100k and 1000k tokens".to_string());
         }
         setup.normalize();
         self.update_with_setup(
@@ -1022,10 +1022,10 @@ mod tests {
         assert_eq!(ClaudeSetup::from_invoke_mode(true).session_limit, 250_000);
         let base = serde_json::to_value(ClaudeSetup::default()).unwrap();
         for bad in [
-            json!(49999),
+            json!(99999),
             json!(1000001),
-            json!(60000.5),
-            json!("60000"),
+            json!(120000.5),
+            json!("120000"),
             Value::Null,
         ] {
             let mut value = base.clone();
@@ -1040,15 +1040,15 @@ mod tests {
 
         let path = temp_path("session-limit");
         let state = InvokeState::load(path.clone());
-        for bad in [49_999, 1_000_001] {
+        for bad in [99_999, 1_000_001] {
             let mut setup = ClaudeSetup::default();
             setup.session_limit = bad;
             assert_eq!(
                 state.set_claude_setup(setup).unwrap_err(),
-                "Session limit must be between 50k and 1000k tokens"
+                "Session limit must be between 100k and 1000k tokens"
             );
         }
-        for good in [50_000, 60_000, 1_000_000] {
+        for good in [100_000, 120_000, 1_000_000] {
             let mut setup = ClaudeSetup::default();
             setup.session_limit = good;
             let saved = state.set_claude_setup(setup).unwrap();

@@ -2927,18 +2927,18 @@ describe("Invoke Mode", () => {
   it("saves the session limit in tokens", async () => {
     render(<App />);
     const panel = await openClaudeSetup();
-    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" }), { target: { value: "60" } });
+    fireEvent.change(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" }), { target: { value: "120" } });
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
-    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...claudeSetup(false), sessionLimit: 60000 }));
+    await waitFor(() => expect(mocks.setClaudeSetup).toHaveBeenCalledExactlyOnceWith({ ...claudeSetup(false), sessionLimit: 120000 }));
   });
 
-  it.each(["49", "12.5", ""])("refuses an invalid session limit %s", async (value) => {
+  it.each(["60", "99", "12.5", ""])("refuses an invalid session limit %s", async (value) => {
     render(<App />);
     const panel = await openClaudeSetup();
     fireEvent.change(within(panel).getByRole("spinbutton", { name: "Session limit (thousand tokens)" }), { target: { value } });
     await userEvent.click(within(panel).getByRole("button", { name: "Save" }));
     expect(mocks.setClaudeSetup).not.toHaveBeenCalled();
-    expect(within(panel).getByRole("alert")).toHaveTextContent("Enter a whole number from 50 to 1000.");
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Enter a whole number from 100 to 1000.");
   });
 
   it("restores the saved session limit on cancel", async () => {

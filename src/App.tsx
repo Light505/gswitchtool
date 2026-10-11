@@ -1779,7 +1779,7 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
       return;
     }
     const limitK = Number(sessionLimitK);
-    if (!sessionLimitK.trim() || !Number.isInteger(limitK) || limitK < 50 || limitK > 1000) {
+    if (!sessionLimitK.trim() || !Number.isInteger(limitK) || limitK < 100 || limitK > 1000) {
       setError(t("claudeSetup.sessionLimitError"));
       return;
     }
@@ -1937,7 +1937,7 @@ function ClaudeSetupPanel({ settings, accounts, onSaved, onSaveFailed, t }: {
           <div className="claude-option">
             <label className="claude-router-mode">
               <span>{t("claudeSetup.sessionLimit")}</span>
-              <input disabled={saving} max={1000} min={50} step={1} type="number" value={sessionLimitK}
+              <input disabled={saving} max={1000} min={100} step={1} type="number" value={sessionLimitK}
                 onChange={(event) => setSessionLimitK(event.target.value)} />
             </label>
             <p className="claude-setup-note">{t("claudeSetup.sessionLimitNote")}</p>

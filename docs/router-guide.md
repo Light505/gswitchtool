@@ -452,11 +452,19 @@ it at a size limit and the next session in the same folder continues from a
 handoff. It applies in every mode, including `off` and the Claude-only setups;
 there is no switch to turn it off.
 
-- Limit: `sessionLimit` (tokens, a whole number from 50000 to 1000000) in the
+- Limit: `sessionLimit` (tokens, a whole number from 100000 to 1000000) in the
   app's `claude-setup.json`, set in GSwitch → Claude Code. Missing or invalid
   means 250000. The session's size is the newest main-thread assistant message's
   `input_tokens + cache_read_input_tokens + cache_creation_input_tokens` in the
   session transcript.
+- Loop guard: a fresh session already uses about 60k tokens (system prompt,
+  tools, skills, CLAUDE.md, the loaded handoff), so a low limit would make every
+  new session full at once and write another handoff. The router reads the
+  session's starting size (the first main-thread assistant message, kept in the
+  session file as `startSize`); if it is at least 80% of the limit, the limit is
+  not enforced in that session (PreCompact stays blocked, a handoff still loads)
+  and the Router line says `Session limit 60k is below this session's starting
+  size (63k): raise it in GSwitch → Claude Code`. A session already full stays full.
 - At 80% of the limit (soft limit) the Router line (or, in mode `off`, a line of
   its own) says `Session 205k of 250k: finish current tasks, start no new ones`.
   The hooks then deny new router workers, `codex:codex-runner` launches and

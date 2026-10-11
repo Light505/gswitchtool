@@ -76,7 +76,7 @@ this file; they do not own or mutate the setup. Its version-1 shape is exactly:
 }
 ```
 
-`sessionLimit` is the Claude Code session limit in tokens (50000 to 1000000,
+`sessionLimit` is the Claude Code session limit in tokens (100000 to 1000000,
 default 250000; a missing or invalid stored value loads as the default).
 
 `router` is always present. Setup values are `claude-only`, `claude-codex`,
