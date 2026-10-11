@@ -1,7 +1,7 @@
 // Added by Light505 for gswitchtool (2026).
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import test from "node:test";
@@ -126,4 +126,19 @@ test("router-dev gate adopts a new session only when a handoff is pending", () =
   // codex-dev never adopts a session.
   assert.equal(hook(codexDir, setupHook, { session_id: "c3", hook_event_name: "SessionStart", source: "clear", cwd: project }), "");
   assert.equal(existsSync(join(sessions, "c3")), false);
+});
+
+test("router-dev gate knows its plugin from plugin.json when run from a versioned cache folder", () => {
+  // Claude Code runs plugins from ~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/.
+  const cached = join(home, "cache", "router-dev", "0.7.0-dev.abc1234.x");
+  cpSync(routerDir, cached, { recursive: true });
+  const project = join(home, "cached-project");
+  writeFileSync(join(home, ".gswitchtool-router-dev", "handoffs", "h2.json"), JSON.stringify({
+    version: 1, sessionId: "old2", project, createdAt: "2026-02-03T10:00:00.000Z", size: 61000, limit: 60000, judgement: "Cached state",
+    facts: {}, nextRequests: [], usedAt: null, usedBy: null
+  }));
+  const out = JSON.parse(hook(cached, join(cached, "scripts", "router.mjs"), { session_id: "k1", hook_event_name: "SessionStart", source: "startup", cwd: project }, ["hook", "SessionStart"]));
+  assert.match(out.hookSpecificOutput.additionalContext, /^\[Dev\] Cached state$/m);
+  assert.ok(out.hookSpecificOutput.additionalContext.endsWith(`\n${devLine}`));
+  assert.ok(existsSync(join(sessions, "k1")));
 });

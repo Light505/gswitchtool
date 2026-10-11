@@ -13,7 +13,12 @@ const DEV_PREFIX = "[Dev] ";
 const DEV_LINE = `${DEV_PREFIX}Dev test session: follow the [Dev] lines and use the codex-dev / router-dev skills; ignore GSwitch setup and Router lines without [Dev].`;
 const CONTEXT_EVENTS = new Set(["UserPromptSubmit", "SessionStart"]);
 const MAX_MARKER_AGE_MS = 30 * 24 * 60 * 60 * 1000;
-const pluginName = path.basename(path.dirname(fileURLToPath(import.meta.url)));
+// Claude Code runs the plugin from a versioned cache folder, so the name comes from plugin.json, not the folder.
+const pluginRoot = path.dirname(fileURLToPath(import.meta.url));
+const pluginName = (() => {
+  try { return JSON.parse(readFileSync(path.join(pluginRoot, ".claude-plugin", "plugin.json"), "utf8").replace(/^﻿/, "")).name || path.basename(pluginRoot); }
+  catch { return path.basename(pluginRoot); }
+})();
 
 function readStdin() {
   try {
