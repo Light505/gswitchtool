@@ -40,7 +40,7 @@ function nextAction(result) {
     return `${PAUSE_ALL_WORK}${reset ? ` (${reset})` : ""}`;
   }
   if (code === "MODEL_NOT_ALLOWED" || code === "REASONING_NOT_ALLOWED") return "choose an allowed model from the Router line, then run again.";
-  if (code === "INVOKE_MODE_DISABLED" || code === "GSWITCH_UNAVAILABLE" || code === "CODEX_SIGNED_OUT") return `stop delegating and tell the user: ${message}`;
+  if (code === "INVOKE_MODE_DISABLED" || code === "GSWITCH_UNAVAILABLE" || code === "CODEX_SIGNED_OUT" || code === "CODEX_SANDBOX_FAILED") return `stop delegating and tell the user: ${message}`;
   if (code === "STOPPED_BY_USER") return "do not restart this task; ask the user how to continue.";
   if (result.worktree && !result.worktree.applied && result.worktree.keptAt) {
     return `worktree kept at ${result.worktree.keptAt} (${oneLine(result.worktree.reason, 150)}); resume the thread there with --resume-thread and --worktree-dir, or discard it.`;

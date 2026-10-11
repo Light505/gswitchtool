@@ -363,6 +363,8 @@ function createTurnCaptureState(threadId, options = {}) {
     messages: [],
     fileChanges: [],
     commandExecutions: [],
+    sandboxFailure: null,
+    interruptTurn: null,
     tokens: null,
     tokenTotals: new Map(),
     tokenBreakdown: null,
@@ -522,6 +524,13 @@ function recordItem(state, item, lifecycle, threadId = null) {
 
   if (item.type === "commandExecution" && lifecycle === "completed") {
     state.commandExecutions.push(item);
+    // Modified by Light505: Codex's Windows sandbox cannot start commands; stop the turn at once.
+    // Only Codex's own spawn failure counts, not a command whose output mentions it.
+    const output = String(item.aggregatedOutput ?? "");
+    if (!state.sandboxFailure && item.status === "failed" && output.trimStart().startsWith("Failed to create unified exec process")) {
+      state.sandboxFailure = shorten(output.trim(), 300);
+      state.interruptTurn?.();
+    }
   }
 }
 
@@ -625,6 +634,9 @@ function applyTurnNotification(state, message) {
 
 async function captureTurn(client, threadId, startRequest, options = {}) {
   const state = createTurnCaptureState(threadId, options);
+  state.interruptTurn = () => {
+    if (state.turnId) client.request("turn/interrupt", { threadId, turnId: state.turnId }).catch(() => {});
+  };
   const previousHandler = client.notificationHandler;
 
   client.setNotificationHandler((message) => {
@@ -1242,7 +1254,8 @@ export async function runAppServerTurn(cwd, options = {}) {
       stderr: cleanCodexStderr(client.stderr),
       fileChanges: turnState.fileChanges,
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
-      commandExecutions: turnState.commandExecutions
+      commandExecutions: turnState.commandExecutions,
+      sandboxFailure: turnState.sandboxFailure
     };
   }, { env: options.appServerEnv, onFileChangeApproval: options.onFileChangeApproval });
 }

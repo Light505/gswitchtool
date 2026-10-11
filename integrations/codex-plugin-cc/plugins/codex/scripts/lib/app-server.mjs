@@ -210,6 +210,12 @@ class AppServerClientBase {
   }
 }
 
+// Modified by Light505: Codex 0.162's elevated Windows sandbox rejects every command while
+// node_repl.exe runs; the owner chose the unelevated sandbox until Codex fixes it.
+export function appServerArgs(platform = process.platform) {
+  return platform === "win32" ? ["app-server", "-c", "windows.sandbox=unelevated"] : ["app-server"];
+}
+
 class SpawnedCodexAppServerClient extends AppServerClientBase {
   constructor(cwd, options = {}) {
     super(cwd, options);
@@ -217,7 +223,7 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 
   async initialize() {
-    this.proc = spawn("codex", ["app-server"], {
+    this.proc = spawn("codex", appServerArgs(), {
       cwd: this.cwd,
       env: this.options.env ?? process.env,
       stdio: ["pipe", "pipe", "pipe"],

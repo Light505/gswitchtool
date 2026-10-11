@@ -22,6 +22,7 @@ export function invokeOutcome(result) {
   const code = result.code ?? null;
   if (USAGE_CODES.has(code)) return ["fail", "usage"];
   if (code === "STOPPED_BY_USER") return ["fail", "stopped"];
+  if (code === "CODEX_SANDBOX_FAILED") return ["blocked", "tool"];
   if (result.status === "rejected") return ["blocked", "tool"];
   if (result.scopeStopped) return ["fail", "scope"];
   if (result.protected?.changed?.length) return ["fail", "other"];

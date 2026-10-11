@@ -697,8 +697,11 @@ rl.on("line", (line) => {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
 	          send({ method: "error", params: { error, willRetry: false, threadId: thread.id, turnId } });
 	          send({ method: "turn/completed", params: { threadId: thread.id, turn: buildTurn(turnId, "failed", error) } });
-	        } else if (BEHAVIOR === "interruptible-slow-task") {
+	        } else if (BEHAVIOR === "interruptible-slow-task" || BEHAVIOR === "sandbox-failure") {
 	          send({ method: "turn/started", params: { threadId: thread.id, turn: buildTurn(turnId) } });
+	          if (BEHAVIOR === "sandbox-failure") {
+	            send({ method: "item/completed", params: { threadId: thread.id, turnId, item: { type: "commandExecution", id: "cmd_" + turnId, command: "dir", status: "failed", aggregatedOutput: "Failed to create unified exec process: helper_unknown_error: setup refresh had errors" } } });
+	          }
 	          const timer = setTimeout(() => {
 	            if (!interruptibleTurns.has(turnId)) {
 	              return;

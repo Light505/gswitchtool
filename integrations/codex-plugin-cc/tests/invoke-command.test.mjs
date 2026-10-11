@@ -13,6 +13,9 @@ import { buildEnv, installFakeCodex } from "./fake-codex-fixture.mjs";
 import { initGitRepo, makeTempDir, run } from "./helpers.mjs";
 import { loadBrokerSession } from "../plugins/codex/scripts/lib/broker-lifecycle.mjs";
 import { parseSelfReport } from "../plugins/codex/scripts/lib/self-report.mjs";
+import { appServerArgs } from "../plugins/codex/scripts/lib/app-server.mjs";
+import { invokeOutcome } from "../plugins/codex/scripts/lib/invoke-record.mjs";
+import { invokeSummary } from "../plugins/codex/scripts/lib/invoke-summary.mjs";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SCRIPT = path.join(ROOT, "plugins", "codex", "scripts", "codex-companion.mjs");
@@ -757,6 +760,30 @@ test("a finished task reports its result to GSwitch", () =>
       total_ms: payload.totalMs, tokens: null, ...NO_RUN_DETAILS
     });
   }));
+
+test("sandbox: the app-server args pick the unelevated Windows sandbox only on win32", () => {
+  assert.deepEqual(appServerArgs("win32"), ["app-server", "-c", "windows.sandbox=unelevated"]);
+  assert.deepEqual(appServerArgs("linux"), ["app-server"]);
+  assert.deepEqual(appServerArgs("darwin"), ["app-server"]);
+});
+
+test("sandbox: a command that cannot start ends the run with CODEX_SANDBOX_FAILED, no failover", { timeout: 60_000 }, () =>
+  withGSwitch({}, "sandbox-failure", async (ctx, gswitch) => {
+    const result = await companion(["invoke", "--json", "--model", "model-a", "--effort", "high", "do the work"], ctx);
+    assert.equal(result.status, 1, result.stderr);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.code, "CODEX_SANDBOX_FAILED");
+    assert.match(payload.message, /setup refresh had errors/);
+    assert.equal(readFakeState(ctx.statePath).lastInterrupt.turnId.length > 0, true);
+    assert.ok(!gswitch.methods().includes("limit_reached"));
+  }));
+
+test("sandbox: CODEX_SANDBOX_FAILED tells the router to stop and counts as an environment block", () => {
+  const result = { status: "failed", code: "CODEX_SANDBOX_FAILED", message: "sandbox could not start commands" };
+  assert.deepEqual(invokeOutcome(result), ["blocked", "tool"]);
+  const lines = invokeSummary(result, { task: "t1" });
+  assert.ok(lines.some((line) => line.startsWith("NEXT: stop delegating and tell the user: sandbox could not start")), lines.join("\n"));
+});
 
 test("switching GSwitch to Manual Mode stops automatic failover", () =>
   withGSwitch({ manualAfterLease: true }, "usage-limit-once", async (ctx) => {

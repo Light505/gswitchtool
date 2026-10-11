@@ -379,6 +379,7 @@ Codex sign-in, accounts Claude may use) and how to fix each item.
 | `GSWITCH_UNAVAILABLE` | Open GSwitch Claude Tool. |
 | `INVOKE_MODE_DISABLED` | Switch GSwitch to **Invoke**, or keep working without Codex. |
 | `CODEX_SIGNED_OUT` | GSwitch shows **Codex is signed out**, so no run starts. Press **Switch** on an account allowed in Invoke Mode, then tell Claude to try again. `invoke-status` also reports it up front. |
+| Codex stops with `CODEX_SANDBOX_FAILED` / `setup refresh had errors` (Windows) | GSwitch runs Codex with the unelevated Windows sandbox, because Codex 0.162's elevated sandbox rejects every command while the browser/computer-use helper (`node_repl.exe`) runs. If it still happens, close Codex desktop sessions that use the browser or computer use and try again. |
 | `MODEL_NOT_ALLOWED` / `REASONING_NOT_ALLOWED` | Claude asked for something you did not tick. It should choose again from your list; tick more in Invoke settings if needed. |
 | `NO_ELIGIBLE_ACCOUNT`, `INVOKE_PAUSED`, or **Invoke Mode paused** | No allowed account has Codex usage left, so Claude paused. Wait for the reset, or allow another account and choose **Resume now**; then tell Claude to continue. |
 | `USAGE_LIMIT_EXCEEDED` | Codex ran out on several accounts in a row during one task, so Claude paused. Tell Claude to continue when usage is available. |

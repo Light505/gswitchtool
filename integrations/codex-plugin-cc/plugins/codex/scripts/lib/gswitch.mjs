@@ -33,6 +33,8 @@ const ERROR_MESSAGES = {
     "The Codex account ran out, but the replacement account could not be verified, so work did not resume. Tell the user.",
   CODEX_SIGNED_OUT:
     "Codex is signed out in GSwitch. Open GSwitch and press Switch on an account allowed in Invoke Mode, then try again.",
+  CODEX_SANDBOX_FAILED:
+    "Codex's Windows sandbox could not start commands (\"setup refresh had errors\"). Tell the user, who should close Codex desktop sessions that use the browser or computer use and try again.",
   UNKNOWN_LEASE: "GSwitch no longer tracks this Codex run. Ask the user to check GSwitch.",
   STOPPED_BY_USER:
     "The user stopped this Codex task in GSwitch. Do not restart or retry it; tell the user what it was doing and ask how to continue.",

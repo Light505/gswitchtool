@@ -547,6 +547,7 @@ async function executeTaskRun(request) {
     rawOutput,
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary,
+    sandboxFailure: result.sandboxFailure ?? null,
     // Keep the app-server's structured error code so callers never have to
     // classify failures from message text.
     error: result.error
@@ -2139,6 +2140,11 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
     }
     if (outcome === "stopped") {
       return failed("STOPPED_BY_USER", new GSwitchError("STOPPED_BY_USER").message);
+    }
+
+    // Codex's Windows sandbox could not start commands: no point verifying or switching accounts.
+    if (execution?.payload.sandboxFailure) {
+      return failed("CODEX_SANDBOX_FAILED", new GSwitchError("CODEX_SANDBOX_FAILED").message);
     }
 
     // Acceptance testing only: treat the first finished turn as a usage limit so
