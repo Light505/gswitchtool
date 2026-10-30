@@ -18,6 +18,7 @@ import {
     getCodexAuthStatus,
     getCodexAvailability,
     getSessionRuntimeStatus,
+    unfinishedCommandWarnings,
     importExternalAgentSession,
     interruptAppServerTurn,
     parseStructuredOutput,
@@ -547,6 +548,8 @@ async function executeTaskRun(request) {
     rawOutput,
     touchedFiles: result.touchedFiles,
     reasoningSummary: result.reasoningSummary,
+    // Modified by Light505: carry turn-end command state to Invoke's final result.
+    unfinishedCommands: result.unfinishedCommands ?? [],
     sandboxFailure: result.sandboxFailure ?? null,
     // Keep the app-server's structured error code so callers never have to
     // classify failures from message text.
@@ -1890,6 +1893,8 @@ async function handleInvoke(argv) {
     }
     result.diff = gitBefore ? changedGitFacts(gitBefore) : { repository: false, files: [] };
     result.warnings = [];
+    // Modified by Light505: make the unconfirmed outcome visible in Invoke warnings.
+    result.warnings.push(...unfinishedCommandWarnings(result.unfinishedCommands));
     const protectedChanged = gitBefore ? changedProtectedText(gitBefore.root, protectedBefore) : [];
     if (protectedChanged.length) {
       result.protected = { changed: protectedChanged };
@@ -2167,6 +2172,7 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
           verifySkipped: Boolean(verifyCommand),
           verify: null,
           output: execution.payload.rawOutput,
+          unfinishedCommands: execution.payload.unfinishedCommands ?? [],
           touchedFiles: [...touched]
         };
       }
@@ -2188,6 +2194,7 @@ async function runInvokeWithFailover({ base, session, leaseId, codexHome = null,
         failovers,
         verify: verifyResult ? { ...verifyResult, command: verifyCommand, retries: verifyRetries } : null,
         output: execution.payload.rawOutput,
+        unfinishedCommands: execution.payload.unfinishedCommands ?? [],
         touchedFiles: [...touched]
       };
     }

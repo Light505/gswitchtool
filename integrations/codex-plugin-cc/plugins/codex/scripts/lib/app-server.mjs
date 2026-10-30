@@ -10,6 +10,8 @@
  */
 import fs from "node:fs";
 import net from "node:net";
+import os from "node:os";
+import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
 import readline from "node:readline";
@@ -216,6 +218,19 @@ export function appServerArgs(platform = process.platform) {
   return platform === "win32" ? ["app-server", "-c", "windows.sandbox=unelevated"] : ["app-server"];
 }
 
+// Modified by Light505: keep the first Windows sandbox ACL grant inside a small temp folder.
+export function appServerEnv(baseEnv = process.env, platform = process.platform) {
+  if (platform !== "win32") return baseEnv;
+  const env = { ...baseEnv };
+  const baseTemp = env.TEMP || env.TMP || os.tmpdir();
+  const tempDir = path.win32.basename(baseTemp).toLowerCase() === "codex-app-server"
+    ? baseTemp
+    : path.win32.join(baseTemp, "codex-app-server");
+  env.TEMP = tempDir;
+  env.TMP = tempDir;
+  return env;
+}
+
 class SpawnedCodexAppServerClient extends AppServerClientBase {
   constructor(cwd, options = {}) {
     super(cwd, options);
@@ -223,9 +238,13 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
   }
 
   async initialize() {
+    const env = appServerEnv(this.options.env ?? process.env);
+    if (process.platform === "win32") {
+      fs.mkdirSync(env.TEMP, { recursive: true });
+    }
     this.proc = spawn("codex", appServerArgs(), {
       cwd: this.cwd,
-      env: this.options.env ?? process.env,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       shell: process.platform === "win32" ? (process.env.SHELL || true) : false,
       windowsHide: true
@@ -303,8 +322,17 @@ class SpawnedCodexAppServerClient extends AppServerClientBase {
         }
       }, 50).unref?.();
     }
-
-    await this.exitPromise;
+    await waitForExitOrTimeout(this, () => {
+      try {
+        if (this.proc?.pid && process.platform === "win32") terminateProcessTree(this.proc.pid);
+        else this.proc?.kill("SIGTERM");
+      } catch {}
+      this.proc?.stdin?.destroy();
+      this.proc?.stdout?.destroy();
+      this.proc?.stderr?.destroy();
+      this.proc?.unref?.();
+      this.handleExit(null);
+    });
   }
 
   sendMessage(message) {
@@ -361,7 +389,7 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
     if (this.socket) {
       this.socket.end();
     }
-    await this.exitPromise;
+    await waitForExitOrTimeout(this, () => this.socket?.destroy());
   }
 
   sendMessage(message) {
@@ -372,6 +400,24 @@ class BrokerCodexAppServerClient extends AppServerClientBase {
     }
     socket.write(line);
   }
+}
+
+// Modified by Light505: shutdown cannot wait forever when Codex is stalled.
+async function waitForExitOrTimeout(client, onTimeout) {
+  const timeoutMs = client.options.closeTimeoutMs ?? 5000;
+  let timer;
+  await Promise.race([
+    client.exitPromise,
+    new Promise((resolve) => {
+      timer = setTimeout(() => {
+        try { onTimeout(); } catch {}
+        resolve();
+      }, timeoutMs);
+      timer.unref?.();
+    })
+  ]);
+  if (timer) clearTimeout(timer);
+  if (!client.exitResolved) client.handleExit(null);
 }
 
 export class CodexAppServerClient {

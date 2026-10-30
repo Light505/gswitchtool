@@ -1,3 +1,4 @@
+// Modified by Light505 for gswitchtool (2026). See CREDITS.md in gswitchtool.
 import { spawnSync } from "node:child_process";
 import process from "node:process";
 
@@ -64,9 +65,11 @@ export function terminateProcessTree(pid, options = {}) {
   const killImpl = options.killImpl ?? process.kill.bind(process);
 
   if (platform === "win32") {
+    // Modified by Light505: never through SHELL; Git Bash rewrites "/PID" into a path and the kill fails.
     const result = runCommandImpl("taskkill", ["/PID", String(pid), "/T", "/F"], {
       cwd: options.cwd,
-      env: options.env
+      env: options.env,
+      shell: false
     });
 
     if (!result.error && result.status === 0) {

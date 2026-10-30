@@ -32,6 +32,7 @@
  *   messages: Array<{ lifecycle: string, phase: string | null, text: string }>,
  *   fileChanges: ThreadItem[],
  *   commandExecutions: ThreadItem[],
+ *   activeCommands: Map<string, string>,
  *   onProgress: ProgressReporter | null
  * }} TurnCaptureState
  */
@@ -363,6 +364,7 @@ function createTurnCaptureState(threadId, options = {}) {
     messages: [],
     fileChanges: [],
     commandExecutions: [],
+    activeCommands: new Map(),
     sandboxFailure: null,
     interruptTurn: null,
     tokens: null,
@@ -441,6 +443,19 @@ function belongsToTurn(state, message) {
   const trackedTurnId = state.threadTurnIds.get(messageThreadId) ?? null;
   const messageTurnId = extractTurnId(message);
   return trackedTurnId === null || messageTurnId === null || messageTurnId === trackedTurnId;
+}
+
+// Modified by Light505: track only commands from the main thread's own turn.
+export function trackActiveCommand(activeCommands, item, lifecycle) {
+  if (lifecycle === "started") {
+    activeCommands.set(item.id, shorten(String(item.command ?? "(command unavailable)"), 200));
+  } else if (lifecycle === "completed") {
+    if (item.status === "inProgress") {
+      activeCommands.set(item.id, shorten(String(item.command ?? activeCommands.get(item.id) ?? "(command unavailable)"), 200));
+    } else {
+      activeCommands.delete(item.id);
+    }
+  }
 }
 
 function recordItem(state, item, lifecycle, threadId = null) {
@@ -522,14 +537,17 @@ function recordItem(state, item, lifecycle, threadId = null) {
     return;
   }
 
-  if (item.type === "commandExecution" && lifecycle === "completed") {
-    state.commandExecutions.push(item);
-    // Modified by Light505: Codex's Windows sandbox cannot start commands; stop the turn at once.
-    // Only Codex's own spawn failure counts, not a command whose output mentions it.
-    const output = String(item.aggregatedOutput ?? "");
-    if (!state.sandboxFailure && item.status === "failed" && output.trimStart().startsWith("Failed to create unified exec process")) {
-      state.sandboxFailure = shorten(output.trim(), 300);
-      state.interruptTurn?.();
+  if (item.type === "commandExecution") {
+    if (!threadId || threadId === state.threadId) trackActiveCommand(state.activeCommands, item, lifecycle);
+    if (lifecycle === "completed") {
+      state.commandExecutions.push(item);
+      // Modified by Light505: Codex's Windows sandbox cannot start commands; stop the turn at once.
+      // Only Codex's own spawn failure counts, not a command whose output mentions it.
+      const output = String(item.aggregatedOutput ?? "");
+      if (!state.sandboxFailure && item.status === "failed" && output.trimStart().startsWith("Failed to create unified exec process")) {
+        state.sandboxFailure = shorten(output.trim(), 300);
+        state.interruptTurn?.();
+      }
     }
   }
 }
@@ -994,6 +1012,11 @@ export function getCodexAvailability(cwd) {
   };
 }
 
+// Modified by Light505: surface commands whose outcome Codex did not confirm.
+export function unfinishedCommandWarnings(commands = []) {
+  return commands.map((command) => `WARNING: Codex ended its turn while a command was still running (outcome unconfirmed): ${command}`);
+}
+
 export function getSessionRuntimeStatus(env = process.env, cwd = process.cwd()) {
   const endpoint = env?.[BROKER_ENDPOINT_ENV] ?? loadBrokerSession(cwd)?.endpoint ?? null;
   if (endpoint) {
@@ -1255,6 +1278,7 @@ export async function runAppServerTurn(cwd, options = {}) {
       fileChanges: turnState.fileChanges,
       touchedFiles: collectTouchedFiles(turnState.fileChanges),
       commandExecutions: turnState.commandExecutions,
+      unfinishedCommands: [...turnState.activeCommands.values()],
       sandboxFailure: turnState.sandboxFailure
     };
   }, { env: options.appServerEnv, onFileChangeApproval: options.onFileChangeApproval });
